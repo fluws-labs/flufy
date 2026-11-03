@@ -157,7 +157,7 @@ async function setup(page: Page) {
   await page.goto("/")
   await page.getByTitle("Equipos IA", { exact: true }).click()
   await expect(page.getByRole("button", { name: "Crear equipo", exact: true })).toBeVisible()
-  return { store, calls }
+  return { store, calls, browserPages }
 }
 
 async function createTeam(page: Page) {
@@ -329,6 +329,49 @@ test("objetivo, pausa, entrega pendiente y feedback conservan revisiones en el m
   expect(store.chats[0].runs).toHaveLength(2)
   expect(store.chats[0].runs[0].artifacts[0].relativePath).toBe("pruebas/log.txt")
   expect(calls.filter((c) => c.command === "team_chat_send")).toHaveLength(2)
+})
+
+test("guía de revisión muestra el cambio, conserva datos preparados y abre solo la página del revisor", async ({ page }) => {
+  const { store, calls, browserPages } = await setup(page)
+  await createTeam(page)
+  await page.getByLabel("Mensaje para el equipo").fill("Agregar filtro de consultas pendientes")
+  await page.getByLabel("Mensaje para el equipo").press("Enter")
+  const run = store.chats[0].runs[0]
+  run.status = "awaiting_manual_qa"; run.finishedAt = Date.now()
+  run.tasks = [{ id: "qa", title: "Recorrido de consultas", objective: "Recorrer la UI", assignedAgentId: run.team.leadAgentId, repository: run.team.projectRoot, dependencies: [], expectedFiles: [], acceptanceCriteria: ["Filtro visible"], status: "completed", error: null, attempts: [{ id: "qa-1", agent: run.team.members[0], sessionId: "qa-session", reviewSessionId: null, startedAt: 1, finishedAt: 2, status: "completed", summary: "Filtro comprobado", error: null, review: { status: "approved", summary: "Recorrido aprobado", criteriaSatisfied: true }, commands: [] }] }]
+  run.deliveryReview = { uiRequired: true, summary: "Revisá el nuevo filtro con las consultas de ejemplo ya cargadas", reason: "", decisions: [{ decision: "Reutilizar el diseño del panel", source: "AGENTS.md", status: "respected", evidence: "Se conserva el componente de filtros existente" }], flows: [{ title: "Consultas pendientes", change: "Ahora podés filtrar por estado", url: "http://localhost:3000/consultas", taskId: "qa", attemptId: "qa-1", pageId: 7, preparation: ["Dos consultas de ejemplo creadas por el seed existente; reutilizar esos registros"], steps: ["Elegí Pendientes en el filtro de estado", "Volvé a Todas para recuperar la lista"], expected: "Solo aparece la consulta pendiente y el filtro activo queda resaltado", observed: "Una consulta pendiente visible, sin perder el filtro al volver", visualReview: "Acción principal clara, estados distinguibles y tipografía consistente con el panel", evidenceCallIds: ["nav", "dom", "image"], ready: true, stateNote: "El equipo dejó la lista abierta con los datos de prueba" }] }
+  browserPages.push({ label: "wrong-agent", actor: "other-session", url: run.deliveryReview.flows[0].url }, { label: "prepared-qa", actor: "qa-session", url: run.deliveryReview.flows[0].url })
+  await page.evaluate(async () => { const { refreshTeams } = await import(/* @vite-ignore */ "/src/state/teams.ts"); await refreshTeams() })
+  await page.getByRole("button", { name: "Chat", exact: true }).click()
+  await page.getByRole("button", { name: "Qué cambió y qué revisar", exact: true }).click()
+  await page.getByRole("button", { name: "Ampliar chat del equipo", exact: true }).click()
+  const guide = page.getByRole("region", { name: "Guía de revisión de la entrega" })
+  await expect(guide.getByRole("heading", { name: "Consultas pendientes" })).toBeVisible()
+  await expect(guide.getByText("Solo aparece la consulta pendiente y el filtro activo queda resaltado")).toBeVisible()
+  await expect(guide.getByText("Dos consultas de ejemplo", { exact: false })).not.toBeVisible()
+  await guide.getByText("Preparación y comprobaciones del agente", { exact: true }).click()
+  await expect(guide).toContainText("Dos consultas de ejemplo creadas")
+  await guide.getByText("Preparación y comprobaciones del agente", { exact: true }).click()
+  await guide.getByRole("heading", { name: "Tu revisión, desde el cambio" }).scrollIntoViewIfNeeded()
+  await expect(guide.getByRole("button", { name: "Abrir escenario preparado" })).toBeInViewport()
+  await page.screenshot({ path: test.info().outputPath("guia-revision-escenario-preparado.png") })
+  await guide.getByRole("button", { name: "Abrir escenario preparado" }).click()
+  await expect(page.getByRole("tab", { selected: true })).toHaveAttribute("title", "http://localhost:3000/consultas")
+  await expect.poll(() => calls.findLast(c => c.command === "browser_internal_view" && c.args.label)?.args.label).toBe("prepared-qa")
+  expect(calls.filter(c => c.command === "browser_internal_open")).toHaveLength(0)
+  await page.getByRole("button", { name: "Resultados / Comportamientos", exact: true }).click()
+  browserPages.splice(1, 1)
+  await guide.getByRole("button", { name: "Abrir escenario preparado" }).click()
+  await expect(guide.getByRole("alert")).toContainText("ya no está disponible")
+  expect(calls.filter(c => c.command === "browser_internal_open")).toHaveLength(0)
+  await page.setViewportSize({ width: 760, height: 900 })
+  await expect(guide.getByRole("heading", { name: "Consultas pendientes" })).toBeVisible()
+  const width = await guide.evaluate(el => ({ scroll: el.scrollWidth, client: el.clientWidth }))
+  expect(width.scroll).toBeLessThanOrEqual(width.client + 1)
+  await guide.getByRole("button", { name: "Volver a preparar con el equipo" }).click()
+  await expect(page.getByRole("button", { name: "Chat", exact: true })).toHaveClass(/active/)
+  await expect.poll(() => calls.filter(c => c.command === "team_chat_send").length).toBe(2)
+  expect(calls.filter(c => c.command === "team_chat_send").at(-1)?.args.text).toContain("No repitas efectos ni crees registros duplicados")
 })
 
 test("el equipo abre como chat, envía con Enter y oculta controles técnicos irrelevantes", async ({ page }) => {

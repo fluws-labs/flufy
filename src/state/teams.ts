@@ -11,6 +11,7 @@ import { notify } from "./toasts"
 import type { Skill, Team, TeamChatRecord, TeamStore } from "../team/types"
 import { indexTeamSessions } from "../team/session-index"
 import { readableTeamError } from "../lib/provider-error"
+import { startTeamActivity } from "./team-activity"
 
 type State = TeamStore & { loaded: boolean; error: string | null; activeChatId: string | null; openChatIds: string[]; selectedRunIds: Record<string,string|null> }
 export const useTeams = create<State>(() => ({ schemaVersion: 1, teams: [], skills: [], chats: [], loaded: false, error: null, activeChatId: null, openChatIds: loadJson<string[]>("team.tabs", []), selectedRunIds:{} }))
@@ -39,6 +40,7 @@ let listening = false
 export function startTeams() {
   if (listening || !isTauri) return
   listening = true
+  startTeamActivity()
   void refreshTeams()
   let timer: ReturnType<typeof setTimeout> | null = null
   onEvent("team://changed", () => { if (!timer) timer = setTimeout(() => { timer = null; void refreshTeams() }, 100) })

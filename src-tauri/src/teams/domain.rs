@@ -221,6 +221,10 @@ pub struct Artifact {
 #[serde(rename_all = "camelCase")]
 pub struct Run {
     #[serde(default)]
+    pub delivery_review_version: u32,
+    #[serde(default)]
+    pub delivery_review: Option<super::delivery_review::DeliveryReview>,
+    #[serde(default)]
     pub plan_v2: super::plan_v2::PlanV2State,
     #[serde(default)]
     pub support_reports: Vec<SupportReport>,
@@ -364,6 +368,8 @@ pub fn task_conflict(a: &Task, b: &Task) -> bool {
 #[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct Chat {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<super::handoff::Origin>,
     #[serde(default)]
     pub messages: Vec<ChatMessage>,
     pub id: String,

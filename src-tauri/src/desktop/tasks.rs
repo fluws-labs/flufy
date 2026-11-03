@@ -142,6 +142,14 @@ pub fn check(app: &AppHandle) -> Result<(), String> {
     })
 }
 
+// Team delegation needs the authenticated chat identity, not PC-control access.
+pub fn check_bound(app: &AppHandle) -> Result<(), String> {
+    let Some((session, run)) = identity() else {
+        return Err("No hay una conversación de origen enlazada".into());
+    };
+    get(app, &session).ok_or("sesión perdida".into()).and_then(|t| validate(&t, run))
+}
+
 pub fn current(app: &AppHandle) -> Option<Task> { get(app, &observer()) }
 
 pub fn plan(app: &AppHandle, objective: &str, next: &str) -> Result<Task, String> {

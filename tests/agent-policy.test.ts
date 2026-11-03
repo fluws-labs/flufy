@@ -44,6 +44,10 @@ test("inyecta una sola política sin depender de memoria ni modificar instruccio
     assert.equal(output.system.length, 3)
     assert.deepEqual(output.system.slice(0, 2), ["Instrucciones del modelo", "Requisitos del proyecto"])
     assert.ok(output.system[2].startsWith("# Flufy: directo al objetivo"))
+    assert.match(output.system[2], /Elegir cómo resolver el trabajo/)
+    assert.match(output.system[2], /Con un equipo/)
+    assert.match(output.system[2], /En este chat/)
+    assert.match(output.system[2], /teams_delegate/)
 
     const next = { system: ["Otro modelo"] }
     await first["experimental.chat.system.transform"]({}, next)

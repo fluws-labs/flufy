@@ -45,6 +45,12 @@ pub struct Requirement {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct PlanContract {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ui_review_required: Option<bool>,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub ui_review_reason: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub project_constraints: Vec<super::delivery_review::ProjectConstraint>,
     pub requirements: Vec<Requirement>,
     pub why_parallel: String,
     pub why_not_single_unit: String,
@@ -599,6 +605,10 @@ pub(super) fn parse_proposal(text: &str, run: &Run) -> Result<Plan, ValidationRe
     }
     let plan: Plan = serde_json::from_value(value)
         .map_err(|e| fail(PlanErrorCode::InvalidTaskShape, e.to_string()))?;
+    if run.delivery_review_version > 0 {
+        super::delivery_review::validate_plan(&plan.contract)
+            .map_err(|e| fail(PlanErrorCode::MissingCoverage, e))?;
+    }
     super::staffing::validate_assignments(&plan.agents, &plan.tasks)
         .map_err(|e| fail(PlanErrorCode::MissingOwner, e))?;
     let team = super::staffing::with_agents(&run.team, &plan.agents, &run.skills)

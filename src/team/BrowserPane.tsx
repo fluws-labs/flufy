@@ -24,26 +24,36 @@ function unobstructed(host: HTMLElement, r: DOMRect) {
 
 // Superficie del navegador interno de Flufy. Las páginas viven en una WebView2
 // propia por conversación; este componente sólo les da lugar y navegación.
-export function BrowserPane({ session, names = {} }: { session: string; names?: Record<string, string> }) {
+export function BrowserPane({ session, names = {}, initialPage }: { session: string; names?: Record<string, string>; initialPage?: string }) {
   const [pages, setPages] = useState<BrowserPage[]>([])
   const [selected, setSelected] = useState("")
   const [address, setAddress] = useState<string | undefined>()
   const [error, setError] = useState("")
   const [busy, setBusy] = useState(false)
   const surface = useRef<HTMLDivElement>(null)
+  const initialPending = useRef(initialPage)
   useEffect(() => {
     if (!isTauri) return
+    initialPending.current = initialPage
     let disposed = false
     const refresh = async () => {
       try {
         const next = await call<BrowserPage[]>("browser_internal_pages", { session })
-        if (!disposed) { setPages(next); setSelected(previous => next.some(p => p.label === previous) ? previous : next[0]?.label ?? "") }
+        if (!disposed) {
+          setPages(next)
+          if (initialPending.current) {
+            const requested = initialPending.current
+            initialPending.current = undefined
+            if (next.some(p => p.label === requested)) setSelected(requested)
+            else { setSelected(""); setError("La página preparada se cerró. Volvé a la guía para reconstruir el escenario.") }
+          } else setSelected(previous => next.some(p => p.label === previous) ? previous : initialPage ? "" : next[0]?.label ?? "")
+        }
       } catch(e) { if (!disposed) setError(errorMessage(e)) }
     }
     void refresh()
     const timer = window.setInterval(() => void refresh(), 1500)
     return () => { disposed = true; window.clearInterval(timer) }
-  }, [session])
+  }, [session, initialPage])
   const page = pages.find(p => p.label === selected)
   useEffect(() => {
     const host = surface.current

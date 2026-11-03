@@ -1,3 +1,6 @@
+mod activity;
+mod delivery_review;
+pub mod handoff;
 mod capture;
 mod attachments;
 mod autonomy;
@@ -36,7 +39,9 @@ use tauri::{AppHandle, Emitter, Manager};
 pub struct TeamsState {
     store: Mutex<Store>,
     controls: Mutex<()>,
+    handoffs: Mutex<()>,
     runners: Mutex<std::collections::HashSet<String>>,
+    activity: Mutex<activity::ActivityLog>,
     error: Option<String>,
 }
 
@@ -254,7 +259,9 @@ pub fn start(app: &AppHandle) {
     app.manage(TeamsState {
         store: Mutex::new(store),
         controls: Mutex::new(()),
+        handoffs: Mutex::new(()),
         runners: Mutex::new(Default::default()),
+        activity: Mutex::new(Default::default()),
         error,
     });
     if let Err(e) = update(app, |_| Ok(())) {
@@ -300,6 +307,15 @@ fn canonical(path: &str) -> Result<String, String> {
 #[tauri::command]
 pub fn teams_state(app: AppHandle) -> Result<Store, String> {
     read(&app)
+}
+
+#[tauri::command]
+pub fn team_activity(app: AppHandle, run_id: String) -> Vec<activity::Activity> {
+    app.state::<TeamsState>()
+        .activity
+        .lock()
+        .map(|log| log.recent(&run_id, 400))
+        .unwrap_or_default()
 }
 
 #[tauri::command]
@@ -385,6 +401,7 @@ pub fn team_chats_create(app: AppHandle, team_id: String) -> Result<Chat, String
             .ok_or("Equipo inexistente")?
             .clone();
         let chat = Chat {
+            origin: None,
             messages: vec![],
             id: id(),
             title: team.name.clone(),
@@ -410,6 +427,13 @@ pub fn team_chats_auto(
 ) -> Result<Chat, String> {
     let root = canonical(&project_root)?;
     update(&app, |s| {
+        let chat = autonomous_chat(s, root, model, variant)?;
+        s.chats.push(chat.clone());
+        Ok(chat)
+    })
+}
+
+fn autonomous_chat(s: &Store, root: String, model: ModelRef, variant: Option<String>) -> Result<Chat, String> {
         let lead_id = id();
         let refs = s
             .skills
@@ -464,6 +488,7 @@ pub fn team_chats_auto(
         };
         validate_team(&team, &s.skills)?;
         let chat = Chat {
+            origin: None,
             messages: vec![],
             id: id(),
             title: "Modo equipo".into(),
@@ -475,9 +500,7 @@ pub fn team_chats_auto(
             memory: None,
             auto_approve: None,
         };
-        s.chats.push(chat.clone());
         Ok(chat)
-    })
 }
 
 #[tauri::command]
@@ -595,6 +618,8 @@ fn start_run(app: AppHandle, chat_id: String, goal: String, images: Vec<ChatImag
             })
             .unwrap_or_default();
         c.runs.push(Run {
+            delivery_review_version: 1,
+            delivery_review: None,
             plan_v2: plan_v2::PlanV2State { enabled: c.team.plan_v2.enabled, review_before_start: c.team.plan_v2.review_before_start, stage: "discovery".into(), ..Default::default() },
             support_reports: vec![],
             images: images.clone(),

@@ -165,6 +165,7 @@ mod tests {
         store.skills.push(custom);
         let snapshot = store.teams[0].clone();
         store.chats.push(Chat {
+            origin: None,
             messages: vec![],
             id: "chat".into(),
             title: "Original".into(),

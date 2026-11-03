@@ -6,6 +6,8 @@ pub(super) enum Mode { ReadOnly, Worker, Conversation, Format }
 
 const READ: &[&str] = &["read", "glob", "grep"];
 const WEB: &[&str] = &["webfetch", "websearch"];
+// Visible execution requires existing shell authority, not merely a QA role.
+const TERMINAL: &[&str] = &["terminal_terminal_run", "terminal_terminal_read"];
 const OBSERVE: &[&str] = &[
     "browser_list_pages", "browser_take_snapshot", "browser_take_screenshot",
     "browser_list_console_messages", "browser_get_console_message",
@@ -21,7 +23,10 @@ fn allowed(name: &str, employee: &Employee, mode: Mode) -> bool {
     if name.starts_with("browser_") || name.starts_with("desktop_") {
         return mode != Mode::ReadOnly || OBSERVE.contains(&name);
     }
-    if mode == Mode::Worker { employee.tools.iter().any(|tool| tool == name) }
+    if mode == Mode::Worker {
+        employee.tools.iter().any(|tool| tool == name)
+            || (TERMINAL.contains(&name) && employee.tools.iter().any(|tool| tool == "bash"))
+    }
     else { READ.contains(&name) }
 }
 
@@ -30,7 +35,7 @@ pub(super) fn tool_map(ids: &Value, employee: &Employee, mode: Mode) -> Result<M
         .iter().filter_map(Value::as_str).map(String::from).collect();
     use crate::desktop::Channel;
     for channel in [Channel::Desktop, Channel::Browser, Channel::Routines, Channel::Terminal,
-        Channel::Worktrees, Channel::Memory, Channel::Plane] {
+        Channel::Worktrees, Channel::Memory, Channel::Plane, Channel::Teams] {
         for tool in crate::desktop::tool_list(channel) {
             if let Some(name) = tool["name"].as_str() { names.push(format!("{}_{}", channel.name(), name)); }
         }
@@ -41,6 +46,11 @@ pub(super) fn tool_map(ids: &Value, employee: &Employee, mode: Mode) -> Result<M
 }
 
 pub(super) fn permissions(rules: &mut Vec<Value>, mode: Mode) {
+    if mode == Mode::Worker {
+        // Preserve bash's default approval instead of bypassing it via MCP.
+        rules.push(json!({"permission":"terminal_terminal_run","pattern":"*","action":"ask"}));
+        rules.push(json!({"permission":"terminal_terminal_read","pattern":"*","action":"allow"}));
+    }
     for name in WEB { rules.push(json!({"permission":name,"pattern":"*","action":"allow"})); }
     if mode == Mode::ReadOnly {
         for name in OBSERVE { rules.push(json!({"permission":name,"pattern":"*","action":"allow"})); }
@@ -63,13 +73,29 @@ pub(super) fn instructions(mode: Mode) -> String {
 mod tests {
     use super::*;
     #[test]
+    fn visible_servers_require_worker_shell_authority_and_keep_command_approval() {
+        let mut employee = super::super::domain::tests::team().members[0].clone();
+        for mode in [Mode::ReadOnly, Mode::Conversation, Mode::Format] {
+            for tool in TERMINAL { assert!(!allowed(tool, &employee, mode)); }
+        }
+        employee.tools.retain(|tool| tool != "bash");
+        for tool in TERMINAL { assert!(!allowed(tool, &employee, Mode::Worker)); }
+        employee.tools.push("bash".into());
+        for tool in TERMINAL { assert!(allowed(tool, &employee, Mode::Worker)); }
+        assert!(!allowed("terminal_terminal_send", &employee, Mode::Worker));
+        assert!(!allowed("terminal_terminal_close", &employee, Mode::Worker));
+        let mut rules = vec![];
+        permissions(&mut rules, Mode::Worker);
+        assert_eq!(rules.iter().rfind(|rule| rule["permission"] == "terminal_terminal_run").unwrap()["action"], "ask");
+    }
+    #[test]
     fn interactive_tools_work_without_expanding_file_or_delegation_permissions() {
         let employee = super::super::domain::tests::team().members[0].clone();
         for mode in [Mode::Worker, Mode::Conversation] {
             for tool in ["webfetch", "websearch", "browser_navigate_page", "desktop_execute"] {
                 assert!(allowed(tool, &employee, mode), "{tool}");
             }
-            for tool in ["task", "self_reload", "terminal_terminal_run", "worktrees_create"] {
+            for tool in ["task", "self_reload", "terminal_terminal_close", "worktrees_create", "teams_delegate"] {
                 assert!(!allowed(tool, &employee, mode), "{tool}");
             }
         }
@@ -81,6 +107,7 @@ mod tests {
         let mut questioning = employee.clone(); questioning.tools.push("question".into());
         assert!(!allowed("question", &questioning, Mode::Worker));
         assert!(allowed("browser_take_snapshot", &employee, Mode::ReadOnly));
+        assert!(!allowed("teams_delegate", &employee, Mode::ReadOnly));
         assert!(!allowed("browser_navigate_page", &employee, Mode::ReadOnly));
         assert!(!allowed("desktop_execute", &employee, Mode::ReadOnly));
         let mut rules = vec![];

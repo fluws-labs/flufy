@@ -356,6 +356,7 @@ pub fn run() {
             routines::routines_set_enabled,
             routines::routines_run_now,
             teams::teams_state,
+            teams::team_activity,
             teams::teams_save,
             teams::teams_delete,
             teams::team_skills_save,

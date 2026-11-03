@@ -272,3 +272,47 @@
 .team-chat-expanded .team-browser-body {padding:0;}
 
 .team-chat-expanded.team-board-mode .team-chat-body { padding: 18px; }
+
+.team-origin { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-top:8px; padding:7px 9px; border:1px solid var(--border); border-radius:var(--radius); background:var(--bg-raised); font-size:12px; }
+.team-origin > .codicon { color:var(--accent); flex:none; }
+.team-origin > span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.team-origin .btn { margin-left:auto; }
+
+.team-activity { display:flex; flex-direction:column; gap:10px; margin-bottom:16px; }
+.team-activity-compact { border:1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-raised); padding:12px; }
+.team-activity-head { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.team-activity-head strong { display:inline-flex; align-items:center; gap:5px; font-size:12px; }
+.team-activity-head small { display:block; margin-top:2px; color:var(--fg-dim); font-size:11px; }
+.team-activity-filter { display:flex; align-items:center; gap:6px; font-size:11px; color:var(--fg-dim); }
+.team-activity-filter select { font-size:11px; padding:3px 6px; }
+.team-activity-cards { display:grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap:8px; }
+.team-activity-card { display:flex; flex-direction:column; gap:4px; text-align:left; padding:9px 10px; border:1px solid var(--border); border-left:3px solid var(--border); border-radius: var(--radius); background:var(--bg); cursor:pointer; color:inherit; font:inherit; }
+.team-activity-card:hover:not(:disabled) { border-color: var(--border-strong); }
+.team-activity-card:disabled { cursor:default; opacity:.7; }
+.team-activity-card.is-working { border-left-color: var(--accent); }
+.team-activity-card.is-waiting { border-left-color: var(--warn); }
+.team-activity-card.is-error { border-left-color: var(--danger, var(--warn)); }
+.team-activity-card.is-done { border-left-color: var(--success); }
+.team-activity-name { display:flex; align-items:center; gap:6px; font-size:12px; font-weight:600; }
+.team-activity-name small { font-weight:400; color:var(--fg-dim); }
+.team-activity-line { font-size:12px; line-height:1.45; overflow-wrap:anywhere; }
+.team-activity-time { color:var(--fg-dim); font-size:11px; }
+.team-activity-target { display:block; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:11px; color:var(--fg-dim); overflow-wrap:anywhere; }
+.team-activity-dot { flex:none; width:7px; height:7px; border-radius:50%; background:var(--fg-dim); }
+.team-activity-dot.working { background:var(--accent); animation: team-activity-pulse 1.4s ease-in-out infinite; }
+.team-activity-dot.waiting { background:var(--warn); }
+.team-activity-dot.error { background:var(--warn); }
+.team-activity-dot.done { background:var(--success); }
+@keyframes team-activity-pulse { 0%,100% { opacity:1; } 50% { opacity:.25; } }
+.team-activity-feed { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:2px; }
+.team-activity-feed li { margin:0; }
+.team-activity-row { display:grid; grid-template-columns:52px minmax(70px,110px) 1fr auto; gap:8px; align-items:baseline; width:100%; padding:5px 6px; border:none; border-radius:var(--radius); background:none; color:inherit; font:inherit; font-size:12px; text-align:left; cursor:pointer; }
+.team-activity-row:hover { background:var(--accent-bg); }
+.team-activity-row time { color:var(--fg-dim); font-variant-numeric:tabular-nums; }
+.team-activity-who { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--fg-dim); }
+.team-activity-what { display:flex; align-items:baseline; gap:6px; overflow-wrap:anywhere; }
+.team-activity-what .team-activity-target { display:inline; }
+.team-activity-task { color:var(--fg-dim); font-variant-numeric:tabular-nums; }
+.team-activity-compact .team-activity-feed { margin-top:2px; }
+.team-activity-compact .team-activity-row { grid-template-columns:52px minmax(70px,110px) 1fr auto; }
+@media (max-width: 720px) { .team-activity-cards { grid-template-columns:1fr; } .team-activity-row { grid-template-columns:46px 1fr; } .team-activity-row .team-activity-who, .team-activity-row .team-activity-task { display:none; } }

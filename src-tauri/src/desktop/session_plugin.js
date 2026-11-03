@@ -14,7 +14,7 @@ export const DesktopSession = async () => {
   }
   return {
     "tool.execute.before": async (input, output) => {
-      if (!/^(desktop|browser)_/.test(input.tool || "")) return
+      if (!/^(desktop|browser|teams)_/.test(input.tool || "")) return
       if (!input.sessionID) throw new Error("La herramienta de escritorio necesita una conversación")
       const { token, run } = await bind(input.sessionID)
       // The model cannot choose another session or reactivate a stopped task.

@@ -535,7 +535,7 @@ pub(super) fn claim_internal(workspace: &str, actor: &str) -> Result<(),String> 
     Ok(())
 }
 
-pub fn workspace(session: &str, page_id: Option<u64>) -> Result<Value, String> {
+pub fn workspace(session: &str, page_id: Option<u64>, quiet: bool) -> Result<Value, String> {
     if super::internal_browser::selected(session) {
         return with_profile(super::internal_browser::profile(session)?, || {
             let result = call("list_pages", json!({"_guillecode":{"session":session,"action":"inspect","isolated":true}}))?;
@@ -545,6 +545,12 @@ pub fn workspace(session: &str, page_id: Option<u64>) -> Result<Value, String> {
             Ok(value)
         });
     }
+    // Al abrir una conversación sólo se puede consultar el estado sin conectar
+    // con Chrome: hacerlo al montar el compositor disparaba el permiso de
+    // DevTools remotos en chats que no usan el navegador.
+    if quiet {
+        return Ok(json!({ "assigned": false, "missing": false, "windowId": null, "pages": [] }));
+    }
     let result = call("list_pages", json!({ "_guillecode": {
         "session": session, "action": if page_id.is_some() { "assign" } else { "inspect" }, "pageId": page_id
     }}))?;
@@ -553,11 +559,12 @@ pub fn workspace(session: &str, page_id: Option<u64>) -> Result<Value, String> {
 }
 
 #[tauri::command]
-pub async fn browser_workspace(app: tauri::AppHandle, session: String, page_id: Option<u64>) -> Result<Value, String> {
+pub async fn browser_workspace(app: tauri::AppHandle, session: String, page_id: Option<u64>, quiet: Option<bool>) -> Result<Value, String> {
     if session.trim().is_empty() { return Err("Falta la conversación del navegador".into()); }
     super::gate(&app)?;
     if !super::config(&app).browser { return Err("El navegador está desactivado".into()); }
-    tauri::async_runtime::spawn_blocking(move || workspace(&session, page_id)).await.map_err(|e| e.to_string())?
+    let quiet = quiet.unwrap_or(false);
+    tauri::async_runtime::spawn_blocking(move || workspace(&session, page_id, quiet)).await.map_err(|e| e.to_string())?
 }
 
 // Inspecciona siempre el Chrome del usuario, aunque la conversación esté usando

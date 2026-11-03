@@ -91,6 +91,8 @@ const mock = createServer(async (request, response) => {
   if (autonomous) assert.ok(JSON.stringify(body.input).includes("data:image/png;base64,"), "User image must reach Lead conversation, planning, workers and review as an actual image part")
   let item
   const message = (value) => {
+    if (leadPhase === "plan") Object.assign(value, { uiReviewRequired: false, uiReviewReason: "El fixture modifica archivos de texto y comprueba su contenido", projectConstraints: [] })
+    if (leadPhase === "closeout" && value.status === "approved") value.deliveryReview = { uiRequired: false, summary: "Archivos y comandos comprobados", reason: "El fixture no modifica un flujo interactivo", decisions: [], flows: [] }
     if (planV2 && value?.tasks?.length) {
       value.requirements = [{id:"R1",description:"Crear backend y frontend con versión 2 y comprobaciones observadas",limitation:null}]
       for (const task of value.tasks) {

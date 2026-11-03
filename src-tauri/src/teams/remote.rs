@@ -31,6 +31,11 @@ pub(super) fn snapshot(run: &Run) -> Value {
     }
     object.insert("skills".into(), json!([]));
     object.insert("evidenceDir".into(), json!(""));
+    // The mobile board can link back by session, but the local worktree path
+    // stays on the desktop.
+    if let Some(origin) = object.get_mut("origin").and_then(Value::as_object_mut) {
+        origin.remove("directory");
+    }
     if let Some(state) = object.get_mut("planV2").and_then(Value::as_object_mut) {
         state.remove("rejectedProposals");
         state.insert("discovery".into(), json!([]));

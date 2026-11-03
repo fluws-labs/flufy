@@ -31,6 +31,8 @@ test("desktop plugin binds actual session identity, overwrites model arguments a
     assert.deepEqual(output.args._guillecode, { token: "token-s1", run: 7 })
     await plugin["tool.execute.before"]({ tool: "browser_click", sessionID: "s2" }, output)
     assert.deepEqual(output.args._guillecode, { token: "token-s2", run: 7 })
+    await plugin["tool.execute.before"]({ tool: "teams_delegate", sessionID: "source-chat" }, output)
+    assert.deepEqual(output.args._guillecode, { token: "token-source-chat", run: 7 })
     const count = requests.length
     await plugin["tool.execute.before"]({ tool: "read", sessionID: "s1" }, { args: {} })
     assert.equal(requests.length, count, "ordinary code tools must not contact desktop")

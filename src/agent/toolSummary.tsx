@@ -4,6 +4,7 @@ import { DiffRows } from "../components/DiffRows"
 import { useProject } from "../state/project"
 import { openFile } from "../state/editors"
 import { selectSession } from "../state/agent"
+import { selectTeamChat } from "../state/teams"
 import { countChanges } from "../lib/diff"
 import { relativePath, resolvePath } from "../lib/paths"
 
@@ -40,6 +41,39 @@ function PathLink({ path, line, children }: { path: string; line?: number; child
       {children ?? rel}
     </button>
   )
+}
+
+function delegationReceipt(output?: string): { teamChatId?: string; runId?: string; status?: string } {
+  const walk = (value: unknown): Record<string, unknown> | undefined => {
+    if (typeof value === "string") {
+      const trimmed = value.trim()
+      if (!trimmed) return undefined
+      try { return walk(JSON.parse(trimmed)) } catch { return undefined }
+    }
+    if (!value || typeof value !== "object") return undefined
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        const found = walk(item)
+        if (found) return found
+      }
+      return undefined
+    }
+    const object = value as Record<string, unknown>
+    if (typeof object.teamChatId === "string") return object
+    for (const child of Object.values(object)) {
+      const found = walk(child)
+      if (found) return found
+    }
+    return undefined
+  }
+  const found = walk(output)
+  if (found) return {
+    teamChatId: String(found.teamChatId),
+    runId: typeof found.runId === "string" ? found.runId : undefined,
+    status: typeof found.status === "string" ? found.status : undefined,
+  }
+  const match = output?.match(/"teamChatId"\s*:\s*"([^"]+)"/)
+  return match ? { teamChatId: match[1] } : {}
 }
 
 function editPatch(state: ToolState): string {
@@ -165,6 +199,32 @@ export function summarize(tool: string, state: ToolState): Summary {
             }}
           >
             <Icon name="link-external" /> Abrir sesión
+          </button>
+        ) : undefined,
+      }
+    }
+    case "teams_delegate": {
+      const receipt = delegationReceipt(state.output)
+      return {
+        icon: "organization",
+        verb: "Pasó el plan a un equipo",
+        target: <span className="tool-dim">{str(input.title) || "Equipo"}</span>,
+        body: (
+          <div className="tool-delegation">
+            <p>{receipt.teamChatId ? `El equipo tomó el plan${receipt.status ? ` · ${receipt.status}` : ""}. El chat original se conserva.` : "Preparando el traspaso al equipo."}</p>
+            {!receipt.teamChatId && state.output && <pre className="tool-pre">{state.output}</pre>}
+          </div>
+        ),
+        actions: receipt.teamChatId ? (
+          <button
+            type="button"
+            className="btn btn-xs"
+            onClick={(e) => {
+              e.stopPropagation()
+              selectTeamChat(receipt.teamChatId!, receipt.runId)
+            }}
+          >
+            <Icon name="link-external" /> Abrir equipo
           </button>
         ) : undefined,
       }

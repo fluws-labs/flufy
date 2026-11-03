@@ -34,6 +34,8 @@ const mock=createServer(async(request,response)=>{
   const isReview=text.includes('Sos el Lead revisor')||text.includes('Sos el Lead de cierre')
   let item
   const message=(value)=>{
+    if(latestPrompt.includes('Actuás como Team Lead.'))Object.assign(value,{uiReviewRequired:false,uiReviewReason:'El fixture verifica un efecto único en archivos',projectConstraints:[]})
+    if(latestPrompt.includes('Sos el Lead de cierre')&&value.status==='approved')value.deliveryReview={uiRequired:false,summary:'Efecto único comprobado',reason:'El fixture de recuperación no cambia una UI',decisions:[],flows:[]}
     if(planV2&&value.tasks?.length){value.requirements=[{id:'R1',description:'Aplicar el efecto una sola vez y verificarlo después de reiniciar',limitation:null}];for(const task of value.tasks){task.requirementIds=['R1'];task.risk='low';task.verificationPlan=[{kind:'command',command:engine?verify:verifyApp,expected:'exitCode=0 y exactamente un efecto observado'}]}}
     return ({type:'message',id:`msg-${randomUUID()}`,role:'assistant',content:[{type:'output_text',text:JSON.stringify(value),annotations:[]}],status:'completed'})
   }

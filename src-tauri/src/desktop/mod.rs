@@ -64,6 +64,7 @@ pub enum Channel {
     Routines,
     Terminal,
     Worktrees,
+    Teams,
     Memory,
     Plane,
 }
@@ -76,6 +77,7 @@ impl Channel {
             Channel::Routines => "routines",
             Channel::Terminal => "terminal",
             Channel::Worktrees => "worktrees",
+            Channel::Teams => "teams",
             Channel::Memory => "memory",
             Channel::Plane => "self",
         }
@@ -232,6 +234,7 @@ fn agent_config(state: &DesktopState) -> Value {
         })
     };
     let mut mcp = json!({ "desktop": server("desktop", 120_000), "routines": server("routines", 120_000), "terminal": server("terminal", 660_000), "worktrees": server("worktrees", 120_000), "memory": server("memory", 120_000), "self": server("self", 120_000) });
+    mcp["teams"] = server("teams", 120_000);
     if state.browser_injected {
         mcp["browser"] = server("browser", 180_000);
     }
@@ -335,6 +338,7 @@ fn instructions(channel: Channel) -> &'static str {
         Channel::Terminal => terminal::INSTRUCTIONS,
         Channel::Worktrees => worktrees::INSTRUCTIONS,
         Channel::Memory => crate::memory::instructions(),
+        Channel::Teams => "Desde un chat normal, antes de empezar un trabajo de implementación no trivial, si el usuario no definió cómo resolverlo, preguntá una sola vez con la herramienta question: header «Cómo resolverlo», pregunta «¿Querés que lo resuelva un equipo o seguimos en este chat?», opciones «Con un equipo» («El Lead organiza especialistas, ejecuta y deja evidencias para revisar») y «En este chat» («Sigo yo en esta conversación, sin equipo»). Si también falta elegir Principal o un trabajo separado, sumá esa opción a la misma pregunta; no encadenes interrogatorios. No preguntes en consultas ni cambios triviales, ni repitas la pregunta. Si elige un equipo, llamá a delegate con plan concreto, contexto pertinente, decisiones con fuente y aceptación; si elige este chat, no delegues. La elección es del usuario, no la infieras por el tamaño de la tarea.",
         Channel::Plane => crate::plane::INSTRUCTIONS,
     }
 }
@@ -349,6 +353,7 @@ pub(crate) fn tool_list(channel: Channel) -> Vec<Value> {
         Channel::Routines => routines::definitions(),
         Channel::Terminal => terminal::definitions(),
         Channel::Worktrees => worktrees::definitions(),
+        Channel::Teams => crate::teams::handoff::tools(),
         Channel::Memory => crate::memory::tool_list(),
         Channel::Plane => crate::plane::tool_list(),
     }
@@ -364,7 +369,7 @@ fn browser_summary(name: &str, args: &Value) -> String {
 }
 
 fn call_tool(app: &AppHandle, channel: Channel, name: &str, args: &Value) -> Value {
-    let _session = if matches!(channel, Channel::Desktop | Channel::Browser) {
+    let _session = if matches!(channel, Channel::Desktop | Channel::Browser | Channel::Teams) {
         match tasks::enter(app, args) {
             Ok(scope) => Some(scope),
             Err(e) => return json!({ "content": [{ "type": "text", "text": e }], "isError": true }),
@@ -377,6 +382,7 @@ fn call_tool(app: &AppHandle, channel: Channel, name: &str, args: &Value) -> Val
         Channel::Routines => routines::call(app, name, args),
         Channel::Terminal => terminal::call(app, name, args),
         Channel::Worktrees => worktrees::call(app, name, args),
+        Channel::Teams => crate::teams::handoff::call(app, name, args),
         Channel::Memory => crate::memory::call_tool(app, name, args),
         Channel::Plane => crate::plane::call_tool(app, name, args),
         #[cfg(windows)]
@@ -588,6 +594,17 @@ mod tests {
             plane: None,
             browser_injected: true,
         }
+    }
+
+    #[test]
+    fn teams_channel_asks_once_before_implementation_and_never_for_queries() {
+        let text = instructions(Channel::Teams);
+        assert!(text.contains("¿Querés que lo resuelva un equipo o seguimos en este chat?"));
+        assert!(text.contains("Con un equipo") && text.contains("En este chat"));
+        assert!(text.contains("No preguntes en consultas ni cambios triviales"));
+        assert!(text.contains("no delegues"));
+        let config = agent_config(&state());
+        assert_eq!(config["mcp"]["teams"]["url"], "http://127.0.0.1:4242/mcp/teams");
     }
 
     #[test]

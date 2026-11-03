@@ -34,10 +34,10 @@ export function BrowserWorkspace({ sessionId, shared = false }: { sessionId: str
     return () => { window.removeEventListener("pointerdown", outside); window.removeEventListener("keydown", escape, true) }
   }, [open])
 
-  const inspect = async () => {
+  const inspect = async (quiet = false) => {
     if (!sessionId) return
-    setBusy(true); setError("")
-    try { setState(await call<Workspace>("browser_workspace", { session: sessionId, pageId: null })) }
+    setBusy(!quiet); setError("")
+    try { setState(await call<Workspace>("browser_workspace", { session: sessionId, pageId: null, quiet })) }
     catch (e) { setError(errorMessage(e)); setState(null) }
     finally { setBusy(false) }
   }
@@ -48,8 +48,10 @@ export function BrowserWorkspace({ sessionId, shared = false }: { sessionId: str
   }
 
   useEffect(() => {
-    if (sessionId) void inspect()
-    else void inspectChrome()
+    // Montar el compositor nunca conecta con Chrome: el permiso de DevTools
+    // remotos sólo se pide cuando el usuario abre el selector o el agente usa
+    // el navegador en esa conversación.
+    if (sessionId) void inspect(true)
     // La asignación vive en el backend: al abrir la conversación hay que
     // reflejar si ya estaba usando Chrome o el navegador interno.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -125,7 +127,7 @@ export function BrowserWorkspace({ sessionId, shared = false }: { sessionId: str
   const owned = state?.assigned ? state.pages.filter(page => page.windowId === state.windowId) : []
   const internalChosen = draft ? choice?.kind === "internal" : !!state?.internal
   const chromeChoice = choice?.kind === "chrome" ? choice : null
-  const pillSet = draft ? !!choice : !!state?.assigned
+  const pillSet = draft ? !!choice : !!state?.assigned || runtime.browserWindow !== undefined
   const label = busy ? "Consultando navegador…"
     : draft ? (choice?.kind === "internal" ? "Navegador interno" : choice?.kind === "chrome" ? `Navegador · ${choice.tabs} pestaña${choice.tabs === 1 ? "" : "s"}` : "Elegir navegador")
     : state?.internal ? `Navegador interno${state.pages.length ? ` · ${state.pages.length} pág.` : ""}` : state?.assigned ? `Navegador · ${owned.length} pestañas` : state?.missing ? "Navegador: elegí ventana" : runtime.browserWindow !== undefined ? "Navegador asignado" : shared ? "Navegador del equipo" : "Elegir navegador"
