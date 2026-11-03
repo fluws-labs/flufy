@@ -67,10 +67,10 @@ test("cada integrante conserva su estado cuando otro necesita ayuda, incluso con
   const { chat, run } = fixture()
   const [lead, front, back] = run.team.members
   front.name = back.name = "Especialista"
-  run.tasks[0].status = "blocked"; run.tasks[0].error = "Falta configurar la API local."
+  run.tasks[0].status = "blocked"; run.tasks[0].error = "La cuenta alcanzó su límite de uso."
   let attention = teamAttention(chat, run)
   assert.equal(memberState(front, chat, run, attention).needsHelp, true)
-  assert.match(memberState(front, chat, run, attention).detail, /API local/)
+  assert.match(memberState(front, chat, run, attention).detail, /límite de uso/)
   assert.equal(memberState(back, chat, run, attention).label, "Trabajando")
   assert.equal(memberState(back, chat, run, attention).needsHelp, false)
   run.tasks[0].status = "running"
@@ -120,9 +120,21 @@ test("un integrante bloqueado se ve aunque el equipo siga trabajando y no tenga 
   assert.match(items[0].reason, /límite de uso/)
   assert.doesNotMatch(items[0].reason, /PRIVATE|responseHeaders/)
   assert.equal(items[0].sessionId, "session-frontend")
-  assert.equal(attentionLabel(items), "1 bloqueo")
+  assert.equal(attentionLabel(items), "1 decisión tuya")
   run.tasks[0].status = "running"
   assert.deepEqual(teamAttention(chat, run), [])
+})
+
+test("un límite de sesión se muestra como espera del Lead y no como decisión humana", () => {
+  const { chat, run } = fixture()
+  run.tasks[0].status = "blocked"
+  run.tasks[0].error = "Se alcanzó el límite de 45 minutos por sesión"
+  const items = teamAttention(chat, run)
+  assert.equal(items[0].kind, "waiting")
+  assert.match(items[0].reason, /El Lead lo está resolviendo/)
+  assert.equal(attentionLabel(items), "1 en espera")
+  run.tasks[0].error = "El Lead revisó este mismo bloqueo tres veces y sigue sin resolverlo. El trabajo se conserva. Último problema: límite de 45 minutos por sesión"
+  assert.equal(teamAttention(chat, run)[0].kind, "blocked")
 })
 
 test("esperar una entrega se diferencia de un fallo y desaparece al resolverla", () => {
@@ -144,7 +156,7 @@ test("los permisos y preguntas muestran al responsable real y excluyen otros cha
   const items = teamAttention(chat, run, [{ sessionID: "session-frontend", kind: "permission" }, { sessionID: "review-backend", kind: "question" }, { sessionID: "foreign", kind: "permission" }])
   assert.deepEqual(items.map(i => [i.name, i.kind]), [["Frontend", "permission"], ["Lead", "question"]])
   assert.match(items[0].reason, /autorización/)
-  assert.equal(attentionLabel(items), "2 bloqueos")
+  assert.equal(attentionLabel(items), "2 decisiones tuyas")
   assert.deepEqual(teamAttention(chat, run), [])
 })
 

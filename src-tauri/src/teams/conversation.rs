@@ -466,7 +466,7 @@ fn respond(
     }
     if chat.runs.last().is_some_and(|r| matches!(r.status.as_str(), "completed" | "awaiting_manual_qa" | "qa_approved"))
         && improvement_message(text) && clarification_start(&chat, reply_id).is_none() {
-        return work(app, chat_id, reply_id, text, &super::attachments::recent(&chat));
+        return work(app, chat_id, reply_id, text, &super::attachments::recent(&chat), "");
     }
     if current_images.is_empty() && status_question(text) {
         if let Some(failed) = chat.messages.iter().rev().find(|m| m.role == "assistant" && m.status == "error"
@@ -509,7 +509,7 @@ fn respond(
             })
             .unwrap_or(false)
     {
-        return work(app, chat_id, reply_id, text, &images);
+        return work(app, chat_id, reply_id, text, &images, "");
     }
     // The chat-level Lead configuration drives conversation turns. Runs keep
     // their own immutable snapshot for the work they already dispatched.
@@ -644,8 +644,9 @@ fn respond(
                         }
                         Err(_) => return Err("El Lead no logró dar formato a su respuesta después de dos correcciones. Su actividad se conserva; no se inició trabajo nuevo".into()),
                     };
+                    let acknowledgment = reply.reply.clone();
                     return match conversation_answer(&chat, reply_id, text, reply)? {
-                        ConversationAnswer::Work(goal) => work(app, chat_id, reply_id, &goal, &images),
+                        ConversationAnswer::Work(goal) => work(app, chat_id, reply_id, &goal, &images, &acknowledgment),
                         ConversationAnswer::Reply(text) => Ok(text),
                         ConversationAnswer::Clarify { start, text } => update(app, |s| {
                             let message = s.chats.iter_mut().find(|c| c.id == chat_id)
@@ -666,12 +667,18 @@ fn respond(
     result
 }
 
+fn lead_reply(acknowledgment: &str, fallback: &str) -> String {
+    let acknowledgment = acknowledgment.trim();
+    if acknowledgment.is_empty() { fallback.into() } else { evidence::sanitize(acknowledgment) }
+}
+
 fn work(
     app: &AppHandle,
     chat_id: &str,
     reply_id: &str,
     text: &str,
     images: &[ChatImage],
+    acknowledgment: &str,
 ) -> Result<String, String> {
     let chat = read(app)?
         .chats
@@ -702,22 +709,27 @@ fn work(
         }
         if matches!(status.as_str(), "blocked" | "failed" | "planning_blocked") {
             super::control(app, &run.id, "retry")?;
-            return Ok("Voy a corregir y revisar lo pendiente con tu indicación. Las tareas terminadas se conservan.".into());
+            return Ok(lead_reply(acknowledgment, "Voy a corregir y revisar lo pendiente con tu indicación. Las tareas terminadas se conservan."));
         }
         if matches!(status.as_str(), "running" | "planning" | "paused") {
-            return Ok("Guardé tu indicación para las próximas tareas y la revisión del Lead. Las tareas que ya están en marcha siguen con su pedido actual.".into());
+            return Ok(lead_reply(acknowledgment, "Guardé tu indicación para las próximas tareas y la revisión del Lead. Las tareas que ya están en marcha siguen con su pedido actual."));
         }
     }
     super::start_run(app.clone(), chat_id.into(), text.into(), images.to_vec(), Some(reply_id))?;
-    Ok(
-        "Organizo el equipo y seguimos hasta completar y comprobar la entrega. Los problemas técnicos los resolvemos entre nosotros; al terminar te aviso para que la revises. Podés preguntarme cómo va."
-            .into(),
-    )
+    Ok(lead_reply(
+        acknowledgment,
+        "Organizo el equipo y seguimos hasta completar y comprobar la entrega. Los problemas técnicos los resolvemos entre nosotros; al terminar te aviso para que la revises. Podés preguntarme cómo va.",
+    ))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_lead_acknowledgment_replaces_the_generic_status_while_working() {
+        assert_eq!(lead_reply("", "Guardé tu indicación."), "Guardé tu indicación.");
+        assert_eq!(lead_reply("  Lo sumo al plan y sigue en paralelo.  ", "Guardé tu indicación."), "Lo sumo al plan y sigue en paralelo.");
+    }
     #[test]
     fn formatting_a_reply_disables_all_actions_instead_of_replaying_them() {
         let mut body = json!({"tools":{"*":false,"desktop_execute":true,"browser_navigate_page":true,"read":true},"parts":[{"type":"text","text":"pedido original"}]});

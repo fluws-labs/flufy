@@ -49,18 +49,10 @@ async function setup(page: Page) {
 }
 async function emit(page: Page) { await page.evaluate(() => (window as unknown as { emitTeam: (e: unknown) => void }).emitTeam({ type: "team.changed" })) }
 
-test("PWA autenticada: revisión, cambios por teclado, controles y evidencia comparten el tablero", async ({ page }) => {
+test("PWA autenticada: revisión, controles y evidencia comparten el tablero", async ({ page }) => {
   const { state, errors } = await setup(page)
   await page.getByRole("button", { name: "Abrir tarea T1: Validar formulario" }).click()
-  await page.getByRole("button", { name: "Priorizar tarea pendiente" }).focus()
-  await page.keyboard.press("Enter")
-  await expect.poll(() => state.patches.length).toBe(1)
-  expect(state.patches[0]).toMatchObject({ runId: "run", expectedRevision: 1, expectedDigest: "digest-1", operations: [{ type: "REPRIORITIZE_PENDING", taskId: "T1" }] })
-  await expect(page.getByText("PLAN VIVO · v2")).toBeVisible()
   await page.getByRole("button", { name: "Cerrar detalle" }).click()
-  await page.getByRole("button", { name: "Revisiones", exact: true }).click()
-  await expect(page.getByText("Contrato inicial comprobado")).toBeVisible()
-  await page.getByRole("button", { name: "Tablero", exact: true }).click()
   await page.getByRole("button", { name: "Iniciar plan validado" }).click()
   await expect(page.getByRole("button", { name: "Pausar", exact: true })).toBeVisible()
   await page.getByRole("button", { name: "Pausar", exact: true }).click()
@@ -108,17 +100,6 @@ test("PWA resincro: eventos duplicados, secuencias viejas y desconexión conserv
   await page.reload()
   await expect(page.locator('[data-task-id="T1"][data-column="verified"]')).toHaveCount(1)
   expect(errors).toEqual([])
-})
-
-test("PWA conflicto entre ventanas: rechaza y recupera revisión durable sin repetir la operación", async ({ page }) => {
-  const { state } = await setup(page)
-  state.rejectPatch = true
-  await page.getByRole("button", { name: "Abrir tarea T1: Validar formulario" }).click()
-  await page.getByRole("button", { name: "Priorizar tarea pendiente" }).click()
-  await expect(page.getByRole("alert")).toContainText("REVISION_CONFLICT")
-  await expect(page.getByText("PLAN VIVO · v3")).toBeVisible()
-  expect(state.patches).toHaveLength(1)
-  expect(state.run.tasks[0].priority).toBeUndefined()
 })
 
 test("PWA sin token no consulta el tablero privado", async ({ page }) => {

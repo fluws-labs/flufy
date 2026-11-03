@@ -2,11 +2,11 @@ import { useState } from "react"
 import { teamCall } from "../state/teams"
 import type { RunLimits, TeamRun } from "./types"
 
-export function RunBudget({ run }: { run: TeamRun }) {
+export function RunBudget({ run, expanded = false }: { run: TeamRun; expanded?: boolean }) {
   const [limits, setLimits] = useState<RunLimits>(run.team.limits ?? {})
   const [saving, setSaving] = useState(false)
   const change = (key: keyof RunLimits, value: string) => setLimits((v) => ({ ...v, [key]: value === "" ? null : Number(value) }))
-  return <details className="team-card"><summary>Ajustar límites de esta ejecución</summary>
+  return <details className="team-card" open={expanded || undefined}><summary>Ajustar límites de esta ejecución</summary>
     <p className="team-note">Se conserva el uso acumulado y se registra el ajuste en el historial. La duración cuenta desde el inicio original. Dejá vacío para quitar un límite.</p>
     <div className="team-form-grid">
       <label>Duración máxima (minutos)<input type="number" min={1} max={1440} value={limits.maxRunMinutes ?? ""} onChange={(e) => change("maxRunMinutes", e.target.value)} /></label>

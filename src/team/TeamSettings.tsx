@@ -16,11 +16,16 @@ function ModelDetails({ agent }: { agent: Employee }) {
   </dl>
 }
 
-export function TeamSettings({ team, run, chatId, pending }: { team: Team; run?: TeamRun; chatId: string; pending: boolean }) {
+export function TeamSettings({ team, run, chatId, pending, memory, approve }: { team: Team; run?: TeamRun; chatId: string; pending: boolean; memory: boolean; approve: boolean }) {
   const models = useAgent(s => s.models)
   const roster = run?.team ?? team
   return <section className="team-settings">
     <h3>Configuración del equipo</h3>
+    <section className="team-card"><h4>Preferencias de este chat</h4>
+      <label className="team-board-density"><input type="checkbox" disabled={pending} checked={approve} onChange={e => void teamCall("team_chats_settings", { chatId, memory, autoApprove: e.target.checked })} /> Permitir que el equipo actúe sin pedirme permiso</label>
+      <label className="team-board-density"><input type="checkbox" disabled={pending} checked={memory} onChange={e => void teamCall("team_chats_settings", { chatId, memory: e.target.checked, autoApprove: approve })} /> Recordar este proyecto y este chat</label>
+      <p className="team-note">Con la aprobación automática el equipo no te interrumpe por permisos; solo por decisiones que no puede tomar. La memoria se inyecta y se guarda desde este chat.</p>
+    </section>
     <section className="team-card"><h4>Plan Vivo V2 · experimental</h4>
       <p className="team-note">Se aplica a los próximos objetivos. Cada ejecución conserva su planificador original. Desactivado inicialmente.</p>
       <label className="team-board-density"><input type="checkbox" disabled={pending} checked={team.planV2?.enabled ?? false} onChange={e => void teamCall("team_chats_planner", { chatId, config: { ...team.planV2, enabled: e.target.checked, reviewBeforeStart: team.planV2?.reviewBeforeStart ?? false } })} /> Activar Plan Vivo V2</label>

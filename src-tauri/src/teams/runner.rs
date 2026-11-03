@@ -1588,6 +1588,72 @@ pub fn launch(app: &AppHandle, id: &str) {
     });
 }
 
+// A deadlock between a waiting task and a ready task can happen when the
+// waiting task still holds its write reservation. Do not escalate that
+// technical problem to the user: reopen the Lead/Solver coordination and let
+// them change strategy. The bounded attempts keep a real impossibility from
+// looping forever.
+fn recover_deadlock(app: &AppHandle, id: &str, r: &Run) -> Result<bool, String> {
+    let reason = "El equipo no puede avanzar: una tarea lista está bloqueada por una espera o por la reserva de otra tarea. Revisá la estrategia y separá la corrección de la verificación sin repetir trabajo.";
+    let existing = r.coordination.iter()
+        .filter(|c| !["resolved", "cancelled", "blocked"].contains(&c.status.as_str()))
+        .max_by_key(|c| c.created_at);
+    if let Some(request) = existing {
+        let attempts = r.configuration_changes.iter().filter(|change|
+            change["kind"] == "automaticDeadlockRecovery" && change["requestId"] == request.id).count();
+        if attempts >= 2 { return Ok(false); }
+        let request_id = request.id.clone();
+        update_run(app, id, |r| {
+            let request = r.coordination.iter_mut().find(|c| c.id == request_id)
+                .ok_or("Pedido de coordinación inexistente")?;
+            request.status = "pending".into();
+            request.kind = "technical_blocker".into();
+            request.summary = "El Lead está revisando por qué las tareas no pueden avanzar. El trabajo ya hecho se conserva.".into();
+            request.replies.push(json!({"at":now(),"status":"deadlock_requested","summary":request.summary,"reason":reason,"taskIds":request.task_ids}));
+            r.error = None;
+            for task in &mut r.tasks {
+                if task.status == "waiting_dependency" { task.error = None; }
+            }
+            r.configuration_changes.push(json!({"kind":"automaticDeadlockRecovery","at":now(),"requestId":request.id,"attempt":attempts+1,"reason":reason}));
+            Ok(())
+        })?;
+        return Ok(true);
+    }
+    let Some(task) = r.tasks.iter().find(|task|
+        ["waiting_dependency", "blocked"].contains(&task.status.as_str())
+            && !task.error.as_deref().is_some_and(super::autonomy::requires_user)) else {
+        return Ok(false);
+    };
+    let attempts = r.configuration_changes.iter().filter(|change|
+        change["kind"] == "automaticDeadlockRecovery" && change["taskId"] == task.id).count();
+    if attempts >= 2 { return Ok(false); }
+    let task_id = task.id.clone();
+    update_run(app, id, |r| {
+        let task = r.tasks.iter_mut().find(|t| t.id == task_id).ok_or("Tarea inexistente")?;
+        task.status = "waiting_dependency".into();
+        task.error = None;
+        let request_id = super::domain::id();
+        r.coordination.push(Coordination {
+            kind: "technical_blocker".into(),
+            attempt_id: task.attempts.last().map(|attempt| attempt.id.clone()),
+            cycle_task_ids: vec![],
+            id: request_id.clone(),
+            from_task_id: task.id.clone(),
+            message: reason.into(),
+            task_ids: vec![],
+            status: "pending".into(),
+            summary: "El Lead está revisando por qué las tareas no pueden avanzar. El trabajo ya hecho se conserva.".into(),
+            created_at: now(),
+            sessions: vec![],
+            replies: vec![],
+        });
+        r.error = None;
+        r.configuration_changes.push(json!({"kind":"automaticDeadlockRecovery","at":now(),"requestId":request_id,"taskId":task.id,"attempt":attempts+1,"reason":reason}));
+        Ok(())
+    })?;
+    Ok(true)
+}
+
 fn schedule(app: &AppHandle, id: &str) -> Result<(), String> {
     if run(app, id)?.tasks.is_empty() {
         plan(app, id)?;
@@ -1809,6 +1875,10 @@ fn schedule(app: &AppHandle, id: &str) -> Result<(), String> {
         }
         let dispatch = ready_tasks(&r, &workers.keys().cloned().collect())?;
         if dispatch.is_empty() && workers.is_empty() && coordinator.is_none() {
+            if recover_deadlock(app, id, &r)? {
+                std::thread::sleep(Duration::from_millis(500));
+                continue;
+            }
             return Err(r.tasks.iter().filter(|t| t.status == "blocked").find_map(|t| t.error.clone())
                 .unwrap_or("No hay tareas que puedan avanzar. El Lead debe revisar las dependencias pendientes".into()));
         }

@@ -20,7 +20,7 @@ export type TeamComposerHandle = { write: (text: string) => void }
 
 const CONNECT_CHATGPT = "__connect_chatgpt__"
 
-export function TeamComposer({ ref, chat, label, pending, onSent, onBrowser }: { ref?: Ref<TeamComposerHandle>; chat: TeamChatRecord; label: string; pending: boolean; onSent: () => void; onBrowser: () => void }) {
+export function TeamComposer({ ref, chat, label, pending, onSent, onBrowser }: { ref?: Ref<TeamComposerHandle>; chat: TeamChatRecord; label: string; pending: boolean; onSent: () => void; onBrowser?: () => void }) {
   const chatId = chat.id
   const [text, setText] = useState("")
   const [images, setImages] = useState<TeamImageInput[]>([])
@@ -45,8 +45,6 @@ export function TeamComposer({ ref, chat, label, pending, onSent, onBrowser }: {
   const lead = chat.team.members.find((member) => member.id === chat.team.leadAgentId)
   const leadModel = lead ? models.find((model) => modelKey(model) === modelKey(lead.model)) : undefined
   const leadModelName = leadModel?.name ?? lead?.model.modelID ?? "Conectá un proveedor"
-  const memoryOn = chat.memory !== false
-  const approveOn = chat.autoApprove === true
   useImperativeHandle(ref, () => ({ write(value) { setText(value); textarea.current?.focus() } }))
   const locked = sending || loading
   const addImages = async (files: File[]) => {
@@ -126,19 +124,12 @@ export function TeamComposer({ ref, chat, label, pending, onSent, onBrowser }: {
     const [providerID, ...rest] = item.id.split("/")
     await teamCall("team_chats_model", { chatId, agentId: lead.id, model: { providerID, modelID: rest.join("/") }, variant: null })
   }
-  const saveSettings = (next: { memory?: boolean; autoApprove?: boolean }) => {
-    void teamCall("team_chats_settings", {
-      chatId,
-      memory: next.memory ?? memoryOn,
-      autoApprove: next.autoApprove ?? approveOn,
-    })
-  }
   return <form className="team-composer" onSubmit={e => { e.preventDefault(); void submit() }}
     onDragOver={e => { if (e.dataTransfer.types.includes("Files")) e.preventDefault() }}
     onDrop={e => { if (e.dataTransfer.files.length) { e.preventDefault(); void addImages(Array.from(e.dataTransfer.files)) } }}>
     <div className="team-composer-heading"><label htmlFor={`team-goal-${chatId}`}>{label}</label>{pending && <button className="btn btn-xs" type="button" aria-label="Detener pedido del Lead" title="Detener pedido del Lead" onClick={() => void teamCall("team_chat_cancel", { chatId })}>Detener</button>}</div>
     {images.length > 0 && <div className="team-chat-images team-image-drafts">{images.map((image, i) => <figure key={i}><button type="button" onClick={() => openImage(image.url, image.filename)} title={`Ampliar ${image.filename}`}><img src={image.url} alt={image.filename} /></button><figcaption>{image.filename}</figcaption><button type="button" className="btn btn-xs" disabled={locked} aria-label={`Quitar ${image.filename}`} onClick={() => setImages(previous => previous.filter((_, index) => index !== i))}><Icon name="close" /></button></figure>)}</div>}
-    <textarea ref={textarea} id={`team-goal-${chatId}`} rows={3} value={text} onChange={e => setText(e.target.value)} placeholder={pending ? "Podés preguntar quién está bloqueado o qué falló mientras el Lead trabaja…" : "Hablá con el Lead: pedí un cambio o preguntá qué falló…"}
+    <textarea ref={textarea} id={`team-goal-${chatId}`} rows={3} value={text} onChange={e => setText(e.target.value)} placeholder={pending ? "Escribile al Lead: si hay trabajo en curso, lo ajusta…" : "Hablá con el Lead: pedí un cambio o preguntá qué falló…"}
       onPaste={e => { const files = Array.from(e.clipboardData.items).filter(item => item.type.startsWith("image/")).map(item => item.getAsFile()).filter((file): file is File => !!file); if (files.length) { e.preventDefault(); void addImages(files) } }}
       onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void submit() } }} />
     <input ref={fileInput} type="file" accept={IMAGE_TYPES} multiple hidden aria-label="Imágenes para el equipo" onChange={e => { if (e.target.files) void addImages(Array.from(e.target.files)); e.target.value = "" }} />
@@ -149,23 +140,11 @@ export function TeamComposer({ ref, chat, label, pending, onSent, onBrowser }: {
         <span className="composer-pill-text">{leadModelName}</span>
         <Icon name="chevron-down" />
       </button>
-      <button type="button" className={`composer-pill approval-pill${approveOn ? " on" : ""}`}
-        title={approveOn ? "Aprobación automática ACTIVADA en este chat: el equipo no te pide permiso. Clic para que vuelva a pedirlo." : "El equipo te pide permiso en este chat. Clic para que apruebe solo (no te interrumpe)."}
-        onClick={() => saveSettings({ autoApprove: !approveOn })}>
-        <Icon name={approveOn ? "pass-filled" : "shield"} />
-        <span>{approveOn ? "Aprueba solo" : "Pide permiso"}</span>
-      </button>
-      <button type="button" className={`composer-pill memory-pill${memoryOn ? " on" : ""}`}
-        title={memoryOn ? "Memoria activada: el equipo recuerda el proyecto y este chat. Clic para apagarla." : "Memoria apagada: en este chat no se inyecta ni se guarda memoria."}
-        onClick={() => saveSettings({ memory: !memoryOn })}>
-        <Icon name="library" />
-        <span>{memoryOn ? "Memoria" : "Sin memoria"}</span>
-      </button>
     </div>
     {voiceSetup && <VoiceSetup onClose={() => setVoiceSetup(false)} onRecord={recorder.start} />}
     <div className="team-composer-actions">
       <div className="team-composer-tools">
-        <button className="btn btn-sm" type="button" onClick={onBrowser}><Icon name="globe" /> Navegador</button>
+        {onBrowser && <button className="btn btn-sm" type="button" onClick={onBrowser}><Icon name="browser" /> Navegador</button>}
         <button className="btn btn-sm" type="button" disabled={locked} onClick={() => fileInput.current?.click()}><Icon name="file-media" /> {loading ? "Cargando imágenes…" : "Adjuntar imagen"}</button>
       </div>
       <div className="team-composer-send">

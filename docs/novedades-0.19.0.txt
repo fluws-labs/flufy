@@ -1,0 +1,7 @@
+Flufy 0.19.0 rediseña Equipos IA para que se sienta como una conversación y no como un panel técnico.
+
+Ahora podés pasar un trabajo del chat normal a un equipo y seguir hablando con el Lead en el mismo lugar. El chat muestra el avance, las respuestas breves del Lead y la entrega para revisar, con la evidencia y la guía de revisión a mano. El tablero se llama Tablero, marca qué sigue y ofrece Continuar cuando hay tareas listas sin sesiones activas, además de Reanudar, Pausar nuevas tareas y Revisar entrega.
+
+Los problemas técnicos dejan de pedirte intervención: si una tarea queda esperando o el equipo se traba, el Lead revisa la estrategia y continúa sin repetir trabajo. Los límites de sesión y los bloqueos internos se resuelven entre agentes; solo las decisiones que realmente necesitan tu criterio aparecen como tuyas. Desde el celular también podés ver el tablero, pausar, reanudar y continuar el trabajo.
+
+Esta versión mantiene OpenCode 1.19.5. Si actualizás desde 0.18.0, tus chats, equipos, evidencias y configuraciones se conservan.

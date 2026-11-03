@@ -1,9 +1,12 @@
 import type { TeamChatRecord, TeamRun } from "./types.ts"
 import { readableTeamError } from "../lib/provider-error.ts"
 import { taskProblem } from "./problem.ts"
+import { recoveredAutomatically } from "./ownership.ts"
 
 export type WaitingRequest = { sessionID: string; kind: "permission" | "question"; detail?: string }
 export type TeamAttention = { id: string; agentId: string | null; name: string; task: string; kind: "blocked" | "waiting" | "permission" | "question"; reason: string; sessionId: string | null; directory: string }
+
+const deadlock = (text?: string | null) => /no hay tareas que puedan avanzar|dependencias pendientes|esperando unas a otras|reserva de otra tarea/i.test(text ?? "")
 
 export function teamAttention(chat: TeamChatRecord, run: TeamRun | undefined, requests: WaitingRequest[] = []): TeamAttention[] {
   const items: TeamAttention[] = []
@@ -28,16 +31,20 @@ export function teamAttention(chat: TeamChatRecord, run: TeamRun | undefined, re
       const coordination = run.coordination?.findLast(c => c.fromTaskId === task.id && !["resolved", "cancelled"].includes(c.status))
       for (const session of coordination?.sessions ?? []) addSession(session, lead, `Ayudar a ${name}`, task.repository)
       if (coordination && (coordination.status === "blocked" || coordination.status === "checking" && ["blocked", "failed", "planning_blocked"].includes(run.status))) {
-        items.push({ id: `coordination-${coordination.id}`, agentId: leadId, name: lead, task: `Destrabar a ${name} · ${task.title}`, kind: "blocked",
-          reason: readableTeamError(coordination.summary || run.error || "El Lead no pudo terminar de revisar el pedido de este integrante."),
+        const internal = deadlock(coordination.summary || run.error)
+        items.push({ id: `coordination-${coordination.id}`, agentId: leadId, name: lead, task: internal ? `Revisar ${task.title}` : `Destrabar a ${name} · ${task.title}`, kind: internal ? "waiting" : "blocked",
+          reason: internal ? `El Lead está revisando la estrategia. ${readableTeamError(coordination.summary || run.error || "")}` : readableTeamError(coordination.summary || run.error || "El Lead no pudo terminar de revisar el pedido de este integrante."),
           sessionId: coordination.sessions.at(-1) ?? null, directory: task.repository })
         items.push({ id: task.id, agentId: task.assignedAgentId, name, task: task.title, kind: "waiting",
           reason: `Espera instrucciones del Lead. El problema está en la coordinación; su trabajo ya guardado se conserva.`, sessionId: attempt?.sessionId ?? null, directory: task.repository })
       } else if (["blocked", "failed", "review_error", "interrupted"].includes(task.status)) {
         const reviewReport=run.supportReports?.find(s=>s.sessionId===attempt?.reviewSessionId)
         const reviewFailed = attempt?.review?.status === "review_error" || !!reviewReport && ["failed","uncertain"].includes(reviewReport.status)
-        items.push({ id: task.id, agentId: reviewFailed ? reviewReport?.agent.id ?? leadId : task.assignedAgentId, name: reviewFailed ? reviewReport?.agent.name ?? lead : name, task: task.title, kind: "blocked",
-          reason: task.error || attempt?.error || attempt?.review ? taskProblem(task) : "No quedó registrada la causa. Revisá su último paso en Actividad para poder ayudarlo.",
+        const reason = task.error || attempt?.error || attempt?.review ? taskProblem(task) : "No quedó registrada la causa. Revisá su último paso en Actividad para poder ayudarlo."
+        const internalDeadlock = deadlock(reason)
+        const recovering = (run.status === "running" && !reviewFailed && recoveredAutomatically(reason)) || internalDeadlock
+        items.push({ id: task.id, agentId: reviewFailed ? reviewReport?.agent.id ?? leadId : task.assignedAgentId, name: reviewFailed ? reviewReport?.agent.name ?? lead : name, task: task.title, kind: recovering ? "waiting" : "blocked",
+          reason: recovering ? `${internalDeadlock ? "El Lead está revisando la estrategia." : "El Lead lo está resolviendo."} ${reason}` : reason,
           sessionId: (reviewFailed ? attempt?.reviewSessionId : attempt?.sessionId) ?? null, directory: task.repository })
       } else if (task.status === "waiting_dependency") {
         const dependencies = (coordination?.taskIds ?? []).map(id => run.tasks.find(t => t.id === id)).filter(t => t && t.status !== "completed")
@@ -47,7 +54,7 @@ export function teamAttention(chat: TeamChatRecord, run: TeamRun | undefined, re
           sessionId: attempt?.sessionId ?? null, directory: task.repository })
       }
     }
-    if (!items.some(i => i.kind === "blocked") && ["blocked", "failed", "planning_blocked"].includes(run.status)) {
+    if (!items.some(i => i.kind === "blocked") && ["blocked", "failed", "planning_blocked"].includes(run.status) && !deadlock(run.error)) {
       const coordinationSession = run.coordination?.findLast(c => ["blocked", "checking"].includes(c.status))?.sessions.at(-1)
       const support=run.supportReports?.at(-1)
       const failedSupport=support && ["failed","uncertain"].includes(support.status) ? support : undefined
@@ -89,7 +96,7 @@ export function teamAttention(chat: TeamChatRecord, run: TeamRun | undefined, re
 }
 
 export function attentionLabel(items: TeamAttention[]): string {
-  const blocked = items.filter(i => i.kind !== "waiting").length
-  const waiting = items.length - blocked
-  return [blocked ? `${blocked} ${blocked === 1 ? "bloqueo" : "bloqueos"}` : "", waiting ? `${waiting} en espera` : ""].filter(Boolean).join(" · ")
+  const decisions = items.filter(i => i.kind !== "waiting").length
+  const waiting = items.length - decisions
+  return [decisions ? `${decisions} ${decisions === 1 ? "decisión tuya" : "decisiones tuyas"}` : "", waiting ? `${waiting} en espera` : ""].filter(Boolean).join(" · ")
 }

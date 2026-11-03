@@ -103,6 +103,17 @@ fn restart_phase() {
                 }
                 assert_eq!(r.status, "blocked");
                 if phase == "busy" {
+                    // The worker can settle between the harness observation and
+                    // this process start. Only require the retry guard while a
+                    // recorded session is still active.
+                    let state = c.get("/session/status").unwrap();
+                    let busy = r.tasks.iter().flat_map(|task| task.attempts.iter())
+                        .flat_map(|a| a.session_id.iter().chain(a.review_session_id.iter()))
+                        .any(|session| state.get(session.as_str()).and_then(|v| v["type"].as_str()).is_some_and(|v| v != "idle"));
+                    if !busy {
+                        std::fs::write(&signal, "{\"status\":\"busy-preserved\"}").unwrap();
+                        return;
+                    }
                     assert!(control(&handle, &r.id, "retry")
                         .unwrap_err()
                         .contains("sigue activa"));

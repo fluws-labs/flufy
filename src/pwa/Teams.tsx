@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react"
-import { TeamBoard, type BoardPatch } from "../team/TeamBoard"
+import { TeamBoard } from "../team/TeamBoard"
 import type { TeamRun } from "../team/types"
 import { AuthError, hub } from "./api"
 import type { Route } from "./Home"
@@ -90,7 +90,6 @@ export function TeamsScreen({ route, back, open }: { route: Extract<Route, { kin
     } finally { if (generation === epoch.current) setBusy(false) }
   }
   const control = async (action: string) => { await mutate("control", { runId: run!.id, action }) }
-  const patch = (patch: BoardPatch) => mutate("patch", { patch })
   const act = (action: string) => { void control(action).catch(() => {}) }
   const showEvidence = async (path: string) => {
     const id = ++evidenceRequest.current
@@ -110,13 +109,16 @@ export function TeamsScreen({ route, back, open }: { route: Extract<Route, { kin
       <h2>{run.goal}</h2><p className="muted">{run.status} · Secuencia {run.planV2?.sequence ?? 0}{archived ? " · Solo lectura" : ""}</p>
       <div className="row team-controls">
         {run.status === "running" && <button className="btn" disabled={readOnly} onClick={() => act("pause")}>Pausar</button>}
+        {run.status === "running" && !run.tasks.some(t => ["running", "verifying"].includes(t.status)
+          || t.attempts.some(a => a.finishedAt == null && (a.sessionId || a.reviewSessionId)))
+          && run.tasks.some(t => t.status === "pending") && <button className="btn primary" disabled={readOnly} onClick={() => act("continue")}>Continuar</button>}
         {run.status === "paused" && <button className="btn" disabled={readOnly} onClick={() => act("resume")}>Reanudar</button>}
         {run.status === "plan_ready" && <button className="btn primary" disabled={readOnly} onClick={() => act("start_plan")}>Iniciar plan validado</button>}
         {["blocked", "failed"].includes(run.status) && <button className="btn" disabled={readOnly} onClick={() => act("retry")}>Reintentar</button>}
         {["completed", "awaiting_manual_qa"].includes(run.status) && <button className="btn primary" disabled={readOnly} onClick={() => act("approve")}>Aprobar entrega</button>}
         {["planning", "plan_ready", "planning_blocked", "running", "paused", "blocked"].includes(run.status) && <button className="btn" disabled={readOnly} onClick={() => { if (window.confirm("¿Cancelar esta ejecución?")) act("cancel") }}>Cancelar ejecución</button>}
       </div>
-      <TeamBoard key={run.id} run={run} readOnly={readOnly} onPatch={patch} onRetry={() => control("retry")} onEvidence={() => setEvidenceOpen(true)} onSession={(id, project) => open({ kind: "session", id, project, title: "Sesión del equipo" })} />
+      <TeamBoard key={run.id} run={run} readOnly={readOnly} onRetry={() => control("retry")} onEvidence={() => setEvidenceOpen(true)} onSession={(id, project) => open({ kind: "session", id, project, title: "Sesión del equipo" })} />
       <form className="team-lead-message" onSubmit={e => { e.preventDefault(); if (!message.trim()) return; void mutate("message", { text: message }).then(() => setMessage("")).catch(() => {}) }}><label>Escribir al Lead<textarea value={message} maxLength={20000} onChange={e => setMessage(e.target.value)} disabled={readOnly} placeholder="Aclaraciones o cambios del objetivo" /></label><button className="btn primary" disabled={readOnly || !message.trim()}>Enviar al Lead</button></form>
       {evidenceOpen && <Sheet title="Evidencias del equipo" onClose={() => { evidenceRequest.current++; setEvidenceOpen(false); setEvidence(null); setEvidencePath("") }}>
         <p className="muted">Archivos registrados por el motor. Las capturas se verifican por hash antes de mostrarse.</p>

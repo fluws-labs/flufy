@@ -7,7 +7,7 @@ import "./delivery-review.css"
 type LivePage = { label: string; actor: string; url: string }
 
 export function DeliveryReview({ run, chatId, onOpenPage, onSession, onPrepare }: {
-  run: TeamRun; chatId: string; onOpenPage: (label: string) => void; onSession: (id: string, directory: string) => void; onPrepare: (flow: DeliveryFlow) => Promise<void>
+  run: TeamRun; chatId: string; onOpenPage: (label: string, title: string) => void; onSession: (id: string, directory: string) => void; onPrepare: (flow: DeliveryFlow) => Promise<void>
 }) {
   const [opening, setOpening] = useState<string | null>(null)
   const [preparing, setPreparing] = useState<string | null>(null)
@@ -26,12 +26,12 @@ export function DeliveryReview({ run, chatId, onOpenPage, onSession, onPrepare }
       const pages = await call<LivePage[]>("browser_internal_pages", { session: `team:${chatId}` })
       const matching = pages.filter(page => page.actor === attempt?.sessionId && page.url === flow.url)
       if (matching.length !== 1) throw new Error("El escenario ya no está disponible en su página original. Revisá la preparación guardada o pedile al equipo que lo prepare de nuevo. Abrir solo la URL no reconstruye los datos ni el estado.")
-      onOpenPage(matching[0].label)
+      onOpenPage(matching[0].label, flow.title)
     } catch (error) { setProblem({ title: flow.title, text: errorMessage(error) }) }
     finally { setOpening(null) }
   }
   return <section className="delivery-review" aria-label="Guía de revisión de la entrega">
-    <header className="delivery-review-heading"><Icon name="checklist" /><div><h3>Tu revisión, desde el cambio</h3><p>{report.summary}</p></div></header>
+    <header className="delivery-review-heading"><Icon name="checklist" /><div><h3>Qué cambió y qué revisar</h3><p>{report.summary}</p></div></header>
     {!report.uiRequired && <p className="team-note">{report.reason}</p>}
     <div className="delivery-review-flows">{report.flows.map((flow, index) => {
       const { task, attempt } = source(flow)

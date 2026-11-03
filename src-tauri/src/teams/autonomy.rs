@@ -6,6 +6,8 @@ const MAX_TOTAL_HELP_REQUESTS: usize = 9;
 
 // Technical diagnosis belongs to the Lead. Authorization, account access and
 // user controls are never resolved by silently granting or bypassing them.
+// A session that reached its own time limit is not a user decision: the work is
+// preserved and the Lead can resume it with a known message boundary.
 pub(super) fn requires_user(reason: &str) -> bool {
     let text = reason.to_lowercase();
     [
@@ -43,7 +45,6 @@ pub(super) fn requires_user(reason: &str) -> bool {
         "fuera de la carpeta autorizada",
         "carpeta no autorizada",
         "presupuesto de la ejecución",
-        "límite de 45 minutos",
         "cancelación",
         "cancelado",
         "blocked by policy",
@@ -193,6 +194,16 @@ mod tests {
         assert!(!request_help(&mut r, "back", None));
         r.status = "cancelling".into();
         assert!(!request_help(&mut r, "back", Some(vec!["old".into()])));
+    }
+    #[test]
+    fn a_session_time_limit_is_resumed_by_the_lead() {
+        let mut r = fixture();
+        r.tasks[0].error = Some("Se alcanzó el límite de 45 minutos por sesión".into());
+        r.tasks[0].status = "blocked".into();
+        assert!(!requires_user(r.tasks[0].error.as_deref().unwrap()));
+        assert!(request_help(&mut r, "back", Some(vec!["old".into()])));
+        assert_eq!(r.tasks[0].status, "waiting_dependency");
+        assert_eq!(r.coordination[0].kind, "technical_blocker");
     }
     #[test]
     fn assistance_is_bounded_across_restart_and_human_decisions_stay_visible() {

@@ -719,6 +719,18 @@ fn control(app: &AppHandle, id: &str, action: &str) -> Result<(), String> {
                 .into();
                 Ok(())
             })?;
+            // If the scheduler exited while paused, restarting it is safe and
+            // idempotent; ready tasks can continue without replaying prompts.
+            runner::launch(app, id);
+        }
+        "continue" if r.status == "running" => {
+            // A run can remain "running" after its scheduler thread stopped
+            // (restart, pause/resume race or a dead worker). Reconcile any
+            // uncertain session before relaunching; never replay blindly.
+            if runner::unsettled(&r) {
+                runner::reconcile(app, &r, false)?;
+            }
+            runner::launch(app, id);
         }
         "start_plan" if r.status == "plan_ready" => {
             if plan_v2::discover(&r)?.iter().zip(&r.plan_v2.discovery).any(|(a,b)| a.digest != b.digest) {

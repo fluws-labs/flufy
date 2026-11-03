@@ -155,6 +155,7 @@ pub fn request(
             if ![
                 "pause",
                 "resume",
+                "continue",
                 "cancel",
                 "retry",
                 "start_plan",

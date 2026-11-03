@@ -5,7 +5,7 @@ type MemberState = { label: string; detail: string; needsHelp: boolean; tone: "i
 const state = (label: string, detail: string, tone: MemberState["tone"] = "idle", needsHelp = false): MemberState => ({ label, detail, tone, needsHelp })
 
 export function leadRecovery(run: TeamRun | undefined) {
-  return run?.status === "running" ? run.coordination?.find(c => ["pending", "checking"].includes(c.status)
+  return run && ["running", "blocked"].includes(run.status) ? run.coordination?.find(c => ["pending", "checking", "blocked"].includes(c.status)
     && (c.kind === "technical_blocker" || c.replies?.some(reply => reply.status === "recovery_requested"))) : undefined
 }
 

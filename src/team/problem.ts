@@ -14,6 +14,12 @@ export function taskProblem(task: TeamTask): string {
   return "La tarea todavía no tiene una revisión aprobada."
 }
 
+export function shortProblem(text: string, limit = 160): string {
+  const flat = text.replace(/\s+/g, " ").trim()
+  const sentence = flat.match(/^.*?[.!?](?:\s|$)/)?.[0]?.trim() ?? flat
+  return sentence.length <= limit ? sentence : `${sentence.slice(0, limit - 1).replace(/\s+\S*$/, "")}…`
+}
+
 export function runProblem(run: TeamRun): string {
   const coordination = run.coordination?.findLast(c => c.status === "blocked" || c.status === "checking" && ["blocked", "failed"].includes(run.status))
   if (coordination) {

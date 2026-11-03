@@ -43,6 +43,29 @@ export function boardColumn(run: TeamRun, task: TeamTask): BoardColumn {
   return "reconciling"
 }
 
+export function taskChecks(task: TeamTask): { ok: number; total: number } | null {
+  const attempt = task.attempts.at(-1)
+  const planned = task.verificationPlan ?? []
+  const declared = attempt?.declaredChecks ?? []
+  const total = planned.length || declared.length
+  if (!total) return null
+  const ok = planned.length
+    ? planned.filter(step => step.kind === "command"
+      ? !!attempt?.commands.some(c => c.command === step.command && c.exitCode === 0)
+      : !!attempt?.observations?.length).length
+    : declared.filter(check => attempt?.commands.some(c => c.command === check && c.exitCode === 0)).length
+  return { ok, total }
+}
+
+export function nextTaskIds(run: TeamRun, limit = 3): string[] {
+  const pending = run.tasks.filter(task => task.status === "pending" && task.taskKind !== "group")
+  const ready = pending.filter(task => task.dependencies.every(id => {
+    const dependency = run.tasks.find(t => t.id === id)
+    return !!dependency && (dependency.taskKind === "group" ? dependency.status === "completed" : taskVerified(dependency))
+  }))
+  return (ready.length ? ready : pending).slice(0, limit).map(task => task.id)
+}
+
 export function movableTask(run: TeamRun, task: TeamTask): boolean {
   return !!run.planV2?.enabled && !!run.planV2.revisionNumber && ["running", "paused", "blocked", "plan_ready"].includes(run.status)
     && task.status === "pending" && task.attempts.length === 0 && task.taskKind !== "group"
