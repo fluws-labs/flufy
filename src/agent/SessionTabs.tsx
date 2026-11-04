@@ -81,7 +81,6 @@ export function SessionTabs() {
   const root = useProject((s) => s.root)
   const teamChats = teamState.chats.filter((c) => teamState.openChatIds.includes(c.id) && root && samePath(c.team.projectRoot, root))
   const open = useAgent((s) => s.openSessionIds)
-  const sessions = useAgent((s) => s.sessions)
   const allSessions = useAgent((s) => s.allSessions)
   const activeId = useAgent((s) => s.activeSessionId)
   const statuses = useAgent((s) => s.statuses)
@@ -108,7 +107,7 @@ export function SessionTabs() {
     >
       {open.map((id) => {
         const draft = id === DRAFT_TAB
-        const session = draft ? null : sessions.find((x) => x.id === id) ?? null
+        const session = draft ? null : allSessions.find((x) => x.id === id) ?? null
         const active = !teamState.activeChatId && (draft ? activeId === null : activeId === id)
         const mark = draft ? "idle" : sessionMark({ allSessions, permissions, questions, statuses }, unseen, id, approvals)
         const title = draft ? "Nueva conversación" : session?.title || "Sin título"

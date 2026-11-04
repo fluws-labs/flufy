@@ -10,7 +10,7 @@ import {
 } from "../state/project"
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react"
 import { createPortal } from "react-dom"
-import { useAgent, sessionStatus, toggleFavoriteModel } from "../state/agent"
+import { useAgent, sessionInProject, sessionStatus, toggleFavoriteModel } from "../state/agent"
 import { useAttention, testAlert, silenceSound, focusPending } from "../state/attention"
 import { useUnseen } from "../state/unseen"
 import {
@@ -75,7 +75,7 @@ export function ActivityBar() {
   const changes = useGit((s) => s.repos.reduce((n, r) => n + (s.byRepo[r]?.status?.entries.length ?? 0), 0))
   const busy = useAgent((s) => Object.values(s.statuses).filter((x) => x.type === "busy").length)
   const attention = useAttention((s) => s.count)
-  const sessions = useAgent((s) => s.sessions)
+  const sessions = useAgent((s) => s.allSessions).filter(sessionInProject)
   const unseenIds = useUnseen((s) => s.ids)
   const unseen = sessions.filter((s) => !s.parentID && s.id in unseenIds).length
   return (

@@ -91,7 +91,7 @@ function tabIcon(input: EditorInput) {
 
 function useTabTitle(input: EditorInput): string {
   const sessionTitle = useAgent((s) =>
-    input.kind === "chat" || input.kind === "review" ? s.sessions.find((x) => x.id === input.sessionId)?.title : undefined,
+    input.kind === "chat" || input.kind === "review" ? s.allSessions.find((x) => x.id === input.sessionId)?.title : undefined,
   )
   const routineName = useRoutines((s) => (input.kind === "routine" ? s.items.find((r) => r.id === input.id)?.name : undefined))
   const teamName = useTeams((s) => input.kind === "team" ? s.teams.find((t) => t.id === input.id)?.name : undefined)

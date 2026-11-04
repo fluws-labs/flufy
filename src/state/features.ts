@@ -245,7 +245,11 @@ const refreshProject = coalescedByKey(async (project) => {
     const list = await featuresList(project)
     if (!samePath(project, useProject.getState().project ?? "")) return
     useFeatures.setState({ list, loading: false, error: null })
-    setKnownDirectories(list.features.filter((f) => !f.missing).map((f) => f.root))
+    const projectRoot = useProject.getState().project
+    setKnownDirectories([
+      ...list.features.filter((f) => !f.missing).map((f) => f.root),
+      ...(projectRoot ? [projectRoot] : []),
+    ])
     restoreWorkspace(list)
     void loadOtherSessions()
     keepActiveRootValid(list)

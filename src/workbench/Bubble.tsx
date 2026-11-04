@@ -130,7 +130,7 @@ function bootBubble(sessionId: string): void {
 }
 
 function BubbleHead({ sessionId, origin }: { sessionId: string; origin: string }) {
-  const session = useAgent((s) => s.sessions.find((x) => x.id === sessionId) ?? null)
+  const session = useAgent((s) => s.allSessions.find((x) => x.id === sessionId) ?? null)
   const waiting = useAgent((s) => sessionWaiting(s, sessionId))
   return (
     <header className="bubble-head" data-tauri-drag-region>

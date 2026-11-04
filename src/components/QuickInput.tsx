@@ -9,7 +9,7 @@ import {
 import { useProject } from "../state/project"
 import { getFileIndex, useFileIndex } from "../state/fileIndex"
 import { useEditors, openFile } from "../state/editors"
-import { selectSession, useAgent } from "../state/agent"
+import { selectSession, sessionInProject, useAgent } from "../state/agent"
 import { useLayout } from "../state/layout"
 import { allCommands, executeCommand, formatKeys, recentCommandIds } from "../commands/registry"
 import { rankFuzzy, type FuzzyMatch } from "../lib/fuzzy"
@@ -66,7 +66,8 @@ export function QuickInput() {
   const root = useProject((s) => s.root)
   const files = useFileIndex((s) => s.files)
   const indexLoading = useFileIndex((s) => s.loading)
-  const sessions = useAgent((s) => s.sessions)
+  const allSessions = useAgent((s) => s.allSessions)
+  const sessions = useMemo(() => allSessions.filter(sessionInProject), [allSessions])
   const favoriteModels = useAgent((s) => s.favoriteModels)
   const recentFiles = useRecentFiles(root)
   const [selected, setSelected] = useState(0)

@@ -1,0 +1,5 @@
+Flufy 0.19.1 corrige el historial cuando trabajás en un worktree separado.
+
+Ahora el historial muestra siempre todas las conversaciones del proyecto, sin importar si estás en la copia principal o en un trabajo aparte. Lo mismo aplica a las sesiones recientes del panel, al buscador de sesiones con #, a la pantalla de inicio y al indicador de conversaciones sin ver. Cada conversación de otro worktree indica su carpeta, y al abrirla Flufy cambia a ese espacio de trabajo como ya lo hacía.
+
+Esta versión mantiene OpenCode 1.19.5. Si actualizás desde 0.19.0, tus chats, equipos, evidencias y configuraciones se conservan.

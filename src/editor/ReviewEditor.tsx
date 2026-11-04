@@ -286,8 +286,9 @@ function ReviewFile({ file, onReviewed, reviewed }: { file: FileReview; onReview
 }
 
 export function ReviewEditor({ sessionId }: { sessionId: string }) {
-  const root = useProject((s) => s.root)
-  const session = useAgent((s) => s.sessions.find((x) => x.id === sessionId))
+  const projectRoot = useProject((s) => s.root)
+  const session = useAgent((s) => s.allSessions.find((x) => x.id === sessionId))
+  const root = session?.directory ?? projectRoot
   const status = useAgent((s) => s.statuses[sessionId]?.type ?? "idle")
   const connected = useAgent((s) => s.connected)
   const [files, setFiles] = useState<FileReview[] | null>(null)

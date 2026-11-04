@@ -1,11 +1,8 @@
 import { useMemo, useState } from "react"
 import type { Session } from "@opencode-ai/sdk"
-import { deleteSession, newSession, renameSession, selectSession, sessionInRoot, sessionWaiting, setSessionArchived, useAgent } from "../state/agent"
+import { deleteSession, newSession, renameSession, selectSession, sessionInProject, sessionInRoot, setSessionArchived, useAgent } from "../state/agent"
 import { useSessionMark } from "../state/unseen"
-import { useApprovals } from "../state/approvals"
 import { useProject } from "../state/project"
-import { featureTitle, findFeature, useFeatures } from "../state/features"
-import { normalizePath } from "../lib/paths"
 import { archivedSessionIds, archivedSessionOwner } from "../lib/sessions"
 import { openEditor } from "../state/editors"
 import { useLayout } from "../state/layout"
@@ -121,11 +118,11 @@ function SessionRow({ session, depth, childCount, showDirectory = false }: { ses
 }
 
 export function AgentsView() {
-  const localSessions = useAgent((s) => s.sessions)
   const allSessions = useAgent((s) => s.allSessions)
+  const sessions = useMemo(() => allSessions.filter(sessionInProject), [allSessions])
+  const root = useProject((s) => s.root)
   const chats = useTeams(s => s.chats)
   const loaded = useAgent((s) => s.sessionsLoaded)
-  const sessions = localSessions
   const [query, setQuery] = useState("")
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
   const [showArchived, setShowArchived] = useState(false)
@@ -200,51 +197,16 @@ export function AgentsView() {
                     <Icon name={expanded[s.id] ? "chevron-down" : "chevron-right"} />
                   </button>
                 )}
-                <SessionRow session={s} depth={0} childCount={kids.length} />
+                <SessionRow session={s} depth={0} childCount={kids.length} showDirectory={!sessionInRoot(s, root)} />
               </div>
-              {expanded[s.id] && kids.map((k) => <SessionRow key={k.id} session={k} depth={1} childCount={0} />)}
+              {expanded[s.id] && kids.map((k) => <SessionRow key={k.id} session={k} depth={1} childCount={0} showDirectory={!sessionInRoot(k, root)} />)}
             </div>
           )
         })}
         {tree.groups.map(group => <TeamSessionHistory key={group.id} group={group}>
-          {group.sessions.map(s => <SessionRow key={s.id} session={s} depth={1} childCount={0} />)}
+          {group.sessions.map(s => <SessionRow key={s.id} session={s} depth={1} childCount={0} showDirectory={!sessionInRoot(s, root)} />)}
         </TeamSessionHistory>)}
-        {!showArchived && <OtherFeatureSessions />}
       </div>
-    </div>
-  )
-}
-
-function OtherFeatureSessions() {
-  const root = useProject((s) => s.root)
-  const all = useAgent((s) => s.allSessions)
-  const chats = useTeams(s => s.chats)
-  const statuses = useAgent((s) => s.statuses)
-  const permissions = useAgent((s) => s.permissions)
-  const questions = useAgent((s) => s.questions)
-  const approvals = useApprovals()
-  const list = useFeatures((s) => s.list)
-  const archived = archivedSessionIds(all)
-  const active = groupTeamSessions(all, chats).normal.filter((s) => {
-    if (s.parentID || archived.has(s.id) || sessionInRoot(s, root)) return false
-    const busy = statuses[s.id] && statuses[s.id].type !== "idle"
-    return busy || sessionWaiting({ allSessions: all, permissions, questions }, s.id, approvals)
-  })
-  if (active.length === 0) return null
-  return (
-    <div className="session-others">
-      <div className="session-others-title">Trabajando en otras features</div>
-      {active.map((s) => {
-        const feature = findFeature(s.directory ? normalizePath(s.directory) : null, list)
-        return (
-          <div key={s.id} className="session-other">
-            <span className="session-other-feature">
-              <Icon name={feature?.kind === "main" ? "home" : "worktree"} /> {feature ? featureTitle(feature) : "otra carpeta"}
-            </span>
-            <SessionRow session={s} depth={0} childCount={0} />
-          </div>
-        )
-      })}
     </div>
   )
 }

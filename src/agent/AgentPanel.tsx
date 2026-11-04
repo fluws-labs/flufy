@@ -7,6 +7,7 @@ import {
   newSession,
   queuedUserIds,
   selectSession,
+  sessionInProject,
   setSessionArchived,
   useAgent,
 } from "../state/agent"
@@ -41,7 +42,7 @@ const SUGGESTIONS = [
 ]
 
 export function SessionPane({ sessionId, variant }: { sessionId: string | null; variant: "panel" | "editor" }) {
-  const session = useAgent((s) => s.sessions.find((x) => x.id === sessionId) ?? null)
+  const session = useAgent((s) => s.allSessions.find((x) => x.id === sessionId) ?? null)
   const status = useAgent((s) => (sessionId ? (s.statuses[sessionId]?.type ?? "idle") : "idle"))
   const retry = useAgent((s) => (sessionId ? s.statuses[sessionId] : undefined))
   const permissions = useAgent((s) => s.permissions)
@@ -50,7 +51,7 @@ export function SessionPane({ sessionId, variant }: { sessionId: string | null; 
   const allSessions = useAgent((s) => s.allSessions)
   const todos = useAgent((s) => (sessionId ? s.todos[sessionId] : undefined))
   const view = useAgent((s) => (sessionId ? s.views[sessionId] : undefined))
-  const sessions = useAgent((s) => s.sessions)
+  const sessions = useMemo(() => allSessions.filter(sessionInProject), [allSessions])
   const root = useProject((s) => s.root)
   const busy = status === "busy" || status === "retry"
   const archived = archivedSessionOwner(session, sessions)

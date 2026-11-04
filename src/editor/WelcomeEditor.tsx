@@ -1,5 +1,5 @@
 import { useProject, openProject, pickProject } from "../state/project"
-import { useAgent, selectSession, newSession, focusComposer } from "../state/agent"
+import { useAgent, selectSession, sessionInProject, newSession, focusComposer } from "../state/agent"
 import { useLayout } from "../state/layout"
 import { showQuickOpen } from "../state/quickinput"
 import { executeCommand } from "../commands/registry"
@@ -22,8 +22,9 @@ const SHORTCUTS: Array<[string, string]> = [
 
 export function WelcomeEditor() {
   const root = useProject((s) => s.root)
+  const project = useProject((s) => s.project)
   const recent = useProject((s) => s.recent)
-  const sessions = useAgent((s) => s.sessions)
+  const sessions = useAgent((s) => s.allSessions).filter(sessionInProject)
   return (
     <div className="welcome-page">
       <div className="welcome-hero">
@@ -68,7 +69,7 @@ export function WelcomeEditor() {
           ))}
         </section>
         <section className="welcome-card">
-          <h3>Sesiones del agente en {projectName(root)}</h3>
+          <h3>Sesiones del agente en {projectName(project ?? root)}</h3>
           {sessions.length === 0 && <em className="muted">Sin sesiones todavía</em>}
           {sessions
             .filter((s) => !s.parentID)

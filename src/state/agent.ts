@@ -150,6 +150,13 @@ export function sessionInRoot(s: Pick<Session, "directory">, root: string | null
   return !!s.directory && samePath(s.directory, root)
 }
 
+// El historial es del proyecto completo: la copia principal y todos sus
+// worktrees. Cambiar de feature no debe esconder conversaciones anteriores.
+export function sessionInProject(s: Pick<Session, "directory">): boolean {
+  if (boundProject && sessionInRoot(s, boundProject)) return true
+  return knownDirectories.some((directory) => sessionInRoot(s, directory))
+}
+
 export function bindAgentProject(root: string | null): void {
   boundProject = root
   const active = loadJson<string | null>(projectKey(root, "agent.activeSession"), null)
@@ -1396,7 +1403,7 @@ export async function setSessionArchived(id: string, archived: boolean): Promise
 
 export async function deleteSession(id: string) {
   await client.session.delete({ path: { id } })
-  useAgent.setState((s) => ({ sessions: s.sessions.filter((x) => x.id !== id) }))
+  useAgent.setState((s) => ({ sessions: s.sessions.filter((x) => x.id !== id), allSessions: s.allSessions.filter((x) => x.id !== id) }))
   if (useAgent.getState().openSessionIds.includes(id)) closeSessionTab(id)
 }
 
