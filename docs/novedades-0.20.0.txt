@@ -1,0 +1,9 @@
+Flufy 0.20.0 convierte el chat del celular en un chat de audios, con voz local en tu PC.
+
+Grabás un audio como siempre: se transcribe con tu Whisper de OpenAI y el agente responde con un audio que se genera en tu PC, sin mandar el texto a ningún servicio de voz. El audio suena solo al llegar y queda como una burbuja para volver a escucharlo cuando quieras. Cada bloque de la respuesta tiene su propia nota: si el agente delega trabajo a un subagente, te dice en una frase qué delegó y después te cuenta cómo terminó.
+
+La voz se descarga una vez y después funciona sin Internet. Hay cuatro voces en español: Claude latino (recomendada, natural y rápida), Daniela argentina (acento rioplatense, tarda un poco más en generar), Dave de España y Ald, la más liviana. Se elige desde Flufy › Audios › Respuestas habladas o desde el botón de voz del celular, donde también se ajusta la velocidad y se prueba la voz.
+
+El modo voz le pide al agente respuestas cortas y conversacionales: no lee código, no enumera rutas y deja el detalle técnico en pantalla. El micrófono y tu configuración de transcripción actual no cambian.
+
+Esta versión mantiene OpenCode 1.19.5. Si actualizás, tus chats, equipos, evidencias y configuraciones se conservan. Para escuchar las respuestas hay que descargar una voz la primera vez (unos 63 MB).

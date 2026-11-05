@@ -42,6 +42,7 @@ Funciones adicionales:
 - Control de Chrome requiere Chrome 144+ y Node.js/npm (Node 20.19+, 22.12+ o posterior compatible). Usa Chrome DevTools MCP con `autoConnect`, sin extensión ni token; el puente instala una versión fija localmente.
 - Acceso desde celular requiere Tailscale configurado.
 - Transcripción de audio requiere configurar un servicio y su API key; el login de ChatGPT no incluye la API de transcripción.
+- Las respuestas habladas usan una voz local (Piper) que se descarga una vez desde **Audios**; no requieren Internet después.
 
 ### Conectar tu Chrome
 

@@ -3,17 +3,22 @@ import { errorText, oc, type DesktopPrefs, type ModelRef } from "./api"
 import { recentModels, rememberModel } from "./local"
 import { useRecorder } from "./recorder"
 import { Icon, Sheet } from "./ui"
+import { primeAudio } from "./voice-player"
 import { hasAccount, chooseAvailableModel, modelVisible } from "../lib/providers"
 
 export type ModelInfo = { key: string; providerID: string; modelID: string; name: string; provider: string; image: boolean }
 
 export type Attachment = { url: string; mime: string; filename: string }
 
-export type Draft = { text: string; attachments: Attachment[]; model: ModelRef | null }
+export type Draft = { text: string; attachments: Attachment[]; model: ModelRef | null; voice?: boolean; audio?: Blob }
 
 const MAX_SIDE = 1600
 const KEEP_BYTES = 1_500_000
 const PICKER_LIMIT = 80
+
+/** Instrucción que viaja con cada audio y no se muestra en la conversación. */
+export const VOICE_PROMPT =
+  "[Modo voz] La persona te habla desde el celular y va a escuchar tu respuesta como un audio, no como texto. Respondé en 1 a 3 frases cortas y naturales, sin markdown, sin listas, sin bloques de código y sin leer rutas ni comandos. Si hace falta código o detalle técnico, dejalo en el texto pero no lo narres. Cuando delegues trabajo a un subagente, decí en una frase qué delegaste y que le vas a avisar cuando termine; al recibir el resultado, contalo en una frase. El audio tiene que sonar como una conversación."
 
 export function loadModels(directory: string, zenFreeOnly = false): Promise<ModelInfo[]> {
   return oc<{ providers?: Array<{ id: string; name: string; source?: string; options?: { apiKey?: unknown }; models?: Record<string, { id: string; name?: string; capabilities?: { input?: { image?: boolean } }; cost?: { input?: number; output?: number } }> }> }>(
@@ -77,8 +82,9 @@ function clock(ms: number): string {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`
 }
 
-export function promptParts(draft: Draft): Array<Record<string, string>> {
-  const parts: Array<Record<string, string>> = []
+export function promptParts(draft: Draft): Array<Record<string, unknown>> {
+  const parts: Array<Record<string, unknown>> = []
+  if (draft.voice) parts.push({ type: "text", text: VOICE_PROMPT, synthetic: true })
   if (draft.text.trim()) parts.push({ type: "text", text: draft.text.trim() })
   for (const a of draft.attachments) parts.push({ type: "file", mime: a.mime, url: a.url, filename: a.filename })
   return parts
@@ -204,13 +210,19 @@ export function Composer({
   const galleryInput = useRef<HTMLInputElement>(null)
   const textarea = useRef<HTMLTextAreaElement>(null)
   const [now, setNow] = useState(() => Date.now())
+  const pendingAudio = useRef<Blob | null>(null)
   const recorder = useRecorder(
     (heard) => {
       const message = text.trim() ? `${text.trim()} ${heard}` : heard
+      const audio = pendingAudio.current ?? undefined
+      pendingAudio.current = null
       setText(message)
-      void send(message)
+      void send(message, audio)
     },
     setError,
+    (wav) => {
+      pendingAudio.current = wav
+    },
   )
   const recording = recorder.state.status === "recording" ? recorder.state : null
   const transcribing = recorder.state.status === "transcribing"
@@ -227,6 +239,7 @@ export function Composer({
       setError("Falta configurar la transcripción en la PC: Flufy → «Conectar el celular» → Audios.")
       return
     }
+    primeAudio()
     setNow(Date.now())
     void recorder.start()
   }
@@ -272,7 +285,7 @@ export function Composer({
     }
   }
 
-  async function send(transcript?: string) {
+  async function send(transcript?: string, audio?: Blob) {
     if (sendingRef.current || (transcript === undefined ? !ready : !!reading || !transcript.trim())) return
     const message = transcript ?? text
     sendingRef.current = true
@@ -284,7 +297,7 @@ export function Composer({
       if (fresh.length === 0) throw new Error("Conectá ChatGPT u OpenCode en Cuentas de IA de Flufy en la PC.")
       const available = chooseAvailableModel(fresh, model ?? { providerID: "", modelID: "" }, favorites)
       setPicked(available)
-      await onSend({ text: message, attachments, model: available })
+      await onSend({ text: message, attachments, model: available, voice: !!audio, audio })
       rememberModel(modelKey(available))
       setText("")
       setAttachments([])

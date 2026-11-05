@@ -18,8 +18,11 @@ import {
   type Question,
   type Routine,
   type SessionInfo,
+  type SpeechStatus,
+  speechStatus,
 } from "./api"
 import { Composer, promptBody } from "./Composer"
+import { SpeechPanel } from "./Speech"
 import { cacheHome, dismissPushNudge, ensureSeenBaseline, isUnread, markSeen, pushNudgeDismissed, readHomeCache, type ProjectData } from "./local"
 import { NotificationSettings, usePushStatus } from "./Notifications"
 import { PcCard } from "./Pc"
@@ -182,6 +185,15 @@ export function Home({ open, viewed }: { open: (r: Route) => void; viewed: strin
   const [creating, setCreating] = useState<string | null>(null)
   const [limits, setLimits] = useState<Record<string, number>>({})
   const [settings, setSettings] = useState(false)
+  const [speech, setSpeech] = useState<SpeechStatus | null>(null)
+  const [speechOpen, setSpeechOpen] = useState(false)
+  const [auto, setAuto] = useState(() => {
+    try {
+      return localStorage.getItem("flufy.voice.auto") !== "off"
+    } catch {
+      return true
+    }
+  })
   const [nudgeHidden, setNudgeHidden] = useState(() => pushNudgeDismissed())
   const [, setTick] = useState(0)
   const reloadTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -190,6 +202,21 @@ export function Home({ open, viewed }: { open: (r: Route) => void; viewed: strin
   const push = usePushStatus()
   const quotaBar = useRef<QuotaBarHandle>(null)
   const refreshQuota = useCallback(() => quotaBar.current?.refreshSoon(), [])
+
+  useEffect(() => {
+    speechStatus()
+      .then(setSpeech)
+      .catch(() => undefined)
+  }, [])
+
+  const changeAuto = (next: boolean) => {
+    setAuto(next)
+    try {
+      localStorage.setItem("flufy.voice.auto", next ? "on" : "off")
+    } catch {
+      /* almacenamiento bloqueado */
+    }
+  }
 
   const showCache = useCallback(() => {
     const cached = cache.current
@@ -317,6 +344,9 @@ export function Home({ open, viewed }: { open: (r: Route) => void; viewed: strin
           </span>
         )}
         {info && <QuotaHub ref={quotaBar} />}
+        <button type="button" className={`icon-btn${speech?.enabled ? " active" : ""}`} onClick={() => setSpeechOpen(true)} aria-label="Voz de las respuestas">
+          <Icon name={speech?.enabled ? "unmute" : "mute"} />
+        </button>
         <button type="button" className="icon-btn" onClick={() => setSettings(true)} aria-label="Notificaciones">
           <Icon name={push.status?.kind === "on" ? "bell" : "bell-slash"} />
         </button>
@@ -441,6 +471,7 @@ export function Home({ open, viewed }: { open: (r: Route) => void; viewed: strin
         </section>
       )}
       {settings && <NotificationSettings push={push} onClose={() => setSettings(false)} />}
+      {speechOpen && <SpeechPanel status={speech} onStatus={setSpeech} auto={auto} onAuto={changeAuto} onClose={() => setSpeechOpen(false)} />}
     </main>
   )
 }

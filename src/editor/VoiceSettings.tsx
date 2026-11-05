@@ -10,6 +10,9 @@ type VoiceView = { kind: string; baseUrl: string; model: string; language: strin
 type ModelView = { size: string; present: boolean; bytes: number; totalBytes: number; downloading: boolean; error: string | null }
 type WhisperView = { available: boolean; running: boolean; port: number | null; defaultSize: string; modelsDir: string | null; models: ModelView[] }
 
+type SpeechVoice = { id: string; label: string; note: string; present: boolean; bytes: number; totalBytes: number; downloading: boolean; error: string | null }
+type SpeechView = { available: boolean; ready: boolean; enabled: boolean; voice: string; speed: number; defaultVoice: string; voicesDir: string | null; voices: SpeechVoice[] }
+
 type Provider = "openai" | "groq" | "custom" | "local"
 
 const PRESETS: Record<Exclude<Provider, "custom" | "local">, { baseUrl: string; models: string[]; keys: string }> = {
@@ -48,11 +51,27 @@ export function VoiceSettings() {
   const [apiKey, setApiKey] = useState("")
   const [whisper, setWhisper] = useState<WhisperView | null>(null)
   const [busy, setBusy] = useState<"save" | "test" | null>(null)
+  const [speech, setSpeech] = useState<SpeechView | null>(null)
+  const [speechVoice, setSpeechVoice] = useState("")
+  const [speechSpeed, setSpeechSpeed] = useState(1)
+  const [speechEnabled, setSpeechEnabled] = useState(true)
+  const [speechBusy, setSpeechBusy] = useState<string | null>(null)
 
   const refreshWhisper = () => {
     void call<WhisperView>("whisper_status")
       .then(setWhisper)
       .catch(() => setWhisper(null))
+  }
+
+  const refreshSpeech = () => {
+    void call<SpeechView>("speech_get")
+      .then((view) => {
+        setSpeech(view)
+        setSpeechVoice(view.voice)
+        setSpeechSpeed(view.speed)
+        setSpeechEnabled(view.enabled)
+      })
+      .catch(() => setSpeech(null))
   }
 
   useEffect(() => {
@@ -67,7 +86,29 @@ export function VoiceSettings() {
       })
       .catch((e) => notify.error("No se pudo leer la configuración de audios", errorMessage(e)))
     refreshWhisper()
-    return onEvent<{ size: string; received?: number; total?: number; done?: boolean; error?: string; cancelled?: boolean }>("whisper:download", (p) => {
+    refreshSpeech()
+    const stopSpeech = onEvent<{ id: string; received?: number; total?: number; done?: boolean; error?: string; cancelled?: boolean }>("speech:download", (p) => {
+      setSpeech((prev) =>
+        prev
+          ? {
+              ...prev,
+              voices: prev.voices.map((voice) =>
+                voice.id === p.id
+                  ? {
+                      ...voice,
+                      downloading: !p.done && !p.error && !p.cancelled,
+                      error: p.error ?? null,
+                      present: p.done ? true : voice.present,
+                      bytes: p.done ? voice.totalBytes : (p.received ?? voice.bytes),
+                    }
+                  : voice,
+              ),
+            }
+          : prev,
+      )
+      if (p.done || p.error || p.cancelled) refreshSpeech()
+    })
+    const stopWhisper = onEvent<{ size: string; received?: number; total?: number; done?: boolean; error?: string; cancelled?: boolean }>("whisper:download", (p) => {
       setWhisper((prev) =>
         prev
           ? {
@@ -88,6 +129,10 @@ export function VoiceSettings() {
       )
       if (p.done || p.error || p.cancelled) refreshWhisper()
     })
+    return () => {
+      stopSpeech()
+      stopWhisper()
+    }
   }, [])
 
   const suggestions = provider === "custom" || provider === "local" ? [] : PRESETS[provider].models
@@ -122,6 +167,10 @@ export function VoiceSettings() {
     setBusy("save")
     try {
       const view = await persist()
+      if (speech) {
+        const next = await call<SpeechView>("speech_set", { enabled: speechEnabled, voice: speechVoice, speed: speechSpeed })
+        setSpeech(next)
+      }
       notify.info("Voz configurada", view.ready ? "El micrófono ya está disponible en el celular y en la app." : "Falta completar la configuración.")
     } catch (e) {
       notify.error("No se pudo guardar", errorMessage(e))
@@ -166,6 +215,50 @@ export function VoiceSettings() {
       refreshWhisper()
     } catch (e) {
       notify.error("No se pudo eliminar el modelo", errorMessage(e))
+    }
+  }
+
+  const downloadSpeech = async (id: string) => {
+    setSpeechBusy(id)
+    try {
+      await call("speech_download_voice", { id })
+      const next = await call<SpeechView>("speech_set", { enabled: speechEnabled, voice: id, speed: speechSpeed })
+      setSpeech(next)
+      setSpeechVoice(id)
+    } catch (e) {
+      notify.error("No se pudo descargar la voz", errorMessage(e))
+    } finally {
+      setSpeechBusy(null)
+    }
+  }
+
+  const deleteSpeech = async (id: string) => {
+    setSpeechBusy(id)
+    try {
+      await call("speech_delete_voice", { id })
+      refreshSpeech()
+    } catch (e) {
+      notify.error("No se pudo eliminar la voz", errorMessage(e))
+    } finally {
+      setSpeechBusy(null)
+    }
+  }
+
+  const testSpeech = async () => {
+    setSpeechBusy("test")
+    try {
+      await call<SpeechView>("speech_set", { enabled: speechEnabled, voice: speechVoice, speed: speechSpeed }).then(setSpeech)
+      const encoded = await call<string>("speech_test", { text: "Hola, soy Flufy. Así te voy a responder cuando me hables." })
+      const binary = atob(encoded)
+      const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0))
+      const url = URL.createObjectURL(new Blob([bytes], { type: "audio/wav" }))
+      const audio = new Audio(url)
+      audio.onended = () => URL.revokeObjectURL(url)
+      await audio.play()
+    } catch (e) {
+      notify.error("La prueba de voz falló", errorMessage(e))
+    } finally {
+      setSpeechBusy(null)
     }
   }
 
@@ -281,6 +374,114 @@ export function VoiceSettings() {
           <Icon name="folder-opened" /> {whisper.modelsDir}
         </button>
       )}
+      <div className="speech-settings">
+        <strong>
+          <Icon name="unmute" /> Respuestas habladas
+        </strong>
+        <span>
+          El agente puede contestarte con audios que se generan en esta PC. En el celular suenan solos al llegar y quedan como una burbuja para volver a escucharlos. La voz se descarga una vez y no usa Internet
+          después.
+        </span>
+        {!speech ? (
+          <small className="muted">Leyendo la configuración de voz…</small>
+        ) : (
+          <>
+            {!speech.available && <span className="warn-text">El motor de voz no está instalado en esta PC.</span>}
+            <div className="voice-grid">
+              <span className="voice-label">Responder con audio</span>
+              <label className="speech-check">
+                <input type="checkbox" checked={speechEnabled} onChange={(e) => setSpeechEnabled(e.target.checked)} /> Activar
+              </label>
+              <span className="voice-label">Voz</span>
+              <div className="voice-model">
+                {speech.voices.map((voice) => (
+                  <button
+                    key={voice.id}
+                    type="button"
+                    className={`chip-btn${voice.id === speechVoice ? " active" : ""}`}
+                    title={voice.note}
+                    onClick={() => setSpeechVoice(voice.id)}
+                  >
+                    {voice.label}
+                    {voice.present ? " ✓" : ""}
+                  </button>
+                ))}
+              </div>
+              <span className="voice-label">Estado</span>
+              <div className="voice-local-status">
+                {(() => {
+                  const voice = speech.voices.find((v) => v.id === speechVoice)
+                  if (!voice) return <span className="warn-text">Elegí una voz.</span>
+                  if (voice.error) return <span className="warn-text">{voice.error}</span>
+                  if (voice.present) {
+                    return (
+                      <>
+                        <span className="routine-pill ok">Descargada ({megabytes(voice.bytes)})</span>
+                        <button type="button" className="btn btn-sm" disabled={speechBusy !== null} onClick={() => void deleteSpeech(voice.id)}>
+                          <Icon name="trash" /> Eliminar
+                        </button>
+                      </>
+                    )
+                  }
+                  if (voice.downloading) {
+                    return (
+                      <>
+                        <span className="voice-progress">
+                          <span className="voice-progress-track">
+                            <span
+                              className="voice-progress-bar"
+                              style={{ width: `${voice.totalBytes ? Math.min(100, (voice.bytes / voice.totalBytes) * 100) : 0}%` }}
+                            />
+                          </span>
+                          <small>
+                            Descargando {megabytes(voice.bytes)} de {megabytes(voice.totalBytes)}
+                          </small>
+                        </span>
+                        <button type="button" className="btn btn-sm" onClick={() => void call("speech_cancel_download")}>
+                          <Icon name="close" /> Cancelar
+                        </button>
+                      </>
+                    )
+                  }
+                  return (
+                    <button type="button" className="btn btn-sm" disabled={!speech.available || speechBusy !== null} onClick={() => void downloadSpeech(voice.id)}>
+                      <Icon name={speechBusy === voice.id ? "loading" : "cloud-download"} spin={speechBusy === voice.id} /> Descargar ({megabytes(voice.totalBytes)})
+                    </button>
+                  )
+                })()}
+                <small className="muted">{speech.voices.find((v) => v.id === speechVoice)?.note}</small>
+              </div>
+              <span className="voice-label">Velocidad</span>
+              <div className="voice-model">
+                <input
+                  className="input input-sm"
+                  type="range"
+                  min={0.7}
+                  max={1.4}
+                  step={0.05}
+                  value={speechSpeed}
+                  onChange={(e) => setSpeechSpeed(Number(e.target.value))}
+                />
+                <small className="muted">{speechSpeed.toFixed(2)}×</small>
+              </div>
+            </div>
+            <div className="form-row">
+              <button
+                type="button"
+                className="btn btn-sm"
+                disabled={speechBusy !== null || !speech.ready}
+                onClick={() => void testSpeech()}
+              >
+                <Icon name={speechBusy === "test" ? "loading" : "play"} spin={speechBusy === "test"} /> Probar voz
+              </button>
+              <span className={`routine-pill ${speech.ready && speechEnabled ? "ok" : ""}`}>
+                {speech.ready ? (speechEnabled ? "Activa" : "Silenciada") : "Falta la voz"}
+              </span>
+              <small className="muted">Guardá para aplicar la voz y la velocidad.</small>
+            </div>
+          </>
+        )}
+      </div>
       <div className="form-row">
         <button type="button" className="btn btn-sm btn-primary" disabled={busy !== null} onClick={() => void save()}>
           <Icon name={busy === "save" ? "loading" : "save"} /> Guardar

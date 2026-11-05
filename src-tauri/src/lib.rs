@@ -30,6 +30,7 @@ mod responses;
 pub mod routines;
 pub mod teams;
 pub mod search;
+pub mod speech;
 pub mod term;
 pub mod usage;
 pub mod updates;
@@ -395,6 +396,12 @@ pub fn run() {
             whisper::whisper_download,
             whisper::whisper_cancel,
             whisper::whisper_delete_model,
+            speech::speech_get,
+            speech::speech_set,
+            speech::speech_download_voice,
+            speech::speech_cancel_download,
+            speech::speech_delete_voice,
+            speech::speech_test,
             git::git_root,
             git::git_status,
             git::git_log,
@@ -550,6 +557,9 @@ pub fn run() {
             live::start(app.handle());
             hub::setup(app.handle())?;
             app.manage(whisper::WhisperState::default());
+            app.manage(speech::SpeechState::default());
+            let speech_app = app.handle().clone();
+            std::thread::spawn(move || speech::prune(&speech_app));
             app.manage(term::TermState::new());
             app.manage(watch::WatchState::default());
             term::start_cleanup(app.handle());

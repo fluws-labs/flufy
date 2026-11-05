@@ -57,6 +57,8 @@ jobs:
         run: npm run release:engine
       - name: Descargar Whisper fijado y verificar SHA256
         run: npm run release:whisper
+      - name: Descargar Piper fijado y verificar SHA256
+        run: npm run release:piper
       - name: Verificaciones frontend
         run: |
           npm run lint

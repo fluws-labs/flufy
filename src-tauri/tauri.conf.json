@@ -51,7 +51,8 @@
     },
     "resources": {
       "../dist-pwa/": "dist-pwa/",
-      "binaries/whisper/": "whisper/"
+      "binaries/whisper/": "whisper/",
+      "binaries/piper/": "piper/"
     },
     "windows": {
       "nsis": {

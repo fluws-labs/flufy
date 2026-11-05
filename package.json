@@ -23,6 +23,7 @@
     "release:check": "node scripts/release.mjs check",
     "release:engine": "node scripts/release.mjs engine",
     "release:whisper": "node scripts/release.mjs whisper",
+    "release:piper": "node scripts/release.mjs piper",
     "release:manifest": "node scripts/release.mjs manifest",
     "release:prepare": "node scripts/release.mjs prepare",
     "release:publish": "node scripts/release.mjs publish"

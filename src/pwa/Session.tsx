@@ -14,9 +14,14 @@ import {
   type Permission,
   type Question,
   type SessionInfo,
+  type SpeechStatus,
+  type VoiceNoteMeta,
 } from "./api"
-import { loadMemory, setMemory as setMemoryRemote, type MemoryState } from "./api"
+import { loadMemory, setMemory as setMemoryRemote, speechNoteAudio, speechNotes, speechStatus, speechUpdate, uploadUserNote, wavDurationMs, type MemoryState } from "./api"
 import { Composer, promptBody, type Draft } from "./Composer"
+import { SpeechPanel } from "./Speech"
+import { VoiceNote } from "./VoiceNote"
+import { enqueue } from "./voice-player"
 import { pipOpen, ScreenPip, setPipOpen } from "./ScreenPip"
 import { QuotaBar, type QuotaBarHandle } from "./Quota"
 import type { Route } from "./Home"
@@ -213,7 +218,14 @@ function Steps({ parts, live }: { parts: Part[]; live: boolean }) {
   )
 }
 
-function renderParts(parts: Part[], live: boolean): ReactNode[] {
+type VoiceView = {
+  session: string
+  enabled: boolean
+  notes: Record<string, VoiceNoteMeta>
+  onMeta: (part: string, durationMs: number) => void
+}
+
+function renderParts(parts: Part[], live: boolean, voice: VoiceView): ReactNode[] {
   const nodes: ReactNode[] = []
   let group: Part[] = []
   const flush = () => {
@@ -229,14 +241,21 @@ function renderParts(parts: Part[], live: boolean): ReactNode[] {
     if (isStep(p)) group.push(p)
     else {
       flush()
-      if (p.type === "text" && p.text?.trim()) nodes.push(<div key={p.id} className="msg-text"><Md text={p.text} /></div>)
+      if (p.type === "text" && p.text?.trim()) {
+        nodes.push(
+          <div key={`note-${p.id}`} className="msg-text">
+            <VoiceNote session={voice.session} part={p.id} text={p.text} meta={voice.notes[p.id]} enabled={voice.enabled} onMeta={voice.onMeta} />
+          </div>,
+        )
+        nodes.push(<div key={p.id} className="msg-text"><Md text={p.text} /></div>)
+      }
     }
   }
   flush()
   return nodes
 }
 
-function MessageView({ message, live }: { message: Message; live: boolean }) {
+function MessageView({ message, live, voice }: { message: Message; live: boolean; voice: VoiceView }) {
   const parts = message.parts
   const text = parts
     .filter((p) => p.type === "text" && !p.synthetic && p.text?.trim() && !isDesktopContextText(p.text))
@@ -245,8 +264,12 @@ function MessageView({ message, live }: { message: Message; live: boolean }) {
   const files = parts.filter((p) => p.type === "file" && !isInternalScreenshot(p) && !p.url?.startsWith("file:"))
   if (message.info.role === "user") {
     if ((!text && files.length === 0) || /^#{1,2} Memoria fluws/.test(text)) return null
+    const note = voice.notes[`${message.info.id}.user`]
     return (
       <div className="bubble user">
+        {note && (
+          <VoiceNote session={voice.session} part={`${message.info.id}.user`} mine meta={note} enabled={voice.enabled} onMeta={voice.onMeta} />
+        )}
         <Files parts={files} />
         {text}
       </div>
@@ -256,7 +279,7 @@ function MessageView({ message, live }: { message: Message; live: boolean }) {
   const error = message.info.error
   return (
     <div className="bubble assistant">
-      <div className="msg-parts">{renderParts(parts, live)}</div>
+      <div className="msg-parts">{renderParts(parts, live, voice)}</div>
       <Captures tools={tools} />
       <Files parts={files} />
       {error && error.name !== "MessageAbortedError" && <div className="alert">{providerErrorMessage(error)}</div>}
@@ -343,6 +366,20 @@ export function SessionScreen({ route, back }: { route: Extract<Route, { kind: "
   const [loaded, setLoaded] = useState(false)
   const [unseen, setUnseen] = useState(false)
   const [memory, setMemory] = useState<MemoryState | null>(null)
+  const [speech, setSpeech] = useState<SpeechStatus | null>(null)
+  const [notes, setNotes] = useState<Record<string, VoiceNoteMeta>>({})
+  const [speechOpen, setSpeechOpen] = useState(false)
+  const [auto, setAuto] = useState(() => {
+    try {
+      return localStorage.getItem("flufy.voice.auto") !== "off"
+    } catch {
+      return true
+    }
+  })
+  const roles = useRef(new Map<string, string>())
+  const autoPlayed = useRef(new Set<string>())
+  const speechRef = useRef<SpeechStatus | null>(null)
+  const autoRef = useRef(auto)
   const stick = useRef(true)
   const first = useRef(true)
   const quotaBar = useRef<QuotaBarHandle>(null)
@@ -354,6 +391,62 @@ export function SessionScreen({ route, back }: { route: Extract<Route, { kind: "
   const reload = useRef(false)
 
   const mine = useCallback((sessionID: string | undefined) => !!sessionID && (sessionID === route.id || children.has(sessionID)), [children, route.id])
+
+  const refreshNotes = useCallback(() => {
+    speechNotes(route.id)
+      .then(setNotes)
+      .catch(() => undefined)
+  }, [route.id])
+
+  useEffect(() => {
+    speechRef.current = speech
+  }, [speech])
+
+  useEffect(() => {
+    autoRef.current = auto
+  }, [auto])
+
+  useEffect(() => {
+    speechStatus()
+      .then(setSpeech)
+      .catch(() => undefined)
+    refreshNotes()
+  }, [refreshNotes])
+
+  const changeAuto = (next: boolean) => {
+    setAuto(next)
+    try {
+      localStorage.setItem("flufy.voice.auto", next ? "on" : "off")
+    } catch {
+      /* almacenamiento bloqueado */
+    }
+  }
+
+  const noteMeta = useCallback((part: string, durationMs: number) => {
+    setNotes((prev) => (prev[part]?.durationMs === durationMs ? prev : { ...prev, [part]: { ...(prev[part] ?? { bytes: 0 }), durationMs } }))
+  }, [])
+
+  const speakPart = useCallback(
+    (part: Part) => {
+      const status = speechRef.current
+      if (!status?.enabled || !status.ready || !autoRef.current) return
+      if (part.type !== "text" || part.synthetic || !part.text?.trim() || !part.time?.end) return
+      if (isDesktopContextText(part.text)) return
+      const role = roles.current.get(part.messageID ?? "")
+      if (role === "user" || (!role && pending.current.has(part.messageID ?? ""))) return
+      const key = `${route.id}:${part.id}`
+      if (autoPlayed.current.has(key)) return
+      autoPlayed.current.add(key)
+      void speechNoteAudio(route.id, part.id, part.text)
+        .then(async (audio) => {
+          const durationMs = await wavDurationMs(audio)
+          if (durationMs > 0) noteMeta(part.id, durationMs)
+          enqueue(key, audio)
+        })
+        .catch(() => autoPlayed.current.delete(key))
+    },
+    [noteMeta, route.id],
+  )
 
   const load = useCallback(async (): Promise<void> => {
     if (loading.current) {
@@ -375,6 +468,7 @@ export function SessionScreen({ route, back }: { route: Extract<Route, { kind: "
       const ids = new Set((kids ?? []).map((k) => k.id))
       setChildren(ids)
       const snapshot = msgs ?? []
+      for (const message of snapshot) roles.current.set(message.info.id, message.info.role)
       const fetched = new Set(snapshot.map((m) => m.info.id))
       for (const id of fetched) pending.current.delete(id)
       // A slow refresh must not erase a newer SSE update or an accepted prompt
@@ -428,7 +522,10 @@ export function SessionScreen({ route, back }: { route: Extract<Route, { kind: "
       switch (e.type) {
         case "message.updated": {
           const msg = p.info as MessageInfo
-          if (msg.sessionID === route.id) setMessages((prev) => upsertMessage(prev, msg))
+          if (msg.sessionID === route.id) {
+            roles.current.set(msg.id, msg.role)
+            setMessages((prev) => upsertMessage(prev, msg))
+          }
           break
         }
         case "message.removed":
@@ -436,7 +533,10 @@ export function SessionScreen({ route, back }: { route: Extract<Route, { kind: "
           break
         case "message.part.updated": {
           const part = p.part as Part
-          if (part.sessionID === route.id) setMessages((prev) => upsertPart(prev, part))
+          if (part.sessionID === route.id) {
+            setMessages((prev) => upsertPart(prev, part))
+            speakPart(part)
+          }
           break
         }
         case "message.part.delta": {
@@ -459,6 +559,7 @@ export function SessionScreen({ route, back }: { route: Extract<Route, { kind: "
             statusRevision.current += 1
             setBusy(false)
             quotaBar.current?.refreshSoon()
+            void refreshNotes()
           }
           break
         case "session.created":
@@ -491,7 +592,7 @@ export function SessionScreen({ route, back }: { route: Extract<Route, { kind: "
         }
       }
     },
-    [load, mine, route.id],
+    [load, mine, refreshNotes, route.id, speakPart],
   )
 
   const live = useLive(route.id, onEvent, () => void load())
@@ -543,8 +644,14 @@ export function SessionScreen({ route, back }: { route: Extract<Route, { kind: "
     stick.current = true
     setUnseen(false)
     pending.current.set(id, message)
+    roles.current.set(id, "user")
     messageRevisions.current.set(id, ++revision.current)
     setMessages((prev) => [...prev, message].sort(byTime))
+    if (draft.audio) {
+      void uploadUserNote(route.id, id, draft.audio)
+        .then((meta) => setNotes((prev) => ({ ...prev, [`${id}.user`]: meta })))
+        .catch(() => undefined)
+    }
     const statusStarted = statusRevision.current
     try {
       await oc("POST", `/session/${route.id}/prompt_async`, route.project, { ...body, messageID: id, parts })
@@ -576,6 +683,22 @@ export function SessionScreen({ route, back }: { route: Extract<Route, { kind: "
         <QuotaBar ref={quotaBar} provider={initialModel?.providerID ?? ""} />
         <button
           type="button"
+          className={`icon-btn${speech?.enabled ? " active" : ""}`}
+          onClick={() => {
+            if (!speech?.ready) {
+              setSpeechOpen(true)
+              return
+            }
+            void speechUpdate({ enabled: !speech.enabled })
+              .then(setSpeech)
+              .catch(() => setSpeechOpen(true))
+          }}
+          aria-label={speech?.enabled ? "Silenciar respuestas habladas" : "Activar respuestas habladas"}
+        >
+          <Icon name={speech?.enabled ? "unmute" : "mute"} />
+        </button>
+        <button
+          type="button"
           className={`icon-btn${screen ? " active" : ""}`}
           onClick={() => {
             setScreen((on) => {
@@ -602,7 +725,12 @@ export function SessionScreen({ route, back }: { route: Extract<Route, { kind: "
       )}
       <div className="messages">
         {messages.map((m, i) => (
-          <MessageView key={m.info.id} message={m} live={busy && i === messages.length - 1} />
+          <MessageView
+            key={m.info.id}
+            message={m}
+            live={busy && i === messages.length - 1}
+            voice={{ session: route.id, enabled: !!(speech?.enabled && speech.ready), notes, onMeta: noteMeta }}
+          />
         ))}
         {busy && (
           <div className="thinking">
@@ -638,6 +766,9 @@ export function SessionScreen({ route, back }: { route: Extract<Route, { kind: "
           onSend={send}
         />
       </footer>
+      {speechOpen && (
+        <SpeechPanel status={speech} onStatus={setSpeech} auto={auto} onAuto={changeAuto} onClose={() => setSpeechOpen(false)} />
+      )}
       <ScreenPip
         open={screen}
         onClose={() => {

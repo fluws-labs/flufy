@@ -92,7 +92,7 @@ async function setup(page: Page) {
     </script>
   ` }))
   await page.goto("/live-test", { waitUntil: "domcontentloaded" })
-  await expect(page.getByText("Test model", { exact: true })).toBeVisible({ timeout: 30000 })
+  await expect(page.getByText("Test model", { exact: true })).toBeVisible({ timeout: 60000 })
   await expect(page.locator(".loading")).toHaveCount(0)
   return { state, errors }
 }

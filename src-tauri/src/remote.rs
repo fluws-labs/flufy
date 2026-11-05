@@ -1,6 +1,6 @@
 use crate::oc::basic_auth;
 use crate::proc::hide_console;
-use crate::{app_data_file, desktop, ensure_server, features, live, machine, push, recent_project_list, routines, usage, voice};
+use crate::{app_data_file, desktop, ensure_server, features, live, machine, push, recent_project_list, routines, speech, usage, voice};
 use qrcode::render::svg;
 use qrcode::QrCode;
 use serde::{Deserialize, Serialize};
@@ -267,6 +267,9 @@ fn hub_api(app: &AppHandle, mut req: Request, url: &str, path: &str) {
             };
         }
     }
+    if path == "/hub/speech" || path.starts_with("/hub/speech/") {
+        return speech_api(app, req, &method, path, url);
+    }
     if method == "GET" && path == "/hub/events" {
         return live::stream(app, req, query_param(url, "session").filter(|s| !s.is_empty()));
     }
@@ -303,6 +306,7 @@ fn hub_api(app: &AppHandle, mut req: Request, url: &str, path: &str) {
                 "errors": live::errors(app),
                 "prefs": prefs,
                 "voice": voice::ready(app),
+                "speech": speech::status_json(app),
                 "desktop": desktop::status(app),
             }),
         );
@@ -426,6 +430,97 @@ fn hub_api(app: &AppHandle, mut req: Request, url: &str, path: &str) {
             Ok(_) => respond_json(req, 200, json!({ "ok": true })),
             Err(e) => respond_json(req, 502, json!({ "error": e })),
         };
+    }
+    respond_json(req, 404, json!({ "error": "no existe" }))
+}
+
+fn speech_api(app: &AppHandle, mut req: Request, method: &str, path: &str, url: &str) {
+    fn body(req: &mut Request, max: usize) -> Result<Vec<u8>, ()> {
+        let mut bytes = Vec::new();
+        if Read::take(req.as_reader(), (max + 1) as u64).read_to_end(&mut bytes).is_err() || bytes.len() > max {
+            return Err(());
+        }
+        Ok(bytes)
+    }
+
+    if method == "GET" && path == "/hub/speech" {
+        return respond_json(req, 200, speech::status_json(app));
+    }
+    if method == "POST" && path == "/hub/speech" {
+        let bytes = match body(&mut req, 64 * 1024) {
+            Ok(bytes) => bytes,
+            Err(()) => return respond_json(req, 413, json!({ "error": "Solicitud demasiado grande" })),
+        };
+        let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+            return respond_json(req, 400, json!({ "error": "JSON inválido" }));
+        };
+        return respond_json(req, 200, speech::hub_update(app, &value));
+    }
+    if method == "POST" && path == "/hub/speech/test" {
+        let bytes = body(&mut req, 64 * 1024).unwrap_or_default();
+        let text = serde_json::from_slice::<serde_json::Value>(&bytes).ok().and_then(|v| v["text"].as_str().map(|s| s.to_string()));
+        return match speech::test_audio(app, text) {
+            Ok(wav) => respond_bytes(req, "audio/wav", wav),
+            Err(e) => respond_json(req, 409, json!({ "error": e })),
+        };
+    }
+    if method == "GET" && path == "/hub/speech/notes" {
+        let session = query_param(url, "session").unwrap_or_default();
+        if !session.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') || session.is_empty() {
+            return respond_json(req, 400, json!({ "error": "Conversación inválida" }));
+        }
+        return respond_json(req, 200, speech::notes_json(app, &session));
+    }
+    if method == "GET" && path == "/hub/speech/note" {
+        let session = query_param(url, "session").unwrap_or_default();
+        let part = query_param(url, "part").unwrap_or_default();
+        return match speech::read_existing(app, &session, &part) {
+            Ok(wav) => respond_bytes(req, "audio/wav", wav),
+            Err(e) => respond_json(req, 404, json!({ "error": e })),
+        };
+    }
+    if method == "POST" && path == "/hub/speech/note" {
+        let bytes = match body(&mut req, 256 * 1024) {
+            Ok(bytes) => bytes,
+            Err(()) => return respond_json(req, 413, json!({ "error": "Solicitud demasiado grande" })),
+        };
+        let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+            return respond_json(req, 400, json!({ "error": "JSON inválido" }));
+        };
+        let session = value["session"].as_str().unwrap_or_default();
+        let part = value["part"].as_str().unwrap_or_default();
+        let text = value["text"].as_str().unwrap_or_default();
+        return match speech::ensure_note(app, session, part, text) {
+            Ok(wav) => respond_bytes(req, "audio/wav", wav),
+            Err(e) => respond_json(req, 409, json!({ "error": e })),
+        };
+    }
+    if method == "POST" && path == "/hub/speech/user" {
+        let session = query_param(url, "session").unwrap_or_default();
+        let message = query_param(url, "message").unwrap_or_default();
+        let bytes = match body(&mut req, 30 * 1024 * 1024) {
+            Ok(bytes) => bytes,
+            Err(()) => return respond_json(req, 413, json!({ "error": "Audio demasiado grande" })),
+        };
+        return match speech::save_user_note(app, &session, &message, &bytes) {
+            Ok(meta) => respond_json(req, 200, meta),
+            Err(e) => respond_json(req, 400, json!({ "error": e })),
+        };
+    }
+    if method == "POST" && path.starts_with("/hub/speech/voices/") {
+        let rest = path.trim_start_matches("/hub/speech/voices/");
+        if let Some(id) = rest.strip_suffix("/download") {
+            return match speech::hub_download(app, id) {
+                Ok(status) => respond_json(req, 200, status),
+                Err(e) => respond_json(req, 400, json!({ "error": e })),
+            };
+        }
+        if let Some(id) = rest.strip_suffix("/delete") {
+            return match speech::speech_delete_voice(app.clone(), id.to_string()) {
+                Ok(()) => respond_json(req, 200, speech::status_json(app)),
+                Err(e) => respond_json(req, 400, json!({ "error": e })),
+            };
+        }
     }
     respond_json(req, 404, json!({ "error": "no existe" }))
 }

@@ -14,8 +14,33 @@ export type Part = {
   mime?: string
   url?: string
   filename?: string
+  time?: { start?: number; end?: number }
   state?: { status?: string; title?: string; input?: Record<string, unknown>; attachments?: Array<{ mime?: string; url?: string; filename?: string }> }
 }
+
+export type SpeechVoice = {
+  id: string
+  label: string
+  note: string
+  present: boolean
+  bytes: number
+  totalBytes: number
+  downloading: boolean
+  error: string | null
+}
+
+export type SpeechStatus = {
+  available: boolean
+  ready: boolean
+  enabled: boolean
+  voice: string
+  speed: number
+  defaultVoice: string
+  voicesDir: string | null
+  voices: SpeechVoice[]
+}
+
+export type VoiceNoteMeta = { durationMs: number; bytes: number; at?: number }
 
 export type ModelRef = { providerID: string; modelID: string }
 
@@ -77,6 +102,7 @@ export type HubInfo = {
   errors?: Record<string, string>
   prefs?: DesktopPrefs | null
   voice?: boolean
+  speech?: SpeechStatus
   desktop?: PcStatus
 }
 
@@ -199,6 +225,91 @@ export async function screenshot(window: string | null, max: number): Promise<st
 export async function transcribe(audio: Blob): Promise<string> {
   const res = await request<{ text?: string }>("POST", "/hub/transcribe", audio)
   return (res.text ?? "").trim()
+}
+
+async function requestBlob(method: string, url: string, body?: unknown): Promise<Blob> {
+  const json = body !== undefined && !(body instanceof Blob)
+  let res: Response
+  try {
+    res = await fetch(url, {
+      method,
+      cache: "no-store",
+      headers: {
+        Authorization: authHeader(),
+        ...(json ? { "Content-Type": "application/json" } : body instanceof Blob ? { "Content-Type": body.type || "audio/wav" } : {}),
+      },
+      body: body instanceof Blob ? body : json ? JSON.stringify(body) : undefined,
+    })
+  } catch {
+    throw unreachable()
+  }
+  if (res.status === 401) throw new AuthError("El link venció o es de otra PC. Volvé a escanear el QR desde Flufy.")
+  if (!res.ok) {
+    const text = await res.text()
+    let parsed: ErrorBody | null = null
+    try {
+      parsed = JSON.parse(text) as ErrorBody
+    } catch {
+      parsed = null
+    }
+    throw new Error(parsed?.error ?? parsed?.data?.message ?? parsed?.message ?? (text || res.statusText))
+  }
+  return res.blob()
+}
+
+export function speechStatus(): Promise<SpeechStatus> {
+  return hub<SpeechStatus>("GET", "/speech")
+}
+
+export function speechUpdate(patch: { enabled?: boolean; voice?: string; speed?: number }): Promise<SpeechStatus> {
+  return hub<SpeechStatus>("POST", "/speech", patch)
+}
+
+export function downloadSpeechVoice(id: string): Promise<SpeechStatus> {
+  return hub<SpeechStatus>("POST", `/speech/voices/${encodeURIComponent(id)}/download`)
+}
+
+export function deleteSpeechVoice(id: string): Promise<SpeechStatus> {
+  return hub<SpeechStatus>("POST", `/speech/voices/${encodeURIComponent(id)}/delete`)
+}
+
+export function speechNotes(session: string): Promise<Record<string, VoiceNoteMeta>> {
+  return hub<Record<string, VoiceNoteMeta>>("GET", `/speech/notes?session=${encodeURIComponent(session)}`)
+}
+
+export function speechNoteAudio(session: string, part: string, text?: string): Promise<Blob> {
+  if (text !== undefined) return requestBlob("POST", "/hub/speech/note", { session, part, text })
+  return requestBlob("GET", `/hub/speech/note?session=${encodeURIComponent(session)}&part=${encodeURIComponent(part)}`)
+}
+
+export function speechTest(text?: string): Promise<Blob> {
+  return requestBlob("POST", "/hub/speech/test", text ? { text } : {})
+}
+
+export function uploadUserNote(session: string, message: string, wav: Blob): Promise<VoiceNoteMeta> {
+  return request<VoiceNoteMeta>("POST", `/hub/speech/user?session=${encodeURIComponent(session)}&message=${encodeURIComponent(message)}`, wav)
+}
+
+/** Duración de un WAV leyendo sus chunks, sin decodificarlo entero. */
+export async function wavDurationMs(blob: Blob): Promise<number> {
+  const head = new Uint8Array(await blob.slice(0, 4096).arrayBuffer())
+  const view = new DataView(head.buffer)
+  const text = (at: number) => String.fromCharCode(head[at], head[at + 1], head[at + 2], head[at + 3])
+  if (head.length < 12 || text(0) !== "RIFF" || text(8) !== "WAVE") return 0
+  let offset = 12
+  let rate = 0
+  while (offset + 8 <= head.length) {
+    const id = text(offset)
+    const size = view.getUint32(offset + 4, true)
+    const body = offset + 8
+    if (id === "fmt " && body + 12 <= head.length) rate = view.getUint32(body + 8, true)
+    if (id === "data") {
+      if (!rate) return 0
+      return Math.round((Math.min(size, blob.size - body) * 1000) / rate)
+    }
+    offset = body + size + (size & 1)
+  }
+  return 0
 }
 
 export function errorText(e: unknown): string {

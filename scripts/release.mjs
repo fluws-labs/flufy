@@ -135,6 +135,46 @@ async function whisper() {
   }
 }
 
+async function piper() {
+  if (process.platform !== "win32") throw new Error("El motor de voz Piper es Windows x64")
+  const dir = mkdtempSync(join(tmpdir(), "guillecode-piper-"))
+  try {
+    const response = await fetch(config.piperUrl, { signal: AbortSignal.timeout(10 * 60_000) })
+    if (!response.ok) throw new Error(`Descarga de Piper: HTTP ${response.status}`)
+    const bytes = Buffer.from(await response.arrayBuffer())
+    if (sha256(bytes) !== config.piperSha256) throw new Error("El Piper descargado no coincide con el SHA256 fijado")
+    const archive = join(dir, "piper.zip")
+    const extracted = join(dir, "extracted")
+    writeFileSync(archive, bytes)
+    execFileSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "Import-Module Microsoft.PowerShell.Archive; Expand-Archive -LiteralPath $env:GC_PIPER_ZIP -DestinationPath $env:GC_PIPER_DIR"], {
+      env: { ...process.env, GC_PIPER_ZIP: archive, GC_PIPER_DIR: extracted },
+      stdio: "inherit",
+    })
+    // El zip trae todo dentro de una carpeta piper/; la copiamos tal cual
+    // porque piper.exe resuelve espeak-ng-data y sus DLLs desde su carpeta.
+    const walk = (base) => readdirSync(base, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(join(base, e.name)) : [join(base, e.name)]))
+    const files = walk(extracted)
+    const exe = files.find((f) => f.toLowerCase().endsWith("piper.exe"))
+    if (!exe) throw new Error("El paquete de Piper no trae piper.exe")
+    const source = dirname(exe)
+    if (!readdirSync(source, { withFileTypes: true }).some((e) => e.isDirectory() && e.name === "espeak-ng-data")) {
+      throw new Error("El paquete de Piper no trae espeak-ng-data")
+    }
+    const dest = join(root, "src-tauri/binaries/piper")
+    rmSync(dest, { recursive: true, force: true })
+    mkdirSync(dest, { recursive: true })
+    for (const file of walk(source)) {
+      const relative = file.slice(source.length + 1)
+      const out = join(dest, relative)
+      mkdirSync(dirname(out), { recursive: true })
+      writeFileSync(out, readFileSync(file))
+    }
+    console.log(`Piper ${config.piperVersion}: descargado y SHA256 verificado`)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
 function manifest(bundle = "src-tauri/target/release/bundle/nsis", notesFile = process.env.GC_RELEASE_NOTES_FILE) {
   const version = check()
   if (!notesFile) throw new Error("Indicá el archivo de novedades como segundo argumento o GC_RELEASE_NOTES_FILE")
@@ -195,9 +235,10 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     else if (command === "check") check()
     else if (command === "engine") await engine()
     else if (command === "whisper") await whisper()
+    else if (command === "piper") await piper()
     else if (command === "manifest") manifest(...args)
     else if (command === "prepare") prepare(...args)
     else if (command === "publish") publish(args[0], args.includes("--tested"))
-    else throw new Error("Comandos: version, check, engine, whisper, manifest, prepare, publish")
+    else throw new Error("Comandos: version, check, engine, whisper, piper, manifest, prepare, publish")
   } catch (e) { console.error(e.message); process.exitCode = 1 }
 }

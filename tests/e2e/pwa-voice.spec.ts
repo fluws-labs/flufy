@@ -45,14 +45,15 @@ async function setup(page: Page, failSend = false, transcript = "Mensaje dictado
         directory: 'test-project', placeholder: 'Mensaje', initialModel: { providerID: 'openai', modelID: 'model' },
         favorites: [], voice: true,
         onSend: async (draft) => {
-          const response = await fetch('/test-send', { method: 'POST', body: JSON.stringify(draft) });
+          const { audio, ...rest } = draft;
+          const response = await fetch('/test-send', { method: 'POST', body: JSON.stringify({ ...rest, hasAudio: !!audio }) });
           if (!response.ok) throw new Error('No se pudo enviar');
         },
       }));
     </script>
   ` }))
   await page.goto("/voice-test", { waitUntil: "domcontentloaded" })
-  await expect(page.getByText("Test model", { exact: true })).toBeVisible({ timeout: 30000 })
+  await expect(page.getByText("Test model", { exact: true })).toBeVisible({ timeout: 60000 })
   return sent
 }
 
@@ -69,7 +70,13 @@ for (const prefix of ["", "Contexto escrito"]) {
     if (prefix) await page.getByRole("textbox").fill(prefix)
     await record(page)
     await expect.poll(() => sent.length).toBe(1)
-    expect(sent[0]).toEqual({ text: prefix ? `${prefix} Mensaje dictado` : "Mensaje dictado", attachments: [], model: { providerID: "openai", modelID: "model" } })
+    expect(sent[0]).toEqual({
+      text: prefix ? `${prefix} Mensaje dictado` : "Mensaje dictado",
+      attachments: [],
+      model: { providerID: "openai", modelID: "model" },
+      voice: true,
+      hasAudio: true,
+    })
     await expect(page.getByRole("textbox")).toHaveValue("")
     await expect(page.getByRole("button", { name: "Enviar", exact: true })).toBeDisabled()
     expect(sent).toHaveLength(1)

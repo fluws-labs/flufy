@@ -34,6 +34,8 @@ export type RecorderOptions = {
   key?: string
   /** Recibe el audio ya convertido a WAV y devuelve el texto. */
   transcribe: (wav: Blob) => Promise<string>
+  /** Audio original convertido a WAV; se usa para mostrarlo como nota de voz. */
+  onAudio?: (wav: Blob) => void | Promise<void>
   onText: (text: string, transcribedAt: number) => void | Promise<void>
   onError: (message: string) => void
   unsupportedHint: string
@@ -41,17 +43,17 @@ export type RecorderOptions = {
   maxMs?: number
 }
 
-export function useVoiceRecorder({ key, transcribe, onText, onError, unsupportedHint, tooShortHint, maxMs = DEFAULT_MAX_MS }: RecorderOptions) {
+export function useVoiceRecorder({ key, transcribe, onAudio, onText, onError, unsupportedHint, tooShortHint, maxMs = DEFAULT_MAX_MS }: RecorderOptions) {
   const [state, setState] = useState<RecorderState>({ status: "idle" })
   const active = useRef<Active | null>(null)
-  const handlers = useRef<RecorderOptions>({ key, transcribe, onText, onError, unsupportedHint, tooShortHint })
+  const handlers = useRef<RecorderOptions>({ key, transcribe, onAudio, onText, onError, unsupportedHint, tooShortHint })
   const processing = useRef<Promise<void> | null>(null)
   const opening = useRef<Promise<void> | null>(null)
   const generation = useRef(0)
   const stopRef = useRef<() => Promise<void>>(async () => undefined)
 
   useEffect(() => {
-    handlers.current = { key, transcribe, onText, onError, unsupportedHint, tooShortHint }
+    handlers.current = { key, transcribe, onAudio, onText, onError, unsupportedHint, tooShortHint }
   })
 
   useEffect(
@@ -81,6 +83,8 @@ export function useVoiceRecorder({ key, transcribe, onText, onError, unsupported
         }
         setState({ status: "transcribing" })
         const wav = await toWav(blob)
+        if (token !== generation.current) return
+        await captured.onAudio?.(wav)
         const text = await captured.transcribe(wav)
         if (token !== generation.current) return
         // Preserve edits made during recording in the same composer, but never
