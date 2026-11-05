@@ -92,15 +92,18 @@ export function VoiceNote({
     stop()
     const playback = playbackToken()
     const known = [...durations]
+    let played = 0
     for (let i = 0; i < totalSegments; i++) {
       if (run.current !== token || playbackToken() !== playback) return
       let audio: Blob
       try {
-        audio = await speechSegmentAudio(session, part, i)
-      } catch (e) {
-        const fallback = items[i] ?? text
-        if (!fallback) throw e
-        audio = await speechSegmentAudio(session, part, i, fallback)
+        // Con el texto se valida el hash: si la respuesta se regeneró, no se
+        // reproduce el audio viejo. Los índices sin texto (streaming) se piden
+        // por GET.
+        audio = i < items.length ? await speechSegmentAudio(session, part, i, items[i]) : await speechSegmentAudio(session, part, i)
+      } catch {
+        // Un segmento de solo código no tiene audio; el resto sigue.
+        continue
       }
       if (run.current !== token || playbackToken() !== playback) return
       const ms = await wavDurationMs(audio)
@@ -110,7 +113,9 @@ export function VoiceNote({
         setCount((current) => Math.max(current, i + 1))
       }
       enqueue(`${key}:${i}`, audio)
+      played += 1
     }
+    if (!played) throw new Error("Este bloque no tiene texto para leer")
   }
 
   const toggle = async () => {
