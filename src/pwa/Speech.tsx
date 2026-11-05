@@ -6,6 +6,7 @@ import {
   speechStatus,
   speechTest,
   speechUpdate,
+  warmSpeech,
   type SpeechStatus,
 } from "./api"
 import { Icon, Sheet, usePoll } from "./ui"
@@ -98,7 +99,7 @@ export function SpeechPanel({
   return (
     <Sheet title="Voz de las respuestas" onClose={onClose}>
       <p className="speech-intro">
-        El agente te contesta con audios que se generan en tu PC y se reproducen solos al llegar. Podés volver a escucharlos tocando la burbuja.
+        El modo voz se activa por conversación con el botón de voz, o al enviar un audio. En esas conversaciones el agente contesta con audios que se generan en tu PC; el resto sigue siendo chat de texto.
       </p>
       {!status ? (
         <div className="loading">
@@ -110,8 +111,8 @@ export function SpeechPanel({
         <>
           <div className="speech-row">
             <span className="card-text">
-              <strong>Responder con audio</strong>
-              <small>{status.ready ? "Listo: hay una voz descargada" : "Elegí y descargá una voz para empezar"}</small>
+              <strong>Motor de voz</strong>
+              <small>{status.ready ? "Listo para el modo voz de cada conversación" : "Elegí y descargá una voz para empezar"}</small>
             </span>
             <button
               type="button"
@@ -125,9 +126,29 @@ export function SpeechPanel({
           <div className="speech-row">
             <span className="card-text">
               <strong>Reproducir solo</strong>
-              <small>Cuando llega una respuesta nueva</small>
+              <small>Cuando llega una respuesta nueva en modo voz</small>
             </span>
             <button type="button" className={`switch${auto ? " on" : ""}`} aria-pressed={auto} onClick={() => onAuto(!auto)}>
+              <span />
+            </button>
+          </div>
+          <div className="speech-row">
+            <span className="card-text">
+              <strong>Motor persistente</strong>
+              <small>{status.worker ? (status.workerRunning ? "Caliente: menos demora" : "Se está preparando") : "Apagado: usa menos RAM"}</small>
+            </span>
+            <button
+              type="button"
+              className={`switch${status.worker ? " on" : ""}`}
+              aria-pressed={status.worker}
+              onClick={() =>
+                void run("worker", async () => {
+                  const next = await speechUpdate({ worker: !status.worker })
+                  if (next.worker) void warmSpeech().catch(() => undefined)
+                  return next
+                })
+              }
+            >
               <span />
             </button>
           </div>

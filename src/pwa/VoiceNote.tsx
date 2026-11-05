@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from "react"
-import { speechNoteAudio, wavDurationMs, type VoiceNoteMeta } from "./api"
+import { useEffect, useMemo, useRef, useState } from "react"
+import { speechNoteAudio, speechSegmentAudio, wavDurationMs, type VoiceNoteMeta } from "./api"
+import { splitForSpeech } from "./stream-speech"
 import { Icon } from "./ui"
-import { playNow, primeAudio, stop, useVoicePlayer } from "./voice-player"
+import { enqueue, playbackToken, playNow, primeAudio, stop, useVoicePlayer } from "./voice-player"
 
 function clock(ms: number): string {
   const seconds = Math.max(0, Math.round(ms / 1000))
@@ -24,7 +25,6 @@ export function VoiceNote({
   mine = false,
   meta,
   enabled,
-  onMeta,
 }: {
   session: string
   part: string
@@ -32,62 +32,109 @@ export function VoiceNote({
   mine?: boolean
   meta?: VoiceNoteMeta
   enabled: boolean
-  onMeta?: (part: string, durationMs: number) => void
 }) {
   const player = useVoicePlayer()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [duration, setDuration] = useState(meta?.durationMs ?? 0)
+  const [durations, setDurations] = useState<number[]>(meta?.durations ?? [])
+  const [count, setCount] = useState(meta?.segments ?? 0)
+  const run = useRef(0)
   const key = `${session}:${part}`
-  const current = player.key === key
-  const playing = current && player.playing
-  const loading = busy || player.loadingKey === key
-  const progress = current && player.durationMs > 0 ? Math.min(1, player.positionMs / player.durationMs) : 0
+  const prefix = `${key}:`
+  const playingKey = player.key ? (mine ? (player.key === key ? key : null) : player.key.startsWith(prefix) ? player.key : null) : null
+  const playing = !!playingKey
+  const index = !mine && playingKey ? Number(playingKey.slice(prefix.length)) : -1
+  const total = mine ? (meta?.durationMs ?? player.durationMs) : durations.reduce((sum, value) => sum + (value || 0), 0)
+  const position = mine
+    ? playing
+      ? player.positionMs
+      : 0
+    : index >= 0
+      ? durations.slice(0, index).reduce((sum, value) => sum + (value || 0), 0) + Math.min(player.positionMs, durations[index] ?? player.durationMs)
+      : 0
+  const progress = total > 0 ? Math.min(1, position / total) : 0
+  const loading = busy || (mine ? player.loadingKey === key : !!player.loadingKey?.startsWith(prefix))
   const bars = useMemo(() => barsFor(part), [part])
 
   useEffect(() => {
-    setDuration(meta?.durationMs ?? 0)
-  }, [meta?.durationMs])
+    if (!mine && meta) {
+      setDurations(meta.durations ?? [])
+      setCount(meta.segments ?? 0)
+    }
+  }, [mine, meta?.segments, meta?.durations])
+
+  useEffect(() => {
+    return () => {
+      run.current += 1
+    }
+  }, [])
 
   if (!mine && !meta && !enabled) return null
   if (!mine && !meta && !text?.trim()) return null
 
-  const load = async (): Promise<Blob> => {
-    if (meta || mine) {
-      try {
-        return await speechNoteAudio(session, part)
-      } catch (e) {
-        if (mine || !text?.trim()) throw e
-      }
+  const playUserNote = async (token: number) => {
+    const audio = await speechNoteAudio(session, part)
+    if (run.current !== token) return
+    const ms = await wavDurationMs(audio)
+    if (ms > 0 && meta) {
+      setDurations([ms])
+      setCount(1)
     }
-    return speechNoteAudio(session, part, text)
+    await playNow(key, audio)
+  }
+
+  const playSegments = async (token: number) => {
+    const items = splitForSpeech(text ?? "")
+    const totalSegments = Math.max(count, items.length)
+    if (!totalSegments) throw new Error("Este bloque no tiene texto para leer")
+    // Se corta lo que estuviera sonando y se reconstruye la respuesta completa
+    // segmento por segmento, reutilizando lo que ya está sintetizado.
+    stop()
+    const playback = playbackToken()
+    const known = [...durations]
+    for (let i = 0; i < totalSegments; i++) {
+      if (run.current !== token || playbackToken() !== playback) return
+      let audio: Blob
+      try {
+        audio = await speechSegmentAudio(session, part, i)
+      } catch (e) {
+        const fallback = items[i] ?? text
+        if (!fallback) throw e
+        audio = await speechSegmentAudio(session, part, i, fallback)
+      }
+      if (run.current !== token || playbackToken() !== playback) return
+      const ms = await wavDurationMs(audio)
+      if (ms > 0) {
+        known[i] = ms
+        setDurations([...known])
+        setCount((current) => Math.max(current, i + 1))
+      }
+      enqueue(`${key}:${i}`, audio)
+    }
   }
 
   const toggle = async () => {
     primeAudio()
     if (playing) {
+      run.current += 1
       stop()
       return
     }
+    const token = ++run.current
     setBusy(true)
     setError(null)
     try {
-      const audio = await load()
-      const ms = await wavDurationMs(audio)
-      if (ms > 0) {
-        setDuration(ms)
-        onMeta?.(part, ms)
-      }
-      await playNow(key, audio)
+      if (mine) await playUserNote(token)
+      else await playSegments(token)
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      if (run.current === token) setError(e instanceof Error ? e.message : String(e))
     } finally {
-      setBusy(false)
+      if (run.current === token) setBusy(false)
     }
   }
 
   return (
-    <div className={`voice-note${mine ? " mine" : ""}${current ? " playing" : ""}`}>
+    <div className={`voice-note${mine ? " mine" : ""}${playing ? " playing" : ""}`}>
       <button type="button" className="vn-play" onClick={() => void toggle()} disabled={loading} aria-label={playing ? "Detener audio" : "Reproducir audio"}>
         <Icon name={loading ? "loading" : playing ? "stop" : "play"} spin={loading} />
       </button>
@@ -96,7 +143,7 @@ export function VoiceNote({
           <span key={i} className={`vn-bar${(i + 1) / bars.length <= progress ? " on" : ""}`} style={{ height: `${height}%` }} />
         ))}
       </button>
-      <span className="vn-time">{clock(playing ? player.positionMs : duration)}</span>
+      <span className="vn-time">{clock(playing ? position : total)}</span>
       {error && (
         <span className="vn-error" title={error}>
           <Icon name="warning" />

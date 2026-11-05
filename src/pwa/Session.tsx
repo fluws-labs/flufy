@@ -17,11 +17,12 @@ import {
   type SpeechStatus,
   type VoiceNoteMeta,
 } from "./api"
-import { loadMemory, setMemory as setMemoryRemote, speechNoteAudio, speechNotes, speechStatus, speechUpdate, uploadUserNote, wavDurationMs, type MemoryState } from "./api"
+import { loadMemory, setMemory as setMemoryRemote, speechNotes, speechSegmentAudio, speechStatus, speechUpdate, uploadUserNote, warmSpeech, wavDurationMs, type MemoryState } from "./api"
 import { Composer, promptBody, type Draft } from "./Composer"
 import { SpeechPanel } from "./Speech"
+import { SpeechStream } from "./stream-speech"
 import { VoiceNote } from "./VoiceNote"
-import { enqueue } from "./voice-player"
+import { enqueue, stop as stopAudio } from "./voice-player"
 import { pipOpen, ScreenPip, setPipOpen } from "./ScreenPip"
 import { QuotaBar, type QuotaBarHandle } from "./Quota"
 import type { Route } from "./Home"
@@ -32,6 +33,18 @@ import { isDesktopContextText, isInternalScreenshot } from "../lib/internal-cont
 
 const PAGE = 60
 const STICK_PX = 160
+
+function voiceModeKey(session: string): string {
+  return `flufy.voice.mode.${session}`
+}
+
+function storedVoiceMode(session: string): boolean {
+  try {
+    return localStorage.getItem(voiceModeKey(session)) === "on"
+  } catch {
+    return false
+  }
+}
 
 function promptID(prefix: "msg" | "prt"): string {
   const time = (BigInt(Date.now()) << 12n).toString(16).padStart(12, "0")
@@ -222,7 +235,6 @@ type VoiceView = {
   session: string
   enabled: boolean
   notes: Record<string, VoiceNoteMeta>
-  onMeta: (part: string, durationMs: number) => void
 }
 
 function renderParts(parts: Part[], live: boolean, voice: VoiceView): ReactNode[] {
@@ -244,7 +256,7 @@ function renderParts(parts: Part[], live: boolean, voice: VoiceView): ReactNode[
       if (p.type === "text" && p.text?.trim()) {
         nodes.push(
           <div key={`note-${p.id}`} className="msg-text">
-            <VoiceNote session={voice.session} part={p.id} text={p.text} meta={voice.notes[p.id]} enabled={voice.enabled} onMeta={voice.onMeta} />
+            <VoiceNote session={voice.session} part={p.id} text={p.text} meta={voice.notes[p.id]} enabled={voice.enabled} />
           </div>,
         )
         nodes.push(<div key={p.id} className="msg-text"><Md text={p.text} /></div>)
@@ -267,9 +279,7 @@ function MessageView({ message, live, voice }: { message: Message; live: boolean
     const note = voice.notes[`${message.info.id}.user`]
     return (
       <div className="bubble user">
-        {note && (
-          <VoiceNote session={voice.session} part={`${message.info.id}.user`} mine meta={note} enabled={voice.enabled} onMeta={voice.onMeta} />
-        )}
+        {note && <VoiceNote session={voice.session} part={`${message.info.id}.user`} mine meta={note} enabled={voice.enabled} />}
         <Files parts={files} />
         {text}
       </div>
@@ -369,6 +379,7 @@ export function SessionScreen({ route, back }: { route: Extract<Route, { kind: "
   const [speech, setSpeech] = useState<SpeechStatus | null>(null)
   const [notes, setNotes] = useState<Record<string, VoiceNoteMeta>>({})
   const [speechOpen, setSpeechOpen] = useState(false)
+  const [voiceMode, setVoiceMode] = useState(() => storedVoiceMode(route.id))
   const [auto, setAuto] = useState(() => {
     try {
       return localStorage.getItem("flufy.voice.auto") !== "off"
@@ -377,8 +388,12 @@ export function SessionScreen({ route, back }: { route: Extract<Route, { kind: "
     }
   })
   const roles = useRef(new Map<string, string>())
-  const autoPlayed = useRef(new Set<string>())
+  const partTypes = useRef(new Map<string, string>())
+  const streams = useRef(new Map<string, SpeechStream>())
+  const streamed = useRef(new Set<string>())
+  const streamQueues = useRef(new Map<string, Promise<void>>())
   const speechRef = useRef<SpeechStatus | null>(null)
+  const voiceModeRef = useRef(voiceMode)
   const autoRef = useRef(auto)
   const stick = useRef(true)
   const first = useRef(true)
@@ -403,8 +418,25 @@ export function SessionScreen({ route, back }: { route: Extract<Route, { kind: "
   }, [speech])
 
   useEffect(() => {
+    voiceModeRef.current = voiceMode
+  }, [voiceMode])
+
+  useEffect(() => {
     autoRef.current = auto
   }, [auto])
+
+  const changeVoiceMode = useCallback(
+    (next: boolean) => {
+      setVoiceMode(next)
+      voiceModeRef.current = next
+      try {
+        localStorage.setItem(voiceModeKey(route.id), next ? "on" : "off")
+      } catch {
+        /* almacenamiento bloqueado */
+      }
+    },
+    [route.id],
+  )
 
   useEffect(() => {
     speechStatus()
@@ -412,6 +444,10 @@ export function SessionScreen({ route, back }: { route: Extract<Route, { kind: "
       .catch(() => undefined)
     refreshNotes()
   }, [refreshNotes])
+
+  useEffect(() => {
+    if (speech?.worker && speech.ready) void warmSpeech().catch(() => undefined)
+  }, [speech?.worker, speech?.ready])
 
   const changeAuto = (next: boolean) => {
     setAuto(next)
@@ -422,31 +458,98 @@ export function SessionScreen({ route, back }: { route: Extract<Route, { kind: "
     }
   }
 
-  const noteMeta = useCallback((part: string, durationMs: number) => {
-    setNotes((prev) => (prev[part]?.durationMs === durationMs ? prev : { ...prev, [part]: { ...(prev[part] ?? { bytes: 0 }), durationMs } }))
+  const speechOn = useCallback(() => {
+    const status = speechRef.current
+    return !!status?.enabled && status.ready && autoRef.current && voiceModeRef.current
   }, [])
 
-  const speakPart = useCallback(
-    (part: Part) => {
-      const status = speechRef.current
-      if (!status?.enabled || !status.ready || !autoRef.current) return
-      if (part.type !== "text" || part.synthetic || !part.text?.trim() || !part.time?.end) return
-      if (isDesktopContextText(part.text)) return
-      const role = roles.current.get(part.messageID ?? "")
-      if (role === "user" || (!role && pending.current.has(part.messageID ?? ""))) return
-      const key = `${route.id}:${part.id}`
-      if (autoPlayed.current.has(key)) return
-      autoPlayed.current.add(key)
-      void speechNoteAudio(route.id, part.id, part.text)
-        .then(async (audio) => {
+  const enqueueSegment = useCallback(
+    (part: string, index: number, text: string) => {
+      const key = `${route.id}:${part}:${index}`
+      const previous = streamQueues.current.get(part) ?? Promise.resolve()
+      const next = previous
+        .then(async () => {
+          const audio = await speechSegmentAudio(route.id, part, index, text)
           const durationMs = await wavDurationMs(audio)
-          if (durationMs > 0) noteMeta(part.id, durationMs)
+          if (durationMs > 0) {
+            setNotes((prev) => {
+              const current = prev[part] ?? { durationMs: 0, bytes: 0, segments: 0, durations: [] }
+              const durations = [...(current.durations ?? [])]
+              if (durations[index] !== undefined) return prev
+              durations[index] = durationMs
+              return {
+                ...prev,
+                [part]: {
+                  ...current,
+                  durations,
+                  segments: Math.max(current.segments ?? 0, index + 1),
+                  durationMs: durations.reduce((total, value) => total + (value ?? 0), 0),
+                },
+              }
+            })
+          }
           enqueue(key, audio)
         })
-        .catch(() => autoPlayed.current.delete(key))
+        .catch(() => undefined)
+      streamQueues.current.set(part, next)
     },
-    [noteMeta, route.id],
+    [route.id],
   )
+
+  const startStream = useCallback(
+    (part: string) => {
+      const existing = streams.current.get(part)
+      if (existing) return existing
+      const stream = new SpeechStream((segment) => enqueueSegment(part, segment.index, segment.text))
+      streams.current.set(part, stream)
+      streamed.current.add(part)
+      return stream
+    },
+    [enqueueSegment],
+  )
+
+  const speakDelta = useCallback(
+    (part: string, delta: string) => {
+      if (!speechOn() || partTypes.current.get(part) !== "text") return
+      startStream(part).push(delta)
+    },
+    [speechOn, startStream],
+  )
+
+  const flushStream = useCallback(
+    (part: string, text?: string) => {
+      const existing = streams.current.get(part)
+      if (existing) {
+        existing.flush()
+        streams.current.delete(part)
+        return
+      }
+      // El proveedor puede mandar solo el bloque final sin deltas: se divide
+      // acá para no perder el audio de ese turno.
+      if (!speechOn() || streamed.current.has(part) || !text?.trim()) return
+      const stream = startStream(part)
+      stream.push(text)
+      stream.flush()
+      streams.current.delete(part)
+    },
+    [speechOn, startStream],
+  )
+
+  const stopSpeech = useCallback(() => {
+    stopAudio()
+    for (const stream of streams.current.values()) stream.stop()
+    streams.current.clear()
+    streamQueues.current.clear()
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      for (const stream of streams.current.values()) stream.stop()
+      streams.current.clear()
+      streamed.current.clear()
+      streamQueues.current.clear()
+    }
+  }, [route.id])
 
   const load = useCallback(async (): Promise<void> => {
     if (loading.current) {
@@ -468,7 +571,10 @@ export function SessionScreen({ route, back }: { route: Extract<Route, { kind: "
       const ids = new Set((kids ?? []).map((k) => k.id))
       setChildren(ids)
       const snapshot = msgs ?? []
-      for (const message of snapshot) roles.current.set(message.info.id, message.info.role)
+      for (const message of snapshot) {
+        roles.current.set(message.info.id, message.info.role)
+        for (const part of message.parts) partTypes.current.set(part.id, part.type)
+      }
       const fetched = new Set(snapshot.map((m) => m.info.id))
       for (const id of fetched) pending.current.delete(id)
       // A slow refresh must not erase a newer SSE update or an accepted prompt
@@ -510,7 +616,12 @@ export function SessionScreen({ route, back }: { route: Extract<Route, { kind: "
 
   const onEvent = useCallback(
     (e: LiveEvent) => {
-      if (e.type === "resync") return void load()
+      if (e.type === "resync") {
+        for (const stream of streams.current.values()) stream.stop()
+        streams.current.clear()
+        streamQueues.current.clear()
+        return void load()
+      }
       const p = (e.properties ?? {}) as Record<string, unknown>
       if (e.type.startsWith("message.")) {
         const msg = p.info as MessageInfo | undefined
@@ -534,14 +645,23 @@ export function SessionScreen({ route, back }: { route: Extract<Route, { kind: "
         case "message.part.updated": {
           const part = p.part as Part
           if (part.sessionID === route.id) {
+            partTypes.current.set(part.id, part.type)
             setMessages((prev) => upsertPart(prev, part))
-            speakPart(part)
+            if (part.type === "text" && part.time?.end) flushStream(part.id, part.text)
           }
           break
         }
         case "message.part.delta": {
           const d = p as Record<string, string>
-          if (d.sessionID === route.id) setMessages((prev) => appendDelta(prev, d.messageID, d.partID, d.field, d.delta))
+          if (d.sessionID === route.id) {
+            setMessages((prev) => appendDelta(prev, d.messageID, d.partID, d.field, d.delta))
+            if (d.field === "text" && d.partID) {
+              const role = roles.current.get(d.messageID ?? "")
+              if (role !== "user" && !(!role && pending.current.has(d.messageID ?? ""))) {
+                speakDelta(d.partID, d.delta)
+              }
+            }
+          }
           break
         }
         case "message.part.removed":
@@ -559,6 +679,9 @@ export function SessionScreen({ route, back }: { route: Extract<Route, { kind: "
             statusRevision.current += 1
             setBusy(false)
             quotaBar.current?.refreshSoon()
+            for (const stream of streams.current.values()) stream.flush()
+            streams.current.clear()
+            streamQueues.current.clear()
             void refreshNotes()
           }
           break
@@ -592,7 +715,7 @@ export function SessionScreen({ route, back }: { route: Extract<Route, { kind: "
         }
       }
     },
-    [load, mine, refreshNotes, route.id, speakPart],
+    [flushStream, load, mine, refreshNotes, route.id, speakDelta],
   )
 
   const live = useLive(route.id, onEvent, () => void load())
@@ -637,7 +760,9 @@ export function SessionScreen({ route, back }: { route: Extract<Route, { kind: "
   const initialModel = lastModel ?? info?.prefs?.model ?? null
 
   const send = async (draft: Draft) => {
-    const body = promptBody(draft, info?.prefs, lastUser?.info.agent ?? info?.prefs?.agent)
+    if (draft.audio && !voiceModeRef.current) changeVoiceMode(true)
+    const withVoice = { ...draft, voice: voiceModeRef.current || !!draft.audio }
+    const body = promptBody(withVoice, info?.prefs, lastUser?.info.agent ?? info?.prefs?.agent)
     const id = promptID("msg")
     const parts = body.parts.map((p) => ({ ...p, id: promptID("prt"), messageID: id, sessionID: route.id })) as Part[]
     const message: Message = { info: { id, sessionID: route.id, role: "user", time: { created: Date.now() }, agent: body.agent, model: draft.model ?? undefined }, parts }
@@ -678,24 +803,30 @@ export function SessionScreen({ route, back }: { route: Extract<Route, { kind: "
           <strong>{title || "Sesión"}</strong>
           <small>
             {projectName(route.project)} · {busy ? "trabajando…" : "en espera"}
+            {voiceMode ? " · modo voz" : ""}
           </small>
         </div>
         <QuotaBar ref={quotaBar} provider={initialModel?.providerID ?? ""} />
         <button
           type="button"
-          className={`icon-btn${speech?.enabled ? " active" : ""}`}
+          className={`icon-btn${voiceMode && speech?.ready ? " active" : ""}`}
+          title={voiceMode ? "Salir del modo voz" : "Modo voz: responder con audio"}
           onClick={() => {
             if (!speech?.ready) {
               setSpeechOpen(true)
               return
             }
-            void speechUpdate({ enabled: !speech.enabled })
-              .then(setSpeech)
-              .catch(() => setSpeechOpen(true))
+            if (!voiceMode && !speech.enabled) {
+              void speechUpdate({ enabled: true })
+                .then(setSpeech)
+                .catch(() => setSpeechOpen(true))
+            }
+            if (voiceMode) stopSpeech()
+            changeVoiceMode(!voiceMode)
           }}
-          aria-label={speech?.enabled ? "Silenciar respuestas habladas" : "Activar respuestas habladas"}
+          aria-label={voiceMode ? "Salir del modo voz" : "Activar modo voz en esta conversación"}
         >
-          <Icon name={speech?.enabled ? "unmute" : "mute"} />
+          <Icon name={voiceMode && speech?.ready ? "unmute" : "mute"} />
         </button>
         <button
           type="button"
@@ -729,7 +860,7 @@ export function SessionScreen({ route, back }: { route: Extract<Route, { kind: "
             key={m.info.id}
             message={m}
             live={busy && i === messages.length - 1}
-            voice={{ session: route.id, enabled: !!(speech?.enabled && speech.ready), notes, onMeta: noteMeta }}
+            voice={{ session: route.id, enabled: !!(voiceMode && speech?.enabled && speech.ready), notes }}
           />
         ))}
         {busy && (
@@ -752,7 +883,7 @@ export function SessionScreen({ route, back }: { route: Extract<Route, { kind: "
       <footer className="composer-fixed">
         <Composer
           directory={route.project}
-          placeholder={busy ? "Queda en cola hasta que termine" : "Respondele al agente"}
+          placeholder={busy ? "Queda en cola hasta que termine" : voiceMode ? "Modo voz: te respondo con audio" : "Respondele al agente"}
           initialModel={initialModel}
           favorites={info?.prefs?.favorites ?? []}
           zenFreeOnly={info?.prefs?.zenFreeOnly ?? false}

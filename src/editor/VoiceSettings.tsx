@@ -11,7 +11,18 @@ type ModelView = { size: string; present: boolean; bytes: number; totalBytes: nu
 type WhisperView = { available: boolean; running: boolean; port: number | null; defaultSize: string; modelsDir: string | null; models: ModelView[] }
 
 type SpeechVoice = { id: string; label: string; note: string; present: boolean; bytes: number; totalBytes: number; downloading: boolean; error: string | null }
-type SpeechView = { available: boolean; ready: boolean; enabled: boolean; voice: string; speed: number; defaultVoice: string; voicesDir: string | null; voices: SpeechVoice[] }
+type SpeechView = {
+  available: boolean
+  ready: boolean
+  enabled: boolean
+  voice: string
+  speed: number
+  defaultVoice: string
+  voicesDir: string | null
+  worker: boolean
+  workerRunning: boolean
+  voices: SpeechVoice[]
+}
 
 type Provider = "openai" | "groq" | "custom" | "local"
 
@@ -55,6 +66,7 @@ export function VoiceSettings() {
   const [speechVoice, setSpeechVoice] = useState("")
   const [speechSpeed, setSpeechSpeed] = useState(1)
   const [speechEnabled, setSpeechEnabled] = useState(true)
+  const [speechWorker, setSpeechWorker] = useState(false)
   const [speechBusy, setSpeechBusy] = useState<string | null>(null)
 
   const refreshWhisper = () => {
@@ -70,6 +82,7 @@ export function VoiceSettings() {
         setSpeechVoice(view.voice)
         setSpeechSpeed(view.speed)
         setSpeechEnabled(view.enabled)
+        setSpeechWorker(view.worker)
       })
       .catch(() => setSpeech(null))
   }
@@ -168,7 +181,7 @@ export function VoiceSettings() {
     try {
       const view = await persist()
       if (speech) {
-        const next = await call<SpeechView>("speech_set", { enabled: speechEnabled, voice: speechVoice, speed: speechSpeed })
+        const next = await call<SpeechView>("speech_set", { enabled: speechEnabled, voice: speechVoice, speed: speechSpeed, worker: speechWorker })
         setSpeech(next)
       }
       notify.info("Voz configurada", view.ready ? "El micrófono ya está disponible en el celular y en la app." : "Falta completar la configuración.")
@@ -222,7 +235,7 @@ export function VoiceSettings() {
     setSpeechBusy(id)
     try {
       await call("speech_download_voice", { id })
-      const next = await call<SpeechView>("speech_set", { enabled: speechEnabled, voice: id, speed: speechSpeed })
+      const next = await call<SpeechView>("speech_set", { enabled: speechEnabled, voice: id, speed: speechSpeed, worker: speechWorker })
       setSpeech(next)
       setSpeechVoice(id)
     } catch (e) {
@@ -247,7 +260,7 @@ export function VoiceSettings() {
   const testSpeech = async () => {
     setSpeechBusy("test")
     try {
-      await call<SpeechView>("speech_set", { enabled: speechEnabled, voice: speechVoice, speed: speechSpeed }).then(setSpeech)
+      await call<SpeechView>("speech_set", { enabled: speechEnabled, voice: speechVoice, speed: speechSpeed, worker: speechWorker }).then(setSpeech)
       const encoded = await call<string>("speech_test", { text: "Hola, soy Flufy. Así te voy a responder cuando me hables." })
       const binary = atob(encoded)
       const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0))
@@ -463,6 +476,14 @@ export function VoiceSettings() {
                   onChange={(e) => setSpeechSpeed(Number(e.target.value))}
                 />
                 <small className="muted">{speechSpeed.toFixed(2)}×</small>
+              </div>
+              <span className="voice-label">Motor</span>
+              <div className="voice-model">
+                <label className="speech-check">
+                  <input type="checkbox" checked={speechWorker} onChange={(e) => setSpeechWorker(e.target.checked)} />
+                  Persistente (más rápido, usa más RAM)
+                </label>
+                <small className="muted">{speech.workerRunning ? "Caliente" : "Apagado"}</small>
               </div>
             </div>
             <div className="form-row">

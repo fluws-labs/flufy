@@ -464,6 +464,36 @@ fn speech_api(app: &AppHandle, mut req: Request, method: &str, path: &str, url: 
             Err(e) => respond_json(req, 409, json!({ "error": e })),
         };
     }
+    if method == "POST" && path == "/hub/speech/warm" {
+        speech::warm(app);
+        return respond_json(req, 200, speech::status_json(app));
+    }
+    if method == "GET" && path == "/hub/speech/segment" {
+        let session = query_param(url, "session").unwrap_or_default();
+        let part = query_param(url, "part").unwrap_or_default();
+        let index = query_param(url, "index").and_then(|i| i.parse::<u32>().ok()).unwrap_or(0);
+        return match speech::read_segment(app, &session, &part, index) {
+            Ok(wav) => respond_bytes(req, "audio/wav", wav),
+            Err(e) => respond_json(req, 404, json!({ "error": e })),
+        };
+    }
+    if method == "POST" && path == "/hub/speech/segment" {
+        let bytes = match body(&mut req, 256 * 1024) {
+            Ok(bytes) => bytes,
+            Err(()) => return respond_json(req, 413, json!({ "error": "Solicitud demasiado grande" })),
+        };
+        let Ok(value) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+            return respond_json(req, 400, json!({ "error": "JSON inválido" }));
+        };
+        let session = value["session"].as_str().unwrap_or_default();
+        let part = value["part"].as_str().unwrap_or_default();
+        let index = value["index"].as_u64().unwrap_or(0) as u32;
+        let text = value["text"].as_str().unwrap_or_default();
+        return match speech::ensure_segment(app, session, part, index, text) {
+            Ok(wav) => respond_bytes(req, "audio/wav", wav),
+            Err(e) => respond_json(req, 409, json!({ "error": e })),
+        };
+    }
     if method == "GET" && path == "/hub/speech/notes" {
         let session = query_param(url, "session").unwrap_or_default();
         if !session.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') || session.is_empty() {

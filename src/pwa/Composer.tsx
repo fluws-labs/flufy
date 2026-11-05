@@ -18,7 +18,7 @@ const PICKER_LIMIT = 80
 
 /** Instrucción que viaja con cada audio y no se muestra en la conversación. */
 export const VOICE_PROMPT =
-  "[Modo voz] La persona te habla desde el celular y va a escuchar tu respuesta como un audio, no como texto. Respondé en 1 a 3 frases cortas y naturales, sin markdown, sin listas, sin bloques de código y sin leer rutas ni comandos. Si hace falta código o detalle técnico, dejalo en el texto pero no lo narres. Cuando delegues trabajo a un subagente, decí en una frase qué delegaste y que le vas a avisar cuando termine; al recibir el resultado, contalo en una frase. El audio tiene que sonar como una conversación."
+  "[Modo voz] La persona te habla desde el celular y va a escuchar tu respuesta como audio, frase por frase, mientras la generás. Respondé en el idioma en que te habla. Empezá con una frase corta y concreta (qué vas a hacer o el resultado) y seguí con frases cortas y naturales, sin markdown, sin listas y sin leer código, rutas ni comandos. Hablá toda la prosa de la respuesta: no resumas ni digas que el resto quedó en pantalla. El código, las tablas y los datos técnicos podés mostrarlos en texto, pero no los leas. Cuando delegues trabajo a un subagente, decí en una frase qué delegaste y que le vas a avisar cuando termine; al recibir el resultado, contalo en una frase."
 
 export function loadModels(directory: string, zenFreeOnly = false): Promise<ModelInfo[]> {
   return oc<{ providers?: Array<{ id: string; name: string; source?: string; options?: { apiKey?: unknown }; models?: Record<string, { id: string; name?: string; capabilities?: { input?: { image?: boolean } }; cost?: { input?: number; output?: number } }> }> }>(

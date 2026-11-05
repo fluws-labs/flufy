@@ -37,10 +37,20 @@ export type SpeechStatus = {
   speed: number
   defaultVoice: string
   voicesDir: string | null
+  worker: boolean
+  workerRunning: boolean
   voices: SpeechVoice[]
 }
 
-export type VoiceNoteMeta = { durationMs: number; bytes: number; at?: number }
+export type VoiceNoteMeta = {
+  durationMs: number
+  bytes: number
+  at?: number
+  /** Cantidad de segmentos de una respuesta (las notas del usuario tienen 1). */
+  segments?: number
+  /** Duración de cada segmento, en milisegundos. */
+  durations?: number[]
+}
 
 export type ModelRef = { providerID: string; modelID: string }
 
@@ -261,8 +271,12 @@ export function speechStatus(): Promise<SpeechStatus> {
   return hub<SpeechStatus>("GET", "/speech")
 }
 
-export function speechUpdate(patch: { enabled?: boolean; voice?: string; speed?: number }): Promise<SpeechStatus> {
+export function speechUpdate(patch: { enabled?: boolean; voice?: string; speed?: number; worker?: boolean }): Promise<SpeechStatus> {
   return hub<SpeechStatus>("POST", "/speech", patch)
+}
+
+export function warmSpeech(): Promise<SpeechStatus> {
+  return hub<SpeechStatus>("POST", "/speech/warm")
 }
 
 export function downloadSpeechVoice(id: string): Promise<SpeechStatus> {
@@ -280,6 +294,14 @@ export function speechNotes(session: string): Promise<Record<string, VoiceNoteMe
 export function speechNoteAudio(session: string, part: string, text?: string): Promise<Blob> {
   if (text !== undefined) return requestBlob("POST", "/hub/speech/note", { session, part, text })
   return requestBlob("GET", `/hub/speech/note?session=${encodeURIComponent(session)}&part=${encodeURIComponent(part)}`)
+}
+
+export function speechSegmentAudio(session: string, part: string, index: number, text?: string): Promise<Blob> {
+  if (text !== undefined) return requestBlob("POST", "/hub/speech/segment", { session, part, index, text })
+  return requestBlob(
+    "GET",
+    `/hub/speech/segment?session=${encodeURIComponent(session)}&part=${encodeURIComponent(part)}&index=${index}`,
+  )
 }
 
 export function speechTest(text?: string): Promise<Blob> {

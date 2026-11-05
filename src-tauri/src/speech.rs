@@ -17,9 +17,11 @@ use crate::{app_data_file, proc};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
+use std::collections::{HashMap, HashSet};
+use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime};
@@ -27,10 +29,11 @@ use tauri::{AppHandle, Emitter, Manager};
 
 const HF_BASE: &str = "https://huggingface.co/rhasspy/piper-voices/resolve/main";
 const DEFAULT_VOICE: &str = "es_MX-claude-high";
-const MAX_TEXT: usize = 4_000;
-const MAX_SPEAK: usize = 900;
+const MAX_TEXT: usize = 60_000;
 const MAX_USER_WAV: usize = 30 * 1024 * 1024;
 const NOTE_RETENTION_DAYS: u64 = 30;
+const WORKER_IDLE: Duration = Duration::from_secs(600);
+const WORKER_TIMEOUT: Duration = Duration::from_secs(20);
 
 struct VoiceDef {
     id: &'static str,
@@ -83,11 +86,15 @@ struct SpeechConfig {
     enabled: bool,
     voice: String,
     speed: f32,
+    /// Motor persistente opcional. Apagado por defecto: cada segmento usa un
+    /// proceso Piper nuevo. Encendido, mantiene el modelo cargado para bajar
+    /// la latencia a costa de RAM.
+    worker: bool,
 }
 
 impl Default for SpeechConfig {
     fn default() -> Self {
-        Self { enabled: true, voice: DEFAULT_VOICE.into(), speed: 1.0 }
+        Self { enabled: true, voice: DEFAULT_VOICE.into(), speed: 1.0, worker: false }
     }
 }
 
@@ -114,6 +121,22 @@ impl SpeechConfig {
 pub struct SpeechState {
     download: Mutex<Option<Download>>,
     synth: Mutex<()>,
+    worker: Mutex<Option<Worker>>,
+}
+
+struct Worker {
+    child: Child,
+    stdin: ChildStdin,
+    dir: PathBuf,
+    voice: String,
+    speed: f32,
+    last: Instant,
+}
+
+impl Worker {
+    fn alive(&mut self) -> bool {
+        matches!(self.child.try_wait(), Ok(None))
+    }
 }
 
 #[derive(Clone)]
@@ -148,6 +171,8 @@ pub struct SpeechView {
     pub speed: f32,
     pub default_voice: String,
     pub voices_dir: Option<String>,
+    pub worker: bool,
+    pub worker_running: bool,
     pub voices: Vec<VoiceView>,
 }
 
@@ -229,6 +254,14 @@ pub fn view(app: &AppHandle) -> SpeechView {
     let config = load(app);
     let id = config.voice_id();
     let download = app.try_state::<SpeechState>().and_then(|state| state.download.lock().unwrap().clone());
+    let worker_running = app
+        .try_state::<SpeechState>()
+        .map(|state| match state.worker.try_lock() {
+            Ok(mut guard) => guard.as_mut().map(|worker| worker.alive()).unwrap_or(false),
+            // Si está sintetizando, el worker existe y se está usando.
+            Err(_) => config.worker,
+        })
+        .unwrap_or(false);
     let voices = VOICES
         .iter()
         .map(|def| {
@@ -260,6 +293,8 @@ pub fn view(app: &AppHandle) -> SpeechView {
         speed: config.speed(),
         default_voice: DEFAULT_VOICE.to_string(),
         voices_dir: voices_dir(app).map(|p| p.to_string_lossy().into_owned()),
+        worker: config.worker,
+        worker_running,
         voices,
     }
 }
@@ -268,8 +303,9 @@ pub fn status_json(app: &AppHandle) -> Value {
     serde_json::to_value(view(app)).unwrap_or_else(|_| json!({ "ready": false }))
 }
 
-pub fn update(app: &AppHandle, enabled: Option<bool>, voice: Option<String>, speed: Option<f64>) -> SpeechView {
-    let mut config = load(app);
+pub fn update(app: &AppHandle, enabled: Option<bool>, voice: Option<String>, speed: Option<f64>, worker: Option<bool>) -> SpeechView {
+    let previous = load(app);
+    let mut config = previous.clone();
     if let Some(value) = enabled {
         config.enabled = value;
     }
@@ -284,7 +320,15 @@ pub fn update(app: &AppHandle, enabled: Option<bool>, voice: Option<String>, spe
             config.speed = (value as f32).clamp(0.7, 1.4);
         }
     }
+    if let Some(value) = worker {
+        config.worker = value;
+    }
     save(app, &config);
+    // Un cambio de voz, velocidad o el apagado del worker invalidan el proceso
+    // que tenía el modelo cargado. Se vuelve a levantar solo si hace falta.
+    if !config.worker || config.voice != previous.voice || (config.speed - previous.speed).abs() > 0.001 {
+        stop_worker(app);
+    }
     view(app)
 }
 
@@ -315,6 +359,18 @@ fn user_path(app: &AppHandle, session: &str, message: &str) -> Option<PathBuf> {
         return None;
     }
     Some(session_dir(app, session)?.join(format!("{}.user.wav", message)))
+}
+
+fn valid_index(index: u32) -> bool {
+    index < 10_000
+}
+
+/// Cada frase de una respuesta se guarda como `<parte>.<índice>.wav`.
+fn segment_path(app: &AppHandle, session: &str, part: &str, index: u32) -> Option<PathBuf> {
+    if !valid_id(part) || !valid_index(index) {
+        return None;
+    }
+    Some(session_dir(app, session)?.join(format!("{}.{}.wav", part, index)))
 }
 
 fn hash_sidecar(path: &Path) -> PathBuf {
@@ -394,20 +450,9 @@ pub fn speakable(text: &str) -> String {
             out.push(' ');
         }
     }
-    let collapsed = out.split_whitespace().collect::<Vec<_>>().join(" ");
-    if collapsed.chars().count() <= MAX_SPEAK {
-        return collapsed;
-    }
-    let mut cut = MAX_SPEAK;
-    let sliced: String = collapsed.chars().take(MAX_SPEAK).collect();
-    if let Some(at) = sliced.rfind(|c: char| matches!(c, '.' | '!' | '?')) {
-        if at > MAX_SPEAK / 2 {
-            cut = sliced[..at + 1].chars().count();
-        }
-    }
-    let mut short: String = collapsed.chars().take(cut).collect();
-    short = short.trim().to_string();
-    format!("{}. El resto quedó en pantalla.", short.trim_end_matches(|c: char| matches!(c, '.' | '!' | '?')))
+    // No se recorta el texto: las respuestas largas se dividen en frases y se
+    // generan por segmentos. Cortar acá era lo que dejaba "el resto en pantalla".
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// Duración de un WAV PCM/float leyendo sus chunks. Devuelve milisegundos.
@@ -504,6 +549,27 @@ fn run_piper(app: &AppHandle, voice: &str, text: &str, speed: f32, out: &Path) -
     Ok(())
 }
 
+fn spawn_synth(app: &AppHandle, voice: &str, text: &str, speed: f32) -> Result<Vec<u8>, String> {
+    let dir = data_dir(app).ok_or("Sin carpeta de datos")?;
+    let out = dir.join(format!("tmp-{}.wav", uuid::Uuid::new_v4().simple()));
+    let result = run_piper(app, voice, text, speed, &out).and_then(|_| read_note(&out));
+    let _ = std::fs::remove_file(&out);
+    result
+}
+
+fn synthesize(app: &AppHandle, voice: &str, speed: f32, text: &str) -> Result<Vec<u8>, String> {
+    if load(app).worker {
+        match worker_synth(app, voice, speed, text) {
+            Ok(bytes) => Ok(bytes),
+            // Si el proceso persistente se cayó, el segmento igual sale con
+            // un Piper nuevo; el próximo pedido vuelve a intentar el worker.
+            Err(_) => spawn_synth(app, voice, text, speed),
+        }
+    } else {
+        spawn_synth(app, voice, text, speed)
+    }
+}
+
 fn read_note(path: &Path) -> Result<Vec<u8>, String> {
     std::fs::read(path).map_err(|_| "Esa nota de voz todavía no existe".to_string())
 }
@@ -516,7 +582,10 @@ pub fn ensure_note(app: &AppHandle, session: &str, part: &str, text: &str) -> Re
     let config = load(app);
     let voice = config.voice_id();
     let speed = config.speed();
-    let spoken = speakable(&text.chars().take(MAX_TEXT).collect::<String>());
+    if text.len() > MAX_TEXT {
+        return Err("El bloque de voz es demasiado largo".into());
+    }
+    let spoken = speakable(text);
     if spoken.is_empty() {
         return Err("Este bloque no tiene texto para leer".into());
     }
@@ -533,11 +602,258 @@ pub fn ensure_note(app: &AppHandle, session: &str, part: &str, text: &str) -> Re
     if path.is_file() && std::fs::read_to_string(&hash_path).ok().map(|s| s.trim().to_string()).as_deref() == Some(wanted.as_str()) {
         return read_note(&path);
     }
+    let bytes = synthesize(app, &voice, speed, &spoken)?;
     let tmp = path.with_extension("tmp.wav");
-    run_piper(app, &voice, &spoken, speed, &tmp)?;
+    std::fs::write(&tmp, &bytes).map_err(|e| format!("No se pudo guardar la nota de voz: {}", e))?;
     std::fs::rename(&tmp, &path).map_err(|e| format!("No se pudo guardar la nota de voz: {}", e))?;
     let _ = std::fs::write(&hash_path, &wanted);
-    read_note(&path)
+    Ok(bytes)
+}
+
+/// Genera (o reutiliza) un segmento de voz: una frase de la respuesta.
+pub fn ensure_segment(app: &AppHandle, session: &str, part: &str, index: u32, text: &str) -> Result<Vec<u8>, String> {
+    if !valid_id(session) || !valid_id(part) || !valid_index(index) {
+        return Err("Segmento inválido".into());
+    }
+    let config = load(app);
+    let voice = config.voice_id();
+    let speed = config.speed();
+    if text.len() > MAX_TEXT {
+        return Err("El segmento de voz es demasiado largo".into());
+    }
+    let spoken = speakable(text);
+    if spoken.is_empty() {
+        return Err("Este segmento no tiene texto para leer".into());
+    }
+    let path = segment_path(app, session, part, index).ok_or("Segmento inválido")?;
+    let hash_path = hash_sidecar(&path);
+    let wanted = text_hash(&spoken, &voice, speed);
+    let matches = |path: &Path| {
+        path.is_file()
+            && std::fs::read_to_string(&hash_path).ok().map(|s| s.trim().to_string()).as_deref() == Some(wanted.as_str())
+    };
+    if matches(&path) {
+        return read_note(&path);
+    }
+    let state = app.state::<SpeechState>();
+    let _guard = state.synth.lock().unwrap();
+    if matches(&path) {
+        return read_note(&path);
+    }
+    let bytes = synthesize(app, &voice, speed, &spoken)?;
+    let tmp = path.with_extension("tmp.wav");
+    std::fs::write(&tmp, &bytes).map_err(|e| format!("No se pudo guardar el segmento de voz: {}", e))?;
+    std::fs::rename(&tmp, &path).map_err(|e| format!("No se pudo guardar el segmento de voz: {}", e))?;
+    let _ = std::fs::write(&hash_path, &wanted);
+    Ok(bytes)
+}
+
+pub fn read_segment(app: &AppHandle, session: &str, part: &str, index: u32) -> Result<Vec<u8>, String> {
+    let path = segment_path(app, session, part, index).ok_or("Segmento inválido")?;
+    if path.is_file() {
+        return read_note(&path);
+    }
+    // Compatibilidad con la nota completa de 0.20.0: se usa como segmento 0.
+    if index == 0 {
+        if let Some(legacy) = assistant_path(app, session, part) {
+            if legacy.is_file() {
+                return read_note(&legacy);
+            }
+        }
+    }
+    Err("Ese segmento de voz todavía no existe".into())
+}
+
+pub fn stop(app: &AppHandle) {
+    stop_worker(app);
+}
+
+fn stop_worker(app: &AppHandle) {
+    if let Some(state) = app.try_state::<SpeechState>() {
+        let mut guard = state.worker.lock().unwrap();
+        if let Some(mut worker) = guard.take() {
+            let _ = worker.child.kill();
+            let _ = worker.child.wait();
+            let _ = std::fs::remove_dir_all(&worker.dir);
+        }
+    }
+}
+
+fn spawn_worker(app: &AppHandle, voice: &str, speed: f32) -> Result<Worker, String> {
+    let dir = engine_dir(app).ok_or_else(|| "El motor de voz (Piper) no está instalado en esta PC".to_string())?;
+    let model = model_path(app, voice).filter(|p| p.is_file()).ok_or_else(|| format!("Falta descargar la voz «{}» (Flufy › Audios)", voice))?;
+    if !model.with_extension("onnx.json").is_file() {
+        return Err(format!("Falta la configuración de la voz «{}»", voice));
+    }
+    let work = data_dir(app).ok_or("Sin carpeta de datos")?.join(format!("worker-{}", uuid::Uuid::new_v4().simple()));
+    std::fs::create_dir_all(&work).map_err(|e| e.to_string())?;
+    let mut cmd = Command::new(dir.join("piper.exe"));
+    cmd.arg("-m")
+        .arg(&model)
+        .arg("-d")
+        .arg(&work)
+        .arg("-q")
+        .arg("--length_scale")
+        .arg(format!("{:.3}", 1.0 / speed.clamp(0.6, 1.6)))
+        .arg("--sentence_silence")
+        .arg("0.08")
+        .current_dir(&dir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    proc::hide_console(&mut cmd);
+    let mut child = cmd.spawn().map_err(|e| format!("No se pudo iniciar la voz persistente: {}", e))?;
+    let stdin = child.stdin.take().ok_or("No se pudo abrir la entrada de la voz persistente")?;
+    Ok(Worker { child, stdin, dir: work, voice: voice.to_string(), speed, last: Instant::now() })
+}
+
+fn ensure_worker(app: &AppHandle) -> Result<(), String> {
+    let config = load(app);
+    let voice = config.voice_id();
+    let speed = config.speed();
+    let state = app.state::<SpeechState>();
+    let mut guard = state.worker.lock().unwrap();
+    let restart = match guard.as_mut() {
+        Some(worker) => !worker.alive() || worker.voice != voice || (worker.speed - speed).abs() > 0.001 || worker.last.elapsed() > WORKER_IDLE,
+        None => true,
+    };
+    if restart {
+        if let Some(mut old) = guard.take() {
+            let _ = old.child.kill();
+            let _ = old.child.wait();
+            let _ = std::fs::remove_dir_all(&old.dir);
+        }
+        *guard = Some(spawn_worker(app, &voice, speed)?);
+    }
+    Ok(())
+}
+
+/// Deja el modelo cargado para que el primer segmento no pague la carga.
+pub fn warm(app: &AppHandle) {
+    if !load(app).worker || !ready(app) {
+        return;
+    }
+    let state = app.state::<SpeechState>();
+    let _guard = state.synth.lock().unwrap();
+    let _ = ensure_worker(app);
+}
+
+fn worker_synth(app: &AppHandle, voice: &str, speed: f32, text: &str) -> Result<Vec<u8>, String> {
+    ensure_worker(app)?;
+    let state = app.state::<SpeechState>();
+    let mut guard = state.worker.lock().unwrap();
+    let worker = guard.as_mut().ok_or("La voz persistente no está disponible")?;
+    if worker.voice != voice || (worker.speed - speed).abs() > 0.001 {
+        return Err("La voz persistente cambió de configuración".into());
+    }
+    let before: HashSet<OsString> = std::fs::read_dir(&worker.dir)
+        .map_err(|e| e.to_string())?
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name();
+            name.to_string_lossy().ends_with(".wav").then_some(name)
+        })
+        .collect();
+    worker.stdin.write_all(text.as_bytes()).map_err(|e| format!("La voz persistente no recibió el texto: {}", e))?;
+    worker.stdin.write_all(b"\n").map_err(|e| e.to_string())?;
+    worker.stdin.flush().map_err(|e| e.to_string())?;
+    let started = Instant::now();
+    let mut last_size: u64 = 0;
+    let mut stable = 0;
+    loop {
+        let mut files: Vec<(OsString, PathBuf, u64)> = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(&worker.dir) {
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                if before.contains(&name) || !name.to_string_lossy().ends_with(".wav") {
+                    continue;
+                }
+                let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+                files.push((name, entry.path(), size));
+            }
+        }
+        files.sort_by(|a, b| a.0.cmp(&b.0));
+        let total: u64 = files.iter().map(|f| f.2).sum();
+        if !files.is_empty() && total > 0 && total == last_size {
+            stable += 1;
+            if stable >= 2 {
+                let paths: Vec<PathBuf> = files.into_iter().map(|f| f.1).collect();
+                let result = concat_wavs(&paths);
+                for path in &paths {
+                    let _ = std::fs::remove_file(path);
+                }
+                worker.last = Instant::now();
+                return result;
+            }
+        } else {
+            stable = 0;
+        }
+        last_size = total;
+        if started.elapsed() > WORKER_TIMEOUT {
+            let _ = worker.child.kill();
+            let _ = worker.child.wait();
+            *guard = None;
+            return Err("La voz persistente tardó demasiado".into());
+        }
+        std::thread::sleep(Duration::from_millis(60));
+    }
+}
+
+fn wav_chunk<'a>(bytes: &'a [u8], wanted: &[u8; 4]) -> Option<&'a [u8]> {
+    if bytes.len() < 12 || &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
+        return None;
+    }
+    let mut offset = 12usize;
+    while offset + 8 <= bytes.len() {
+        let id: &[u8; 4] = bytes[offset..offset + 4].try_into().ok()?;
+        let size = u32::from_le_bytes(bytes[offset + 4..offset + 8].try_into().ok()?) as usize;
+        let body = offset + 8;
+        if body + size > bytes.len() {
+            return None;
+        }
+        if id == wanted {
+            return Some(&bytes[body..body + size]);
+        }
+        offset = body + size + (size & 1);
+    }
+    None
+}
+
+fn concat_wavs(files: &[PathBuf]) -> Result<Vec<u8>, String> {
+    if files.is_empty() {
+        return Err("La voz no generó audio".into());
+    }
+    if files.len() == 1 {
+        return read_note(&files[0]);
+    }
+    let mut fmt: Option<Vec<u8>> = None;
+    let mut data = Vec::new();
+    for file in files {
+        let bytes = read_note(file)?;
+        if fmt.is_none() {
+            fmt = wav_chunk(&bytes, b"fmt ").map(|chunk| chunk.to_vec());
+        }
+        if let Some(chunk) = wav_chunk(&bytes, b"data") {
+            data.extend_from_slice(chunk);
+        }
+    }
+    let Some(fmt) = fmt else {
+        return read_note(&files[0]);
+    };
+    if data.is_empty() {
+        return Err("La voz no generó audio".into());
+    }
+    let mut out = Vec::with_capacity(44 + fmt.len() + data.len());
+    out.extend_from_slice(b"RIFF");
+    out.extend_from_slice(&(36u32.saturating_add(fmt.len() as u32).saturating_add(data.len() as u32)).to_le_bytes());
+    out.extend_from_slice(b"WAVE");
+    out.extend_from_slice(b"fmt ");
+    out.extend_from_slice(&(fmt.len() as u32).to_le_bytes());
+    out.extend_from_slice(&fmt);
+    out.extend_from_slice(b"data");
+    out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+    out.extend_from_slice(&data);
+    Ok(out)
 }
 
 pub fn note_exists(app: &AppHandle, session: &str, part: &str) -> bool {
@@ -576,18 +892,23 @@ pub fn save_user_note(app: &AppHandle, session: &str, message: &str, wav: &[u8])
 /// burbujas sin descargar cada audio. Las claves son el id de la parte; el
 /// audio de la persona usa `<mensaje>.user`.
 pub fn notes_json(app: &AppHandle, session: &str) -> Value {
-    let mut out = Map::new();
+    struct Group {
+        durations: Vec<u64>,
+        bytes: u64,
+        at: u64,
+    }
+    let mut groups: HashMap<String, Group> = HashMap::new();
     let Some(dir) = session_dir(app, session) else {
-        return Value::Object(out);
+        return Value::Object(Map::new());
     };
     let Ok(entries) = std::fs::read_dir(&dir) else {
-        return Value::Object(out);
+        return Value::Object(Map::new());
     };
     for entry in entries.flatten() {
         let path = entry.path();
         let Some(name) = path.file_name().and_then(|n| n.to_str()) else { continue };
-        let Some(key) = name.strip_suffix(".wav") else { continue };
-        if key.ends_with(".tmp") || key.contains('.') && !key.ends_with(".user") {
+        let Some(stem) = name.strip_suffix(".wav") else { continue };
+        if stem.ends_with(".tmp") {
             continue;
         }
         let Ok(meta) = entry.metadata() else { continue };
@@ -600,13 +921,39 @@ pub fn notes_json(app: &AppHandle, session: &str) -> Value {
             let n = file.read(&mut head).unwrap_or(0);
             head.truncate(n);
         }
+        let duration = wav_duration_ms(&head).unwrap_or(0);
         let at = meta.modified().ok().and_then(|m| m.duration_since(SystemTime::UNIX_EPOCH).ok()).map(|d| d.as_secs()).unwrap_or(0);
+        // `<mensaje>.user` es una nota única; `<parte>.<índice>` se agrupa por
+        // parte para que la burbuja reproduzca toda la respuesta en orden.
+        let (key, index) = if stem.ends_with(".user") {
+            (stem.to_string(), 0usize)
+        } else if let Some((base, suffix)) = stem.rsplit_once('.') {
+            match suffix.parse::<u32>() {
+                Ok(index) => (base.to_string(), index as usize),
+                Err(_) => (stem.to_string(), 0usize),
+            }
+        } else {
+            // Nota completa de 0.20.0: cuenta como primer segmento.
+            (stem.to_string(), 0usize)
+        };
+        let group = groups.entry(key).or_insert_with(|| Group { durations: Vec::new(), bytes: 0, at: 0 });
+        if group.durations.len() <= index {
+            group.durations.resize(index + 1, 0);
+        }
+        group.durations[index] = group.durations[index].max(duration);
+        group.bytes = group.bytes.saturating_add(meta.len());
+        group.at = group.at.max(at);
+    }
+    let mut out = Map::new();
+    for (key, group) in groups {
         out.insert(
-            key.to_string(),
+            key,
             json!({
-                "durationMs": wav_duration_ms(&head).unwrap_or(0),
-                "bytes": meta.len(),
-                "at": at,
+                "durationMs": group.durations.iter().sum::<u64>(),
+                "bytes": group.bytes,
+                "at": group.at,
+                "segments": group.durations.len(),
+                "durations": group.durations,
             }),
         );
     }
@@ -620,11 +967,9 @@ pub fn test_audio(app: &AppHandle, text: Option<String>) -> Result<Vec<u8>, Stri
     if spoken.is_empty() {
         return Err("No hay texto para leer".into());
     }
-    let dir = data_dir(app).ok_or("Sin carpeta de datos")?;
-    let out = dir.join(format!("test-{}.wav", uuid::Uuid::new_v4().simple()));
-    let result = run_piper(app, &config.voice_id(), &spoken, config.speed(), &out).and_then(|_| read_note(&out));
-    let _ = std::fs::remove_file(&out);
-    result
+    let state = app.state::<SpeechState>();
+    let _guard = state.synth.lock().unwrap();
+    synthesize(app, &config.voice_id(), config.speed(), &spoken)
 }
 
 /// Borra notas viejas para que la carpeta no crezca sin límite.
@@ -764,10 +1109,12 @@ pub fn speech_get(app: AppHandle) -> SpeechView {
 }
 
 #[tauri::command]
-pub async fn speech_set(app: AppHandle, enabled: bool, voice: String, speed: f64) -> Result<SpeechView, String> {
-    tauri::async_runtime::spawn_blocking(move || Ok::<SpeechView, String>(update(&app, Some(enabled), Some(voice), Some(speed))))
-        .await
-        .unwrap()
+pub async fn speech_set(app: AppHandle, enabled: bool, voice: String, speed: f64, worker: bool) -> Result<SpeechView, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        Ok::<SpeechView, String>(update(&app, Some(enabled), Some(voice), Some(speed), Some(worker)))
+    })
+    .await
+    .unwrap()
 }
 
 #[tauri::command]
@@ -819,6 +1166,7 @@ pub fn hub_update(app: &AppHandle, body: &Value) -> Value {
         body["enabled"].as_bool(),
         body["voice"].as_str().map(|s| s.to_string()),
         body["speed"].as_f64(),
+        body["worker"].as_bool(),
     );
     serde_json::to_value(view).unwrap_or_else(|_| json!({ "ready": false }))
 }
@@ -863,11 +1211,44 @@ mod tests {
     }
 
     #[test]
-    fn speakable_caps_long_text() {
-        let text = "palabra ".repeat(400);
+    fn speakable_keeps_long_text_without_truncating() {
+        let text = format!("{}final distintivo.", "palabra ".repeat(400));
         let out = speakable(&text);
-        assert!(out.chars().count() < 1_100, "quedó demasiado largo: {}", out.chars().count());
-        assert!(out.ends_with("El resto quedó en pantalla."));
+        assert!(out.ends_with("final distintivo."), "se perdió el final: {}", &out[out.len().saturating_sub(80)..]);
+        assert!(!out.contains("El resto"), "no debe avisar que recortó");
+        assert!(out.chars().count() > 3_000, "quedó recortado: {}", out.chars().count());
+    }
+
+    #[test]
+    fn concat_wav_joins_segment_data() {
+        let dir = std::env::temp_dir().join(format!("flufy-wav-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let make = |name: &str, samples: u32| {
+            let data_len = samples * 2;
+            let mut wav = Vec::new();
+            wav.extend_from_slice(b"RIFF");
+            wav.extend_from_slice(&(36 + data_len).to_le_bytes());
+            wav.extend_from_slice(b"WAVEfmt ");
+            wav.extend_from_slice(&16u32.to_le_bytes());
+            wav.extend_from_slice(&1u16.to_le_bytes());
+            wav.extend_from_slice(&1u16.to_le_bytes());
+            wav.extend_from_slice(&22_050u32.to_le_bytes());
+            wav.extend_from_slice(&44_100u32.to_le_bytes());
+            wav.extend_from_slice(&2u16.to_le_bytes());
+            wav.extend_from_slice(&16u16.to_le_bytes());
+            wav.extend_from_slice(b"data");
+            wav.extend_from_slice(&data_len.to_le_bytes());
+            wav.resize(44 + data_len as usize, 7);
+            let path = dir.join(name);
+            std::fs::write(&path, wav).unwrap();
+            path
+        };
+        let a = make("a.wav", 100);
+        let b = make("b.wav", 150);
+        let joined = concat_wavs(&[a, b]).unwrap();
+        assert_eq!(wav_duration_ms(&joined), Some(250 * 1000 / 22_050));
+        assert_eq!(&joined[0..4], b"RIFF");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

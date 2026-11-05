@@ -310,6 +310,7 @@ fn shutdown(app: &tauri::AppHandle) {
     term::kill_all(app);
     watch::stop_all(app);
     whisper::stop(app);
+    speech::stop(app);
     desktop::shutdown();
     machine::keep_awake(false);
 }

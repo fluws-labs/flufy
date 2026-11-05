@@ -26,6 +26,9 @@ let active: Active | null = null
 let loadingKey: string | null = null
 let queue: QueueItem[] = []
 let generation = 0
+// Cambia cuando una persona toma el control (stop o replay manual); permite
+// que un bucle de segmentos viejo deje de encolar audio.
+let playback = 0
 let ticker: ReturnType<typeof setInterval> | null = null
 
 function emit(): void {
@@ -149,11 +152,17 @@ export function enqueue(key: string, blob: Blob): void {
 }
 
 export function playNow(key: string, blob: Blob): Promise<void> {
+  playback += 1
   queue = []
   return play(key, blob)
 }
 
+export function playbackToken(): number {
+  return playback
+}
+
 export function stop(): void {
+  playback += 1
   generation += 1
   queue = []
   stopSource()

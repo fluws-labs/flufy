@@ -1,0 +1,11 @@
+Flufy 0.21.0 mejora el chat de voz: el audio se genera y se reproduce por frase mientras el modelo sigue escribiendo.
+
+Antes había que esperar a que terminara el bloque completo y las respuestas largas se cortaban con el aviso de que el resto quedaba en pantalla. Ahora la respuesta se divide en frases apenas llegan, cada una se sintetiza en la PC y suena en orden mientras llega la siguiente. Ya no se recorta nada: se habla toda la prosa de la respuesta.
+
+Cada respuesta queda guardada por segmentos, así podés volver a escucharla completa desde la burbuja, sin volver a generarla. El modo voz sigue siendo por conversación: se activa al mandar un audio o con el botón de voz, y el resto sigue siendo chat de texto.
+
+En Audios y en el panel de voz del celular hay una opción nueva, "Motor persistente": mantiene Piper cargado para bajar la latencia a costa de un poco de RAM. Está apagada por defecto; si la encendés, el primer audio sale más rápido.
+
+El prompt de voz ahora pide frases cortas, responder en el idioma de la persona y no leer código, rutas ni datos técnicos. El detalle técnico se muestra en texto.
+
+Esta versión mantiene OpenCode 1.19.5. Si actualizás, tus chats, equipos, evidencias y configuraciones se conservan.
