@@ -238,12 +238,12 @@ fn agent_config(state: &DesktopState) -> Value {
     if state.browser_injected {
         mcp["browser"] = server("browser", 180_000);
     }
-    // Las conversaciones normales no cargan las herramientas de la PC (son muchas
-    // y sus salidas son pesadas): se usan desde el agente «escritorio», que la
-    // burbuja elige solo y que también se puede elegir en el selector del chat.
+    // Las herramientas de la PC quedan disponibles tanto en el chat normal como
+    // en el agente «escritorio» (que usa la burbuja). El agente de escritorio
+    // conserva además el prompt específico y no puede editar su propio plano.
     let mut config = json!({
         "mcp": mcp,
-        "permission": { "desktop_*": "deny" },
+        "permission": { "desktop_*": "allow", "browser_*": "allow" },
         "agent": {
             "escritorio": {
                 "mode": "primary",
@@ -608,10 +608,10 @@ mod tests {
     }
 
     #[test]
-    fn desktop_tools_are_reserved_and_browser_is_shared() {
+    fn desktop_and_browser_are_available_to_normal_chats() {
         let config = agent_config(&state());
-        assert_eq!(config["permission"]["desktop_*"], "deny");
-        assert!(config["permission"].get("browser_*").is_none());
+        assert_eq!(config["permission"]["desktop_*"], "allow");
+        assert_eq!(config["permission"]["browser_*"], "allow");
         assert!(config["agent"].get("pc").is_none());
         let esc = &config["agent"]["escritorio"];
         assert_eq!(esc["mode"], "primary");
