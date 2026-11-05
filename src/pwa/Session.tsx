@@ -647,7 +647,10 @@ export function SessionScreen({ route, back }: { route: Extract<Route, { kind: "
           if (part.sessionID === route.id) {
             partTypes.current.set(part.id, part.type)
             setMessages((prev) => upsertPart(prev, part))
-            if (part.type === "text" && part.time?.end) flushStream(part.id, part.text)
+            if (part.type === "text" && part.time?.end) {
+              const role = roles.current.get(part.messageID ?? "")
+              if (role !== "user" && !(!role && pending.current.has(part.messageID ?? ""))) flushStream(part.id, part.text)
+            }
           }
           break
         }
