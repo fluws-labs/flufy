@@ -1,7 +1,7 @@
 // Isolated local-browser evidence. Node built-ins only; no browser extensions,
 // accounts, user profile, package installation or external automation service.
 import { spawn } from "node:child_process"
-import { mkdtemp, writeFile, rm } from "node:fs/promises"
+import { mkdtemp, writeFile, rm, readFile } from "node:fs/promises"
 import { pathToFileURL } from "node:url"
 import { tmpdir } from "node:os"
 import { join, resolve, sep } from "node:path"
@@ -23,14 +23,36 @@ async function capture(config) {
   let socket
   const pending = new Map()
   let sequence = 0
-  const deadline = setTimeout(() => { child.kill(); for (const p of pending.values()) p.reject(new Error('La captura superó 40 segundos')) }, 40000)
+  const deadline = setTimeout(() => { child.kill(); for (const p of pending.values()) p.reject(new Error('La captura superó 60 segundos')) }, 60000)
   try {
     const endpoint = await new Promise((done, fail) => {
       let log = ''
-      const timer = setTimeout(() => fail(new Error('El navegador no abrió DevTools')), 15000)
-      child.once('error', (e) => {clearTimeout(timer);fail(e)})
-      child.once('exit', () => {clearTimeout(timer);fail(new Error('El navegador se cerró antes de capturar'))})
-      child.stderr.on('data', (data) => { debug(String(data).slice(0,500));log = (log + data).slice(-4000); const match = log.match(/DevTools listening on (ws:\/\/127\.0\.0\.1:\d+\/[^\s]+)/); if (match) { clearTimeout(timer); done(match[1]) } })
+      let settled = false
+      let poll
+      const finish = (callback, value) => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        clearInterval(poll)
+        callback(value)
+      }
+      const timer = setTimeout(() => finish(fail, new Error(`El navegador no abrió DevTools${log ? `: ${log.slice(-500).trim()}` : ''}`)), 30000)
+      // Chrome/Edge escriben el puerto real en DevToolsActivePort; el mensaje
+      // de stderr cambia de formato entre versiones y runners de CI.
+      poll = setInterval(async () => {
+        try {
+          const [port, path] = (await readFile(join(profile, 'DevToolsActivePort'), 'utf8')).trim().split(/\r?\n/)
+          if (port && path) finish(done, `ws://127.0.0.1:${port}${path}`)
+        } catch { /* el archivo aparece cuando DevTools está listo */ }
+      }, 100)
+      child.once('error', (e) => finish(fail, e))
+      child.once('exit', () => finish(fail, new Error('El navegador se cerró antes de capturar')))
+      child.stderr.on('data', (data) => {
+        debug(String(data).slice(0, 500))
+        log = (log + data).slice(-4000)
+        const match = log.match(/DevTools listening on (ws:\/\/[^\s]+)/)
+        if (match) finish(done, match[1])
+      })
     })
     socket = new WebSocket(endpoint)
     await once(socket, 'open')
