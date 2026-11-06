@@ -998,6 +998,22 @@ pub fn team_evidence_open(app: AppHandle, run_id: String) -> Result<(), String> 
 mod tests {
     use super::*;
     #[test]
+    fn new_autonomous_chats_allow_ten_workers_without_preallocating_them() {
+        let model = ModelRef { provider_id: "test".into(), model_id: "test".into() };
+        let chat = autonomous_chat(&empty(), "D:/repo".into(), model, None).unwrap();
+        assert_eq!(chat.team.max_parallel_tasks, 10);
+        assert_eq!(chat.team.max_parallel_tasks, staffing::MAX_WORKERS);
+        assert_eq!(chat.team.members.len(), 1);
+        assert_eq!(chat.team.members[0].id, chat.team.lead_agent_id);
+        assert!(chat.runs.is_empty());
+        // Loading an explicitly configured team must not apply the new-chat default.
+        let mut configured = chat.team;
+        configured.max_parallel_tasks = 2;
+        let restored: Team = serde_json::from_value(serde_json::to_value(&configured).unwrap()).unwrap();
+        validate_team(&restored, &empty().skills).unwrap();
+        assert_eq!(restored.max_parallel_tasks, 2);
+    }
+    #[test]
     fn changing_future_chat_model_preserves_run_snapshots_and_pending_turns() {
         let team = domain::tests::team();
         let mut chat: Chat = serde_json::from_value(serde_json::json!({"id":"chat","title":"chat","team":team,"skills":[],"archived":false,"createdAt":1,"runs":[{"id":"r","goal":"g","team":team,"skills":[],"status":"blocked","startedAt":1,"tasks":[],"summary":"","evidenceDir":"unused","artifacts":[],"baseline":[],"notified":false}]})).unwrap();

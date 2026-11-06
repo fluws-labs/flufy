@@ -2202,6 +2202,35 @@ mod tests {
         }
     }
     #[test]
+    fn ten_workers_dispatch_independently_and_preserve_explicit_caps_and_ownership() {
+        let mut team = super::super::domain::tests::team();
+        team.autonomous = true;
+        team.max_parallel_tasks = super::super::staffing::MAX_WORKERS;
+        assert_eq!(team.max_parallel_tasks, 10);
+        let mut r: Run = serde_json::from_value(json!({"id":"run","goal":"Diez módulos independientes","team":team,"skills":[],"status":"planning","startedAt":0,"finishedAt":null,"planSessionId":null,"tasks":[],"summary":"","error":null,"evidenceDir":"unused","artifacts":[],"baseline":[],"notified":false})).unwrap();
+        let agents: Vec<_> = (0..10).map(|n| json!({"id":format!("dev-{n}"),"role":"Backend"})).collect();
+        let tasks: Vec<_> = (0..10).map(|n| json!({"id":format!("task-{n}"),"title":"Módulo","objective":"Implementar y comprobar","assignedAgentId":format!("dev-{n}"),"repository":"D:/repo","dependencies":[],"expectedFiles":[],"writePaths":[format!("src/module-{n}/")],"acceptanceCriteria":["check"]})).collect();
+        let plan = validated_plan(&json!({"agents":agents,"tasks":tasks}).to_string(), &r).unwrap();
+        r.team = super::super::staffing::with_agents(&r.team, &plan.agents, &[]).unwrap();
+        r.tasks = plan.tasks;
+        assert_eq!(ready_tasks(&r, &HashSet::new()).unwrap().len(), 10);
+        r.team.max_parallel_tasks = 3;
+        assert_eq!(ready_tasks(&r, &HashSet::new()).unwrap().len(), 3);
+        r.tasks[0].status = "running".into();
+        assert_eq!(ready_tasks(&r, &HashSet::new()).unwrap().len(), 2);
+        r.team.max_parallel_tasks = 10;
+        r.tasks[1].dependencies = vec![r.tasks[0].id.clone()];
+        assert_eq!(ready_tasks(&r, &HashSet::new()).unwrap().len(), 8);
+        r.tasks[2].write_paths = r.tasks[0].write_paths.clone();
+        assert_eq!(ready_tasks(&r, &HashSet::new()).unwrap().len(), 7);
+        r.tasks[0].status = "completed".into();
+        assert_eq!(ready_tasks(&r, &HashSet::new()).unwrap().len(), 9);
+        // A second task on one developer still obeys that developer's capacity.
+        r.tasks[2].assigned_agent_id = r.tasks[1].assigned_agent_id.clone();
+        assert_eq!(ready_tasks(&r, &HashSet::new()).unwrap().len(), 8);
+    }
+
+    #[test]
     fn automatic_plan_staffs_three_parallel_owners_and_survives_recovery() {
         let mut team = super::super::domain::tests::team();
         team.autonomous = true;

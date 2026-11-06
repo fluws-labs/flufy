@@ -1,0 +1,74 @@
+[
+  {
+    "id": "superpowers-systematic-debugging",
+    "slug": "superpowers-systematic-debugging",
+    "name": "Superpowers · Systematic Debugging",
+    "version": 1,
+    "description": "Investigar bugs, fallos de pruebas y comportamientos inesperados buscando la causa raíz antes de corregir. Adaptación selectiva de obra/superpowers (MIT).",
+    "verificationGuidelines": ["Reproducción y causa raíz respaldadas por evidencia", "Corrección mínima y verificación del síntoma original"]
+  },
+  {
+    "id": "superpowers-verification-before-completion",
+    "slug": "superpowers-verification-before-completion",
+    "name": "Superpowers · Verification Before Completion",
+    "version": 1,
+    "description": "Comprobar resultados reales antes de afirmar que una tarea está terminada, corregida o pasa sus pruebas. Adaptación selectiva de obra/superpowers (MIT).",
+    "verificationGuidelines": ["Cada afirmación de éxito tiene una comprobación pertinente observada", "Fallos y verificaciones pendientes se informan sin aprobarlos"]
+  },
+  {
+    "id": "superpowers-requesting-code-review",
+    "slug": "superpowers-requesting-code-review",
+    "name": "Superpowers · Requesting Code Review",
+    "version": 1,
+    "description": "Pedir una revisión enfocada al cerrar un cambio relevante, con contexto acotado y criterios de aceptación. Adaptación selectiva de obra/superpowers (MIT).",
+    "verificationGuidelines": ["El alcance revisado está delimitado por commits, diff o archivos", "Los hallazgos se triaron y los críticos se corrigieron antes de continuar"]
+  },
+  {
+    "id": "superpowers-receiving-code-review",
+    "slug": "superpowers-receiving-code-review",
+    "name": "Superpowers · Receiving Code Review",
+    "version": 1,
+    "description": "Procesar feedback de revisión con rigor técnico: verificar antes de implementar y responder sin agradecimientos vacíos. Adaptación selectiva de obra/superpowers (MIT).",
+    "verificationGuidelines": ["Cada sugerencia se contrastó con el código y el contrato antes de implementarla", "Las correcciones se hicieron de a una y se probaron"]
+  },
+  {
+    "id": "superpowers-test-driven-development",
+    "slug": "superpowers-test-driven-development",
+    "name": "Superpowers · Test-Driven Development",
+    "version": 1,
+    "description": "Escribir primero una prueba que falle y después el código mínimo, con verificación proporcional al riesgo. Adaptación selectiva de obra/superpowers (MIT).",
+    "verificationGuidelines": ["Se observó el fallo de la prueba antes de implementar", "La prueba y la suite pertinente pasaron después del cambio"]
+  },
+  {
+    "id": "superpowers-writing-plans",
+    "slug": "superpowers-writing-plans",
+    "name": "Superpowers · Writing Plans",
+    "version": 1,
+    "description": "Convertir un pedido de varias etapas en un plan con archivos, interfaces, pasos verificables y revisión propia. Adaptación selectiva de obra/superpowers (MIT).",
+    "verificationGuidelines": ["Cada requisito tiene una tarea y una comprobación asociada", "Los nombres, firmas y tipos coinciden entre tareas"]
+  },
+  {
+    "id": "superpowers-executing-plans",
+    "slug": "superpowers-executing-plans",
+    "name": "Superpowers · Executing Plans",
+    "version": 1,
+    "description": "Ejecutar un plan tarea por tarea en la sesión, comparando la salida real con la esperada y registrando desvíos. Adaptación selectiva de obra/superpowers (MIT).",
+    "verificationGuidelines": ["Cada tarea se cerró con la comprobación que el plan nombra", "Los desvíos quedaron registrados con su motivo y su costo"]
+  },
+  {
+    "id": "superpowers-writing-skills",
+    "slug": "superpowers-writing-skills",
+    "name": "Superpowers · Writing Skills",
+    "version": 1,
+    "description": "Crear o editar una skill reusable, breve y probada contra un escenario que falla sin ella. Adaptación selectiva de obra/superpowers (MIT).",
+    "verificationGuidelines": ["Existe una línea base observada sin la skill", "El mismo escenario acierta con la skill y los atajos detectados quedaron cerrados"]
+  },
+  {
+    "id": "superpowers-brainstorming",
+    "slug": "superpowers-brainstorming",
+    "name": "Superpowers · Brainstorming",
+    "version": 1,
+    "description": "Clarificar qué quiere el usuario, por qué y con qué enfoque antes de construir, con preguntas y devoluciones breves. Adaptación selectiva de obra/superpowers (MIT).",
+    "verificationGuidelines": ["El objetivo, el enfoque y las decisiones quedaron confirmados antes de construir", "Las propuestas se separaron de lo que dijo el usuario"]
+  }
+]

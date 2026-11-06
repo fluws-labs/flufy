@@ -63,12 +63,53 @@ const DOCUMENTS: &[(&str, &str)] = &[
         "team-lead",
         include_str!("../../../.opencode/skills/team-lead/SKILL.md"),
     ),
+    (
+        "superpowers-systematic-debugging",
+        include_str!("../../../.opencode/skills/superpowers-systematic-debugging/SKILL.md"),
+    ),
+    (
+        "superpowers-verification-before-completion",
+        include_str!("../../../.opencode/skills/superpowers-verification-before-completion/SKILL.md"),
+    ),
+    (
+        "superpowers-requesting-code-review",
+        include_str!("../../../.opencode/skills/superpowers-requesting-code-review/SKILL.md"),
+    ),
+    (
+        "superpowers-receiving-code-review",
+        include_str!("../../../.opencode/skills/superpowers-receiving-code-review/SKILL.md"),
+    ),
+    (
+        "superpowers-test-driven-development",
+        include_str!("../../../.opencode/skills/superpowers-test-driven-development/SKILL.md"),
+    ),
+    (
+        "superpowers-writing-plans",
+        include_str!("../../../.opencode/skills/superpowers-writing-plans/SKILL.md"),
+    ),
+    (
+        "superpowers-executing-plans",
+        include_str!("../../../.opencode/skills/superpowers-executing-plans/SKILL.md"),
+    ),
+    (
+        "superpowers-writing-skills",
+        include_str!("../../../.opencode/skills/superpowers-writing-skills/SKILL.md"),
+    ),
+    (
+        "superpowers-brainstorming",
+        include_str!("../../../.opencode/skills/superpowers-brainstorming/SKILL.md"),
+    ),
 ];
 
 pub fn catalog() -> Vec<Skill> {
-    let definitions: Vec<Definition> =
+    let mut definitions: Vec<Definition> =
         serde_json::from_str(include_str!("../../../.opencode/skills/catalog.json"))
             .expect("bundled skill catalog");
+    // Curated, independent skills only: no upstream bootstrap or default role
+    // assignment. Existing selections and chat/run snapshots remain unchanged.
+    definitions.extend(serde_json::from_str::<Vec<Definition>>(include_str!(
+        "../../../.opencode/skills/superpowers-catalog.json"
+    )).expect("curated superpowers catalog"));
     definitions
         .into_iter()
         .map(|d| {
@@ -200,9 +241,9 @@ mod tests {
         assert_eq!(store.skills.len(), count);
     }
     #[test]
-    fn thirteen_skills_have_observable_checks_and_runner_contracts() {
+    fn bundled_skills_have_observable_checks_and_runner_contracts() {
         let skills = catalog();
-        assert_eq!(skills.len(), 13);
+        assert_eq!(skills.len(), 22);
         for s in skills {
             assert!(s.instructions.contains("Contrato de Flufy"));
             assert!(!s.verification_guidelines.is_empty());
@@ -225,5 +266,71 @@ mod tests {
         store.skills = vec![old];
         upgrade(&mut store);
         assert!(!store.skills.iter().any(|s| s.id == "frontend" && s.version == 3));
+    }
+
+    #[test]
+    fn curated_skills_are_opt_in_and_can_be_selected_by_real_staffing() {
+        let skills = catalog();
+        let mut team = super::super::domain::tests::team();
+        team.autonomous = true;
+        let proposal: Vec<AgentProposal> = serde_json::from_value(serde_json::json!([
+            {"id":"debugger", "role":"Backend", "skillIds":["superpowers-systematic-debugging", "superpowers-verification-before-completion"]}
+        ])).unwrap();
+        let expanded = super::super::staffing::with_agents(&team, &proposal, &skills).unwrap();
+        let debugger = &expanded.members[1];
+        for id in ["superpowers-systematic-debugging", "superpowers-verification-before-completion"] {
+            assert!(debugger.skill_refs.iter().any(|r| r.id == id && r.version == 1));
+            assert!(!expanded.members[0].skill_refs.iter().any(|r| r.id == id));
+        }
+        let run: Run = serde_json::from_value(serde_json::json!({
+            "id":"selected", "goal":"Investigate", "team":expanded, "skills":skills,
+            "status":"planning", "startedAt":1, "tasks":[], "summary":"", "evidenceDir":"unused",
+            "artifacts":[], "baseline":[], "notified":false
+        })).unwrap();
+        let prompt = super::super::runner::skills_prompt(&run, debugger);
+        assert!(prompt.contains("Systematic Debugging"));
+        assert!(prompt.contains("Verification Before Completion"));
+        assert!(prompt.contains("22f0b463e7a5e579904dd6211a520321035526f7"));
+    }
+
+    #[test]
+    fn curated_catalog_exposes_all_nine_adaptations() {
+        let skills = catalog();
+        assert_eq!(skills.len(), 22);
+        for id in [
+            "superpowers-systematic-debugging",
+            "superpowers-verification-before-completion",
+            "superpowers-requesting-code-review",
+            "superpowers-receiving-code-review",
+            "superpowers-test-driven-development",
+            "superpowers-writing-plans",
+            "superpowers-executing-plans",
+            "superpowers-writing-skills",
+            "superpowers-brainstorming",
+        ] {
+            let skill = skills.iter().find(|skill| skill.id == id).unwrap_or_else(|| panic!("missing {id}"));
+            assert_eq!(skill.version, 1);
+            assert!(!skill.instructions.trim().is_empty());
+        }
+        let mut ids: Vec<&str> = skills.iter().map(|skill| skill.id.as_str()).collect();
+        ids.sort();
+        ids.dedup();
+        assert_eq!(ids.len(), 22, "catalog must not contain duplicates");
+    }
+
+    #[test]
+    fn curated_upgrade_preserves_personalized_versions_and_selections() {
+        let mut skills = catalog();
+        let customized = skills.iter_mut().find(|s| s.id == "superpowers-systematic-debugging").unwrap();
+        customized.instructions = "Personalized investigation".into();
+        let mut team = super::super::domain::tests::team();
+        team.members[0].skill_refs = vec![SkillRef { id: customized.id.clone(), version: 1 }];
+        let original_team = serde_json::to_value(&team).unwrap();
+        let mut store = Store { schema_version: 3, teams: vec![team], skills, chats: vec![] };
+        let original_skills = serde_json::to_value(&store.skills).unwrap();
+        upgrade(&mut store);
+        upgrade(&mut store);
+        assert_eq!(serde_json::to_value(&store.skills).unwrap(), original_skills);
+        assert_eq!(serde_json::to_value(&store.teams[0]).unwrap(), original_team);
     }
 }

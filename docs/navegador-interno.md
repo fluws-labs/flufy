@@ -13,3 +13,7 @@ Prueba nativa real: diez vistas WebView2 hijas de una sola ventana, diez sesione
 Repositorio principal y próximos PR: https://github.com/fluws-labs/flufy (main). La versión 0.15.2 y el origen de actualizaciones proceden de esa base. El remoto anterior se conserva únicamente como referencia histórica.
 
 Los comandos IPC y la administración de ventanas usan Window para mantener terminales, observadores de archivos, enfoque y bandeja operativos después de agregar vistas hijas; WebviewWindow deja de representar al host cuando contiene varias vistas.
+
+## Arranque del puente con un PATH anterior a Node
+
+Si Flufy se abrió antes de instalar Node, su entorno puede no encontrar `npm` aunque Node ya esté instalado. El puente busca primero el runtime del PATH y después las ubicaciones estándar de Node en Windows; ejecuta el `npm-cli.js` de esa misma instalación para preparar la dependencia fijada. No modifica el PATH del sistema, no instala otro runtime y no cambia el perfil de navegador ni sus permisos. Este cambio requiere recompilar y reiniciar Flufy; una prueba de resolución de Node/npm no demuestra por sí sola una conexión WebView2 ni una revisión visual.

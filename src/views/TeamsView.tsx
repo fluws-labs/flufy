@@ -5,9 +5,10 @@ import { useProject } from "../state/project"
 import { samePath } from "../lib/paths"
 import { deleteTeam, duplicateTeam, newTeamChat, openTeam, renameChat, selectTeamChat, startTeams, teamCall, useTeams } from "../state/teams"
 import { runStatusLabel } from "../team/types"
+import { teamChatActive } from "../team/chat-active"
 
 export function TeamsView() {
-  const { teams, chats, loaded, error } = useTeams()
+  const { teams, chats, loaded, error, activeChatId } = useTeams()
   const root = useProject((s) => s.root)
   useEffect(() => startTeams(), [])
   const mine = teams.filter((t) => root && samePath(t.projectRoot, root))
@@ -32,8 +33,8 @@ export function TeamsView() {
         <div className="team-actions"><button className="btn btn-xs" onClick={() => openTeamChat(t.id)}>Abrir chat</button><button className="btn btn-xs" onClick={() => openTeam(t.id)}>Configurar</button></div>
       </article>)}
       <h3>Historial de Team Chats</h3>
-      {chats.filter((c) => root && samePath(c.team.projectRoot, root)).slice().reverse().map((c) => <article className="team-sidebar-card" key={c.id}>
-        <button className="team-link" onClick={() => selectTeamChat(c.id)}><Icon name={c.archived ? "archive" : "organization"} /> {c.title}</button>
+      {chats.filter((c) => root && samePath(c.team.projectRoot, root)).slice().reverse().map((c) => <article className={`team-sidebar-card${teamChatActive(c) ? " team-chat-working" : ""}${activeChatId === c.id ? " active" : ""}`} key={c.id}>
+        <button className="team-link" aria-pressed={activeChatId === c.id} onClick={() => selectTeamChat(c.id)}><Icon name={c.archived ? "archive" : "organization"} /> {c.title}{teamChatActive(c) && <span className="team-execution-badge">En ejecución</span>}</button>
         <p>{runStatusLabel(c.runs.at(-1)?.status ?? "") ?? "Sin objetivo todavía"}</p>
         <div className="team-actions"><button className="btn btn-xs" onClick={() => void renameChat(c)}>Renombrar</button><button className="btn btn-xs" onClick={() => void teamCall("team_chats_edit", { id: c.id, title: c.title, archived: !c.archived })}>{c.archived ? "Restaurar" : "Archivar"}</button></div>
       </article>)}

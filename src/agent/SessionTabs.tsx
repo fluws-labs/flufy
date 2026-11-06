@@ -25,6 +25,7 @@ import { archivedSessionOwner } from "../lib/sessions"
 import { closeTeamChat, selectTeamChat, useTeams } from "../state/teams"
 import { useProject } from "../state/project"
 import { samePath } from "../lib/paths"
+import { teamChatActive } from "../team/chat-active"
 
 function tabMenu(e: React.MouseEvent, id: string, session: Session | null) {
   const items: MenuItem[] = []
@@ -155,7 +156,17 @@ export function SessionTabs() {
           </div>
         )
       })}
-      {teamChats.map((c) => <div key={c.id} className={`agent-tab team-tab${teamState.activeChatId === c.id ? " active" : ""}`} title={`Equipo · ${c.title}`} onMouseDown={(e) => { if (e.button === 0) selectTeamChat(c.id); else if (e.button === 1) { e.preventDefault(); closeTeamChat(c.id) } }}><Icon name="organization" className="agent-tab-icon" /><span className="agent-tab-label">{c.title}</span><button type="button" className="agent-tab-close" title="Cerrar pestaña de equipo" onMouseDown={(e) => e.stopPropagation()} onClick={() => closeTeamChat(c.id)}><Icon name="close" /></button></div>)}
+      {teamChats.map((c) => {
+        const working = teamChatActive(c)
+        const selected = teamState.activeChatId === c.id
+        return <div key={c.id} className={`agent-tab team-tab${selected ? " active" : ""}${working ? " team-chat-working" : ""}`} title={`Equipo · ${c.title}${working ? " · En ejecución" : ""}`}>
+          <button type="button" className="team-tab-select" aria-pressed={selected} aria-label={`Equipo · ${c.title}${working ? " · En ejecución" : ""}`} onClick={() => selectTeamChat(c.id)} onMouseDown={(e) => { if (e.button === 1) { e.preventDefault(); closeTeamChat(c.id) } }}>
+            <Icon name="organization" className="agent-tab-icon" /><span className="agent-tab-label">{c.title}</span>
+            {working && <span className="team-execution-badge" aria-hidden="true">En ejecución</span>}
+          </button>
+          <button type="button" className="agent-tab-close" title="Cerrar pestaña de equipo" onClick={() => closeTeamChat(c.id)}><Icon name="close" /></button>
+        </div>
+      })}
     </div>
   )
 }

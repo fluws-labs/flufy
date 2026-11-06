@@ -6,7 +6,7 @@ use std::collections::HashSet;
 
 pub const CATEGORIES: &[&str] = &["quick", "deep", "visual", "code", "review", "local"];
 fn parallel_default() -> usize {
-    2
+    super::staffing::MAX_WORKERS
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -25,6 +25,43 @@ impl Default for RoutingConfig {
             pinned_agents: vec![],
             max_workers_per_provider: parallel_default(),
         }
+    }
+}
+
+#[cfg(test)]
+mod capacity_tests {
+    use super::*;
+
+    #[test]
+    fn enabled_routing_admits_ten_same_provider_workers_and_preserves_explicit_limits() {
+        let config: RoutingConfig = serde_json::from_value(serde_json::json!({"enabled": true})).unwrap();
+        assert_eq!(config.max_workers_per_provider, 10);
+        let mut employee = super::super::domain::tests::team().members[0].clone();
+        employee.model = ModelRef { provider_id: "test".into(), model_id: "assigned".into() };
+        let models = vec![AvailableModel {
+            candidate: ModelCandidate {
+                runtime_id: "opencode".into(), provider_id: "test".into(),
+                model_id: "assigned".into(), capability_scope: "provider:test".into(), variant: None,
+            },
+            name: "Assigned".into(), tools: Some(true), vision: Some(true),
+            reasoning: Some(true), variants: vec![],
+        }];
+        let mut occupied = vec![];
+        for n in 0..10 {
+            employee.id = format!("dev-{n}");
+            let (selected, receipt) = select(&config, &models, &employee, "code", false, &occupied).unwrap();
+            assert_eq!(receipt.policy, "automatic_same_scope");
+            assert_eq!(selected.tools, employee.tools);
+            occupied.push(selected.model.provider_id);
+        }
+        assert!(matches!(select(&config, &models, &employee, "code", false, &occupied), Err(RouteError::Capacity)));
+        let explicit: RoutingConfig = serde_json::from_value(serde_json::json!({"enabled": true, "maxWorkersPerProvider": 2})).unwrap();
+        assert!(select(&explicit, &models, &employee, "code", false, &occupied[..1]).is_ok());
+        assert!(matches!(select(&explicit, &models, &employee, "code", false, &occupied[..2]), Err(RouteError::Capacity)));
+        let restored: RoutingConfig = serde_json::from_value(serde_json::to_value(&explicit).unwrap()).unwrap();
+        assert_eq!(restored.max_workers_per_provider, 2);
+        // Occupancy in another provider does not consume this provider's slots.
+        assert!(select(&explicit, &models, &employee, "code", false, &["other".into(), "other".into()]).is_ok());
     }
 }
 

@@ -26,6 +26,13 @@
 .team-sidebar-list { overflow: auto; padding: 12px; display: flex; flex-direction: column; gap: 14px; }
 .team-sidebar-list h3 { font-size: 12px; text-transform: uppercase; color: var(--fg-dim); }
 .team-sidebar-card { padding: 10px; border: 1px solid var(--border); border-radius: var(--radius); }
+.team-chat-working { --team-execution-color: #f0883e; }
+.team-sidebar-card.team-chat-working, .team-session-history.team-chat-working { border-left: 3px solid var(--team-execution-color); }
+.team-sidebar-card.active { background: var(--bg-active); }
+.team-chat-working > .team-link, .team-chat-working > summary > .codicon { color: var(--team-execution-color); }
+.team-execution-badge { display: inline-flex; align-items: center; flex-shrink: 0; gap: 4px; font-size: 10px; font-weight: 600; color: var(--team-execution-color); white-space: nowrap; }
+.team-execution-badge::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.team-link { flex-wrap: wrap; }
 .team-sidebar-card p { font-size: 11px; color: var(--fg-dim); margin: 6px 0; }
 .team-link { display: inline-flex; gap: 6px; align-items: center; background: none; border: none; text-align: left; color: var(--accent-strong); cursor: pointer; }
 .team-error { color: var(--warn); background: rgba(227,179,65,.07); border: 1px solid rgba(227,179,65,.2); border-radius: var(--radius); padding: 10px; font-size: 12px; overflow-wrap: anywhere; }
@@ -124,6 +131,7 @@
 .team-session-history > summary::before { content: "▸"; }
 .team-session-history[open] > summary::before { content: "▾"; }
 .team-session-history > summary > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.team-session-history > summary > .team-execution-badge { flex: 0 0 auto; }
 .team-session-history > summary small { color: var(--fg-dim); white-space: nowrap; }
 .team-session-history-lead { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px; padding: 4px 10px 10px; }
 .team-session-history-lead > span { color: var(--fg-dim); font-size: 12px; }

@@ -169,14 +169,54 @@ fn installed_cli(dir: &Path) -> Option<PathBuf> {
     (manifest["version"].as_str() == Some(VERSION) && cli.is_file()).then_some(cli)
 }
 
+// A running desktop app can retain the PATH from before Node was installed.
+// Resolve the existing installation locally; never edit the user's PATH or
+// download another runtime just to bootstrap the browser bridge.
+fn node_executable() -> PathBuf {
+    let executable = if cfg!(windows) { "node.exe" } else { "node" };
+    let mut candidates: Vec<PathBuf> = std::env::var_os("PATH")
+        .map(|paths| std::env::split_paths(&paths).map(|p| p.join(executable)).collect())
+        .unwrap_or_default();
+    if cfg!(windows) {
+        for key in ["ProgramW6432", "ProgramFiles", "ProgramFiles(x86)"] {
+            if let Some(root) = std::env::var_os(key) {
+                candidates.push(PathBuf::from(root).join("nodejs").join(executable));
+            }
+        }
+        if let Some(root) = std::env::var_os("LOCALAPPDATA") {
+            candidates.push(PathBuf::from(root).join("Programs/nodejs").join(executable));
+        }
+    }
+    candidates.into_iter().find(|p| p.is_file()).unwrap_or_else(|| "node".into())
+}
+
+fn npm_command(node: &Path) -> Command {
+    let cli = node.parent().map(|p| p.join("node_modules/npm/bin/npm-cli.js"));
+    if let Some(cli) = cli.filter(|p| p.is_file()) {
+        let mut cmd = Command::new(node);
+        cmd.arg(cli);
+        // npm lifecycle commands also need the same existing runtime.
+        if let Some(parent) = node.parent() {
+            let mut paths = vec![parent.to_path_buf()];
+            paths.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()));
+            if let Ok(path) = std::env::join_paths(paths) { cmd.env("PATH", path); }
+        }
+        cmd
+    } else {
+        let mut cmd = Command::new("cmd");
+        cmd.args(["/C", "npm"]);
+        cmd
+    }
+}
+
 fn install(dir: &Path) -> Result<PathBuf, String> {
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     let mut dependencies = serde_json::Map::new();
     dependencies.insert(PACKAGE.to_string(), json!(VERSION));
     let manifest = json!({ "private": true, "dependencies": dependencies });
     std::fs::write(dir.join("package.json"), manifest.to_string()).map_err(|e| e.to_string())?;
-    let mut cmd = Command::new("cmd");
-    cmd.args(["/C", "npm", "install", "--no-audit", "--no-fund", "--loglevel=error"])
+    let mut cmd = npm_command(&node_executable());
+    cmd.args(["install", "--no-audit", "--no-fund", "--loglevel=error"])
         .current_dir(dir)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -213,7 +253,7 @@ pub fn prepare(app: &tauri::AppHandle) {
 fn bridge_command() -> Result<Command, String> {
     let dir = bridge_dir().ok_or("No se pudo resolver la carpeta del puente Chrome")?;
     let cli = ensure_installed(&dir)?;
-    let mut cmd = Command::new("node");
+    let mut cmd = Command::new(node_executable());
     cmd.arg(cli);
     cmd.args(BRIDGE_ARGS)
         .env("CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS", "1")
@@ -632,6 +672,21 @@ fn truncate(text: &str, limit: usize) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "requires an existing Windows Node/npm installation; run with Node absent from PATH to exercise desktop bootstrap"]
+    fn installed_node_bootstraps_npm_without_path() {
+        let node = node_executable();
+        assert!(node.is_absolute(), "an existing Node installation must be resolved: {node:?}");
+        let output = Command::new(&node).arg("--version").output().unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        let mut npm = npm_command(&node);
+        assert_eq!(npm.get_program(), node.as_os_str(), "use npm-cli.js with the resolved runtime, not a shell lookup");
+        let output = npm.arg("--version").output().unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        println!("PASS: resolved installed Node and npm without changing system configuration");
+    }
 
     #[test]
     #[ignore = "requires Chrome 144+ with remote debugging enabled and the user's connection approval"]
