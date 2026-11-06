@@ -5,6 +5,8 @@ import { join } from "node:path"
 import { fixtureDirectory } from "./fixture-directory.mjs"
 import { available, installSkills, revision } from "../scripts/install-superpowers-skills.mjs"
 
+const text = async (path: string) => (await readFile(path, "utf8")).replace(/\r\n/g, "\n")
+
 // Temporary projects stay inside the QA-owned tree, not user projects.
 async function project(run: (root: string) => Promise<void>) {
   const root = await fixtureDirectory("superpowers-")
@@ -17,7 +19,7 @@ test("selectively installs a discoverable project skill and MIT license, without
     assert.deepEqual(result.map(s => s.status), ["installed"])
     const directory = join(root, ".opencode/skills")
     assert.deepEqual(await readdir(directory), ["superpowers-systematic-debugging"])
-    const document = await readFile(join(directory, "superpowers-systematic-debugging/SKILL.md"), "utf8")
+    const document = await text(join(directory, "superpowers-systematic-debugging/SKILL.md"))
     assert.match(document, /^---\nname: superpowers-systematic-debugging\n/)
     assert.ok(document.includes(revision))
     assert.match(document, /Contrato de Flufy/)
@@ -86,7 +88,7 @@ test("the nine reviewed adaptations are available to engine discovery and embedd
   const rust = await readFile("src-tauri/src/teams/skills.rs", "utf8")
   assert.match(rust, /superpowers-catalog\.json/)
   for (const skill of available) {
-    const document = await readFile(`.opencode/skills/${skill.slug}/SKILL.md`, "utf8")
+    const document = await text(`.opencode/skills/${skill.slug}/SKILL.md`)
     assert.match(document, new RegExp(`^---\\nname: ${skill.slug}\\n`))
     assert.match(document, /compatibility: opencode/)
     assert.match(document, /Contrato de Flufy/)
