@@ -1,0 +1,9 @@
+Flufy 0.23.0 mejora el arranque de pruebas locales: cuando pedís probar en local, el agente prepara dependencias y configuración y arranca la app por su flujo normal, abriendo terminales, servicios y navegador según corresponda. Reutiliza lo que ya está corriendo y solo usa un entorno aislado si lo pedís explícitamente.
+
+Los chats de equipo muestran en naranja cuáles están ejecutando trabajo de verdad, distinguiéndolos de una simple selección o de una entrega que espera revisión. Los equipos automáticos nuevos arrancan con hasta diez especialistas en paralelo.
+
+El navegador interno incorpora su propio bootstrap de Node y npm, así deja de depender del PATH del sistema para iniciar.
+
+Se suman nueve skills «Superpowers ·», adaptadas en español y con licencia MIT de obra/superpowers: depuración sistemática, verificación antes de cerrar, pedir y recibir revisión de código, desarrollo guiado por pruebas, escribir y ejecutar planes, crear skills y clarificar el enfoque antes de construir. Quedan disponibles en el catálogo de Equipos para asignarlas a un integrante; no se aplican solas ni modifican equipos existentes. También incluye un instalador selectivo para copiarlas a otro proyecto.
+
+En Plan Vivo V2, la vigencia del plan ahora se basa en los archivos realmente observados y, si algo cambió, el aviso indica exactamente qué archivo invalidó la validación. Se mantiene el canal oficial de actualizaciones firmadas y los datos existentes.

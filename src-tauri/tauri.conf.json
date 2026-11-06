@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "flufy",
-  "version": "0.18.0",
+  "version": "0.23.0",
   "identifier": "com.guillecode.desktop",
   "build": {
     "frontendDist": "../dist",
