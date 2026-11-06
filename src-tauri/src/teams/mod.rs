@@ -733,8 +733,12 @@ fn control(app: &AppHandle, id: &str, action: &str) -> Result<(), String> {
             runner::launch(app, id);
         }
         "start_plan" if r.status == "plan_ready" => {
-            if plan_v2::discover(&r)?.iter().zip(&r.plan_v2.discovery).any(|(a,b)| a.digest != b.digest) {
-                return Err("STALE_BASELINE: los archivos cambiaron desde la validación del plan".into());
+            let changes = plan_v2::stale_changes(&plan_v2::discover(&r)?, &r.plan_v2.discovery);
+            if !changes.is_empty() {
+                return Err(format!(
+                    "STALE_BASELINE: los archivos cambiaron desde la validación del plan: {}",
+                    changes.join("; ")
+                ));
             }
             update_run(app,id,|r| {
                 if !r.plan_v2.validation.as_ref().is_some_and(|v| v.valid) || plan_v2::plan_digest(r) != r.plan_v2.digest {
@@ -997,6 +1001,22 @@ pub fn team_evidence_open(app: AppHandle, run_id: String) -> Result<(), String> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn new_autonomous_chats_allow_ten_workers_without_preallocating_them() {
+        let model = ModelRef { provider_id: "test".into(), model_id: "test".into() };
+        let chat = autonomous_chat(&empty(), "D:/repo".into(), model, None).unwrap();
+        assert_eq!(chat.team.max_parallel_tasks, 10);
+        assert_eq!(chat.team.max_parallel_tasks, staffing::MAX_WORKERS);
+        assert_eq!(chat.team.members.len(), 1);
+        assert_eq!(chat.team.members[0].id, chat.team.lead_agent_id);
+        assert!(chat.runs.is_empty());
+        // Loading an explicitly configured team must not apply the new-chat default.
+        let mut configured = chat.team;
+        configured.max_parallel_tasks = 2;
+        let restored: Team = serde_json::from_value(serde_json::to_value(&configured).unwrap()).unwrap();
+        validate_team(&restored, &empty().skills).unwrap();
+        assert_eq!(restored.max_parallel_tasks, 2);
+    }
     #[test]
     fn changing_future_chat_model_preserves_run_snapshots_and_pending_turns() {
         let team = domain::tests::team();

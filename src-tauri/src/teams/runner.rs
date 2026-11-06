@@ -868,9 +868,10 @@ fn plan(app: &AppHandle, id: &str) -> Result<(), String> {
     let proposal = super::plan_v2::parse_proposal(&text, &r).and_then(|plan| {
         if r.plan_v2.enabled {
             let discovery = super::plan_v2::discover(&r).map_err(|message| super::plan_v2::ValidationReceipt { valid:false,validated_at:now(),issues:vec![super::plan_v2::PlanIssue { code:super::plan_v2::PlanErrorCode::StaleBaseline, task_ids:vec![],message }] })?;
-            if discovery.iter().zip(&r.plan_v2.discovery).any(|(a,b)| a.digest != b.digest) {
+            let changes = super::plan_v2::stale_changes(&discovery, &r.plan_v2.discovery);
+            if !changes.is_empty() {
                 return Err(super::plan_v2::ValidationReceipt { valid:false,validated_at:now(),issues:vec![super::plan_v2::PlanIssue {
-                    code:super::plan_v2::PlanErrorCode::StaleBaseline,task_ids:vec![],message:"Los archivos cambiaron durante la planificación. Reintentá con un descubrimiento actualizado".into() }] });
+                    code:super::plan_v2::PlanErrorCode::StaleBaseline,task_ids:vec![],message:format!("Los archivos cambiaron durante la planificación: {}. Reintentá con un descubrimiento actualizado",changes.join("; ")) }] });
             }
         }
         Ok(plan)
@@ -906,16 +907,19 @@ fn plan(app: &AppHandle, id: &str) -> Result<(), String> {
             return Ok(());
         }
     }
-    if r.plan_v2.enabled && super::plan_v2::discover(&r)?.iter().zip(&r.plan_v2.discovery).any(|(a,b)| a.digest != b.digest) {
-        update_run(app,id,|r| {
-            if r.status == "cancelling" { return Err("Cancelación solicitada durante la revisión del plan".into()); }
-            let message = "Los archivos o la revisión Git cambiaron durante la validación; reintentá la planificación actualizada".to_string();
-            r.status = "planning_blocked".into(); r.plan_v2.stage = "plan_invalid".into(); r.error = Some(message.clone());
-            r.plan_v2.validation = Some(super::plan_v2::ValidationReceipt { valid:false,validated_at:now(),issues:vec![super::plan_v2::PlanIssue { code:super::plan_v2::PlanErrorCode::StaleBaseline,task_ids:vec![],message }] });
-            r.recovered_plan = None;
-            Ok(())
-        })?;
-        return Ok(());
+    if r.plan_v2.enabled {
+        let changes = super::plan_v2::stale_changes(&super::plan_v2::discover(&r)?, &r.plan_v2.discovery);
+        if !changes.is_empty() {
+            update_run(app,id,|r| {
+                if r.status == "cancelling" { return Err("Cancelación solicitada durante la revisión del plan".into()); }
+                let message = format!("Los archivos cambiaron durante la validación: {}. Reintentá la planificación actualizada",changes.join("; "));
+                r.status = "planning_blocked".into(); r.plan_v2.stage = "plan_invalid".into(); r.error = Some(message.clone());
+                r.plan_v2.validation = Some(super::plan_v2::ValidationReceipt { valid:false,validated_at:now(),issues:vec![super::plan_v2::PlanIssue { code:super::plan_v2::PlanErrorCode::StaleBaseline,task_ids:vec![],message }] });
+                r.recovered_plan = None;
+                Ok(())
+            })?;
+            return Ok(());
+        }
     }
     let planned_team = super::staffing::with_agents(&run(app,id)?.team, &plan.agents, &r.skills)?;
     for t in &mut plan.tasks {
@@ -2201,6 +2205,35 @@ mod tests {
             assert!(r.tasks.is_empty());
         }
     }
+    #[test]
+    fn ten_workers_dispatch_independently_and_preserve_explicit_caps_and_ownership() {
+        let mut team = super::super::domain::tests::team();
+        team.autonomous = true;
+        team.max_parallel_tasks = super::super::staffing::MAX_WORKERS;
+        assert_eq!(team.max_parallel_tasks, 10);
+        let mut r: Run = serde_json::from_value(json!({"id":"run","goal":"Diez módulos independientes","team":team,"skills":[],"status":"planning","startedAt":0,"finishedAt":null,"planSessionId":null,"tasks":[],"summary":"","error":null,"evidenceDir":"unused","artifacts":[],"baseline":[],"notified":false})).unwrap();
+        let agents: Vec<_> = (0..10).map(|n| json!({"id":format!("dev-{n}"),"role":"Backend"})).collect();
+        let tasks: Vec<_> = (0..10).map(|n| json!({"id":format!("task-{n}"),"title":"Módulo","objective":"Implementar y comprobar","assignedAgentId":format!("dev-{n}"),"repository":"D:/repo","dependencies":[],"expectedFiles":[],"writePaths":[format!("src/module-{n}/")],"acceptanceCriteria":["check"]})).collect();
+        let plan = validated_plan(&json!({"agents":agents,"tasks":tasks}).to_string(), &r).unwrap();
+        r.team = super::super::staffing::with_agents(&r.team, &plan.agents, &[]).unwrap();
+        r.tasks = plan.tasks;
+        assert_eq!(ready_tasks(&r, &HashSet::new()).unwrap().len(), 10);
+        r.team.max_parallel_tasks = 3;
+        assert_eq!(ready_tasks(&r, &HashSet::new()).unwrap().len(), 3);
+        r.tasks[0].status = "running".into();
+        assert_eq!(ready_tasks(&r, &HashSet::new()).unwrap().len(), 2);
+        r.team.max_parallel_tasks = 10;
+        r.tasks[1].dependencies = vec![r.tasks[0].id.clone()];
+        assert_eq!(ready_tasks(&r, &HashSet::new()).unwrap().len(), 8);
+        r.tasks[2].write_paths = r.tasks[0].write_paths.clone();
+        assert_eq!(ready_tasks(&r, &HashSet::new()).unwrap().len(), 7);
+        r.tasks[0].status = "completed".into();
+        assert_eq!(ready_tasks(&r, &HashSet::new()).unwrap().len(), 9);
+        // A second task on one developer still obeys that developer's capacity.
+        r.tasks[2].assigned_agent_id = r.tasks[1].assigned_agent_id.clone();
+        assert_eq!(ready_tasks(&r, &HashSet::new()).unwrap().len(), 8);
+    }
+
     #[test]
     fn automatic_plan_staffs_three_parallel_owners_and_survives_recovery() {
         let mut team = super::super::domain::tests::team();

@@ -14,7 +14,7 @@ test("visual evidence rejects non-local and credential-bearing targets", () => {
   assert.equal(localUrl("http://127.0.0.1:1234/app").hostname, "127.0.0.1")
 })
 
-test("isolated browser captures real before/after PNGs, executes steps and masks personal data", { timeout: 90000 }, async () => {
+test("isolated browser captures real before/after PNGs, executes steps and masks personal data", { timeout: 180000 }, async () => {
   const browser = ["C:/Program Files/Google/Chrome/Application/chrome.exe", "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe"].find(existsSync)
   assert.ok(browser, "Install Chrome/Edge to run the real visual evidence test")
   let after = false

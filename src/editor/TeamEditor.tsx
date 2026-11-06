@@ -27,7 +27,7 @@ function blank(): Team {
     employee("Frontend", "Frontend"),
   ]
   const repos = activeWorkspace()?.repos.map((r) => r.path) ?? []
-  return { id: "", name: "Team 1", projectRoot: root, allowedRepositories: repos.length ? repos : [root], leadAgentId: members[0].id, members, maxParallelTasks: 3, maxRetriesPerTask: 1, updatedAt: 0 }
+  return { id: "", name: "Team 1", projectRoot: root, allowedRepositories: repos.length ? repos : [root], leadAgentId: members[0].id, members, maxParallelTasks: 10, maxRetriesPerTask: 1, updatedAt: 0 }
 }
 
 function SkillEditor({ skill, onClose }: { skill: Skill | null; onClose: () => void }) {

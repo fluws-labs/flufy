@@ -6,7 +6,7 @@ const categories: { id: RouteCategory; label: string }[] = [
   { id: "code", label: "Código" }, { id: "quick", label: "Rápidas" }, { id: "deep", label: "Razonamiento" },
   { id: "visual", label: "Interfaz y visión" }, { id: "review", label: "Revisión" }, { id: "local", label: "Local" },
 ]
-const initial = (): RoutingConfig => ({ enabled: false, routes: [], pinnedAgents: [], maxWorkersPerProvider: 2 })
+const initial = (): RoutingConfig => ({ enabled: false, routes: [], pinnedAgents: [], maxWorkersPerProvider: 10 })
 const key = (m: ModelCandidate) => JSON.stringify([m.runtimeId, m.providerId, m.modelId])
 
 export function ModelRouting({ team, chatId, pending }: { team: Team; chatId: string; pending: boolean }) {

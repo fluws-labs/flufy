@@ -8,6 +8,7 @@ const READ: &[&str] = &["read", "glob", "grep"];
 const WEB: &[&str] = &["webfetch", "websearch"];
 // Visible execution requires existing shell authority, not merely a QA role.
 const TERMINAL: &[&str] = &["terminal_terminal_run", "terminal_terminal_read"];
+const LOCAL_EXECUTION: &str = "PROBAR EN LOCAL: Cuando el usuario pide probar en local, prepará las dependencias y la configuración necesarias y arrancá la app por el flujo normal documentado del proyecto. Abrí los recursos pertinentes: terminal integrada para servidores y procesos persistentes, app o navegador y servicios necesarios. Primero comprobá qué ya está funcionando para reutilizarlo sin duplicar ni detener procesos del usuario. Esto forma parte del pedido, no es una demostración opcional. Usá un sistema aislado solo si el usuario lo pide explícitamente (por ejemplo, «usar sistema aislado»); no sustituyas el arranque natural por mocks, servicios simulados, perfiles temporales o infraestructura reducida. Un worktree separa archivos de desarrollo, no exige aislar la ejecución. El navegador interno de equipo mantiene su separación de sesiones; eso no obliga a aislar la app ni sus servicios. Conservá permisos, controles de acceso y datos del usuario. Usá datos de prueba autorizados para escrituras; no cambies configuración sensible ni infraestructura ajena al pedido. Si falta acceso real, informá el bloqueo concreto y completá lo independiente sin afirmar que la prueba pasó. El Lead debe asignar la preparación a un trabajador con bash autorizado; las sesiones de conversación, planificación y revisión conservan sus restricciones y no arrancan procesos por su cuenta.";
 const OBSERVE: &[&str] = &[
     "browser_list_pages", "browser_take_snapshot", "browser_take_screenshot",
     "browser_list_console_messages", "browser_get_console_message",
@@ -64,6 +65,7 @@ pub(super) fn permissions(rules: &mut Vec<Value>, mode: Mode) {
 pub(super) fn instructions(mode: Mode) -> String {
     if mode == Mode::Format { return "Corregí únicamente el JSON solicitado. No ejecutes herramientas ni rehagas el trabajo. Conservá los especialistas y sus tareas independientes; no reemplaces el plan por una tarea genérica del Lead. Devolvé un único objeto JSON sin Markdown ni texto adicional; chatSummary, si corresponde, va dentro de ese mismo objeto.".into(); }
     let scope = "El equipo dispone de búsqueda y lectura web, y de las herramientas nativas browser_* y desktop_* con los mismos controles del chat normal. El control de la PC debe estar encendido y sin pausa. En modo equipo browser_list_pages crea automáticamente una página interna propia para tu sesión. browser_* controla solo tus páginas WebView2 dentro de este chat, aisladas de las de otros agentes aunque compartan el perfil del equipo. browser_new_page crea otra pestaña tuya y devuelve el listado; conservá su pageId. El usuario observa las páginas desde la pestaña Navegador del chat. No se abren ventanas externas ni se toma foco o entrada del sistema. No uses Chrome externo ni desktop_* como sustituto para navegar. Las acciones de escritorio respetan el bloqueo de entrada de la app. Si falta la ventana o el control está apagado, explicá qué debe activar el usuario; no uses shell u otra herramienta para eludirlo. Las acciones y observaciones reales quedan en la sesión del agente. No confundas una captura de referencia con evidencia de una prueba. No hagas envíos, pagos, borrados ni publicaciones salvo instrucción explícita del usuario. Para cambios de archivos se mantiene la propiedad de writePaths y los permisos de bash; las herramientas de PC no los amplían.";
+    let scope = format!("{}\n{}", scope, LOCAL_EXECUTION);
     if mode == Mode::ReadOnly {
         format!("{} En este paso de planificación o revisión solo podés observar el navegador/escritorio; no navegar, hacer clic ni escribir. Usá las observaciones y la evidencia de los trabajadores para revisar los criterios.", scope)
     } else { format!("{} RECUPERACIÓN DEL NAVEGADOR DEL EQUIPO: Si falta o se cerró tu vista, llamá browser_list_pages. Flufy crea una página interna exclusiva para tu sesión sin elegir una página de otro agente. Volvé a navegar a la URL conocida y tomá una observación nueva antes de actuar. No repitas clics ni envíos a ciegas ni reutilices referencias de la página perdida. Si Chrome está desconectado, el control está apagado o el usuario lo pausó, informá exactamente qué acceso falta; no intentes cambiar esas preferencias. Para edición, si una herramienta deniega un archivo, indicá su ruta, la operación y qué writePaths recibiste; pedí al Lead revisar la asignación en lugar de afirmar que no tenés permisos para programar. En tareas puramente de navegación o interfaz sin archivos esperados, verificá el estado final con observaciones reales de herramientas y dejá checks vacío; no inventes comandos ni ejecutes pruebas arbitrarias. Las implementaciones de código siguen requiriendo sus comprobaciones pertinentes.\n{}", scope, crate::desktop::escritorio_prompt()) }
@@ -72,6 +74,14 @@ pub(super) fn instructions(mode: Mode) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn local_execution_instructions_reach_operational_modes_not_format_retries() {
+        for mode in [Mode::ReadOnly, Mode::Worker, Mode::Conversation] {
+            let prompt = instructions(mode);
+            assert!(prompt.contains(LOCAL_EXECUTION));
+        }
+        assert!(!instructions(Mode::Format).contains(LOCAL_EXECUTION));
+    }
     #[test]
     fn visible_servers_require_worker_shell_authority_and_keep_command_approval() {
         let mut employee = super::super::domain::tests::team().members[0].clone();
