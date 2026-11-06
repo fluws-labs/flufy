@@ -269,8 +269,7 @@ pub(super) fn discover(r: &Run) -> Result<Vec<DiscoveryReport>, String> {
             evidence::git(repo, &["status", "--short", "--untracked-files=all"], None)
                 .map(|s| evidence::sanitize(&s))
                 .unwrap_or_else(|_| "Git no disponible; snapshot de archivos conservado".into());
-        let report_digest =
-            digest(&json!({"files":files,"head":base_revision,"dirty":dirty_state_summary}));
+        let report_digest = digest(&json!({"files":files}));
         reports.push(DiscoveryReport {
             repo_root: repo.clone(),
             base_revision,
@@ -287,6 +286,48 @@ pub(super) fn discover(r: &Run) -> Result<Vec<DiscoveryReport>, String> {
         });
     }
     Ok(reports)
+}
+
+pub(super) fn stale_changes(current: &[DiscoveryReport], baseline: &[DiscoveryReport]) -> Vec<String> {
+    let mut changes = Vec::new();
+    for before in baseline {
+        let Some(after) = current.iter().find(|r| same_path(&r.repo_root, &before.repo_root)) else {
+            changes.push(format!("carpeta no observada: {}", before.repo_root));
+            continue;
+        };
+        let before_files: BTreeMap<&str, &str> = before
+            .observed_files
+            .iter()
+            .map(|f| (f.path.as_str(), f.sha256.as_str()))
+            .collect();
+        let after_files: BTreeMap<&str, &str> = after
+            .observed_files
+            .iter()
+            .map(|f| (f.path.as_str(), f.sha256.as_str()))
+            .collect();
+        for (path, sha) in &before_files {
+            match after_files.get(path) {
+                None => changes.push(format!("eliminado: {path}")),
+                Some(next) if next != sha => changes.push(format!("modificado: {path}")),
+                _ => {}
+            }
+        }
+        for path in after_files.keys() {
+            if !before_files.contains_key(path) {
+                changes.push(format!("agregado: {path}"));
+            }
+        }
+    }
+    for after in current {
+        if !baseline.iter().any(|r| same_path(&r.repo_root, &after.repo_root)) {
+            changes.push(format!("carpeta agregada: {}", after.repo_root));
+        }
+    }
+    if changes.len() > 12 {
+        changes.truncate(12);
+        changes.push("... (más cambios)".into());
+    }
+    changes
 }
 
 fn reaches(tasks: &[Task], from: &str, target: &str, seen: &mut HashSet<String>) -> bool {

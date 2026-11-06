@@ -733,8 +733,12 @@ fn control(app: &AppHandle, id: &str, action: &str) -> Result<(), String> {
             runner::launch(app, id);
         }
         "start_plan" if r.status == "plan_ready" => {
-            if plan_v2::discover(&r)?.iter().zip(&r.plan_v2.discovery).any(|(a,b)| a.digest != b.digest) {
-                return Err("STALE_BASELINE: los archivos cambiaron desde la validación del plan".into());
+            let changes = plan_v2::stale_changes(&plan_v2::discover(&r)?, &r.plan_v2.discovery);
+            if !changes.is_empty() {
+                return Err(format!(
+                    "STALE_BASELINE: los archivos cambiaron desde la validación del plan: {}",
+                    changes.join("; ")
+                ));
             }
             update_run(app,id,|r| {
                 if !r.plan_v2.validation.as_ref().is_some_and(|v| v.valid) || plan_v2::plan_digest(r) != r.plan_v2.digest {

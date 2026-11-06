@@ -322,11 +322,34 @@ fn native_discovery_observes_files_and_scripts_without_reading_secrets_or_creati
     assert!(!serde_json::to_string(&report)
         .unwrap()
         .contains("never-read"));
+    let git = |args: &[&str]| {
+        let output = std::process::Command::new("git")
+            .args(args)
+            .current_dir(&root)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {:?}: {}",
+            args,
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    git(&["init"]);
+    git(&["add", "package.json"]);
+    let staged = discover(&run).unwrap();
+    assert_eq!(report[0].digest, staged[0].digest);
+    assert!(stale_changes(&staged, &report).is_empty());
     std::fs::write(root.join("package.json"), "{}").unwrap();
-    assert_ne!(report[0].digest, discover(&run).unwrap()[0].digest);
+    let changed = discover(&run).unwrap();
+    assert_ne!(report[0].digest, changed[0].digest);
+    assert_eq!(
+        stale_changes(&changed, &report),
+        vec!["modificado: package.json"]
+    );
     std::fs::remove_file(root.join(".env")).unwrap();
     std::fs::remove_file(root.join("package.json")).unwrap();
-    std::fs::remove_dir(root).unwrap();
+    let _ = std::fs::remove_dir_all(root);
 }
 
 #[test]

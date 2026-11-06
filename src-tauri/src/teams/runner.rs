@@ -868,9 +868,10 @@ fn plan(app: &AppHandle, id: &str) -> Result<(), String> {
     let proposal = super::plan_v2::parse_proposal(&text, &r).and_then(|plan| {
         if r.plan_v2.enabled {
             let discovery = super::plan_v2::discover(&r).map_err(|message| super::plan_v2::ValidationReceipt { valid:false,validated_at:now(),issues:vec![super::plan_v2::PlanIssue { code:super::plan_v2::PlanErrorCode::StaleBaseline, task_ids:vec![],message }] })?;
-            if discovery.iter().zip(&r.plan_v2.discovery).any(|(a,b)| a.digest != b.digest) {
+            let changes = super::plan_v2::stale_changes(&discovery, &r.plan_v2.discovery);
+            if !changes.is_empty() {
                 return Err(super::plan_v2::ValidationReceipt { valid:false,validated_at:now(),issues:vec![super::plan_v2::PlanIssue {
-                    code:super::plan_v2::PlanErrorCode::StaleBaseline,task_ids:vec![],message:"Los archivos cambiaron durante la planificación. Reintentá con un descubrimiento actualizado".into() }] });
+                    code:super::plan_v2::PlanErrorCode::StaleBaseline,task_ids:vec![],message:format!("Los archivos cambiaron durante la planificación: {}. Reintentá con un descubrimiento actualizado",changes.join("; ")) }] });
             }
         }
         Ok(plan)
@@ -906,16 +907,19 @@ fn plan(app: &AppHandle, id: &str) -> Result<(), String> {
             return Ok(());
         }
     }
-    if r.plan_v2.enabled && super::plan_v2::discover(&r)?.iter().zip(&r.plan_v2.discovery).any(|(a,b)| a.digest != b.digest) {
-        update_run(app,id,|r| {
-            if r.status == "cancelling" { return Err("Cancelación solicitada durante la revisión del plan".into()); }
-            let message = "Los archivos o la revisión Git cambiaron durante la validación; reintentá la planificación actualizada".to_string();
-            r.status = "planning_blocked".into(); r.plan_v2.stage = "plan_invalid".into(); r.error = Some(message.clone());
-            r.plan_v2.validation = Some(super::plan_v2::ValidationReceipt { valid:false,validated_at:now(),issues:vec![super::plan_v2::PlanIssue { code:super::plan_v2::PlanErrorCode::StaleBaseline,task_ids:vec![],message }] });
-            r.recovered_plan = None;
-            Ok(())
-        })?;
-        return Ok(());
+    if r.plan_v2.enabled {
+        let changes = super::plan_v2::stale_changes(&super::plan_v2::discover(&r)?, &r.plan_v2.discovery);
+        if !changes.is_empty() {
+            update_run(app,id,|r| {
+                if r.status == "cancelling" { return Err("Cancelación solicitada durante la revisión del plan".into()); }
+                let message = format!("Los archivos cambiaron durante la validación: {}. Reintentá la planificación actualizada",changes.join("; "));
+                r.status = "planning_blocked".into(); r.plan_v2.stage = "plan_invalid".into(); r.error = Some(message.clone());
+                r.plan_v2.validation = Some(super::plan_v2::ValidationReceipt { valid:false,validated_at:now(),issues:vec![super::plan_v2::PlanIssue { code:super::plan_v2::PlanErrorCode::StaleBaseline,task_ids:vec![],message }] });
+                r.recovered_plan = None;
+                Ok(())
+            })?;
+            return Ok(());
+        }
     }
     let planned_team = super::staffing::with_agents(&run(app,id)?.team, &plan.agents, &r.skills)?;
     for t in &mut plan.tasks {
