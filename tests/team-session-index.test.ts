@@ -46,12 +46,12 @@ test("sesiones de Solucionador y Supervisor permanecen dentro del equipo",()=>{
   assert.equal(grouped.groups[0].sessions.length,2)
 })
 
-test("la conversaci髇 de origen del Lead sigue visible como sesi髇 normal", () => {
+test("la conversaci贸n de origen del Lead sigue visible como sesi贸n normal", () => {
   const record = chat("lead")
-  record.origin = { sessionId: "lead-plan", messageId: "m", title: "Conversaci髇", directory: "/repo", createdAt: 1 }
+  record.origin = { sessionId: "lead-plan", messageId: "m", title: "Conversaci贸n", directory: "/repo", createdAt: 1 }
   indexTeamSessions([record])
   assert.equal(isTeamSession("lead-plan"), true, "permissions still treat the Lead as a team session")
-  const grouped = groupTeamSessions([session("lead-plan", "Conversaci髇"), session("lead-worker")], [record])
+  const grouped = groupTeamSessions([session("lead-plan", "Conversaci贸n"), session("lead-worker")], [record])
   assert.deepEqual(grouped.normal.map(s => s.id), ["lead-plan"])
   assert.deepEqual(grouped.groups[0].sessions.map(s => s.id), ["lead-worker"])
 })

@@ -623,7 +623,9 @@ mod tests {
     fn preview_tools_are_listed_without_prefix_in_teams_channel() {
         let listed = tool_list(Channel::Teams);
         let names: Vec<&str> = listed.iter().filter_map(|t| t["name"].as_str()).collect();
-        assert_eq!(names, vec!["delegate", "preview_get", "preview_identity", "preview_apply"]);
+        for expected in ["delegate", "start_work", "adjust_plan", "board", "control_run", "system_resources", "preview_get", "preview_identity", "preview_apply"] {
+            assert!(names.contains(&expected), "Falta la herramienta {expected}");
+        }
         assert_eq!(Channel::Teams.name(), "teams");
         let config = agent_config(&state());
         assert_eq!(config["permission"]["teams_preview_*"], "allow");

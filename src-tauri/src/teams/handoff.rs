@@ -44,7 +44,7 @@ struct Source {
 }
 
 pub fn tools() -> Vec<Value> {
-    vec![json!({"name":"delegate","description":"OBSOLETO: usá start_work para el Lead en esta misma conversación; no abras otro chat. Inicia un equipo para implementar el plan acordado en ESTE chat después de que el usuario elija «Con un equipo» o pida explícitamente esa delegación. Antes de empezar un trabajo de implementación no trivial, si no eligió modo, preguntale una sola vez con question: «¿Querés que lo resuelva un equipo o seguimos en este chat?»; no preguntes en consultas ni cambios triviales. Transfiere objetivo, plan, investigación relevante, decisiones y aceptación; hereda carpeta y modelo, conserva enlace al chat de origen y devuelve el ID de la ejecución real. No usar para preguntas o ejemplos sobre equipos. Reintentos del mismo pedido reutilizan el equipo y no duplican ejecuciones.","inputSchema":{"type":"object","additionalProperties":false,"properties":{
+    vec![json!({"name":"delegate","description":"usá start_work para el Lead en esta misma conversación; no abras otro chat. Inicia un equipo para implementar el plan acordado en ESTE chat después de que el usuario elija «Con un equipo» o pida explícitamente esa delegación. Antes de empezar un trabajo de implementación no trivial, si no eligió modo, preguntale una sola vez con question: «¿Querés que lo resuelva un equipo o seguimos en este chat?»; no preguntes en consultas ni cambios triviales. Transfiere objetivo, plan, investigación relevante, decisiones y aceptación; hereda carpeta y modelo, conserva enlace al chat de origen y devuelve el ID de la ejecución real. No usar para preguntas o ejemplos sobre equipos. Reintentos del mismo pedido reutilizan el equipo y no duplican ejecuciones.","inputSchema":{"type":"object","additionalProperties":false,"properties":{
         "projectRoot":{"type":"string","description":"Carpeta absoluta de este chat, incluido su worktree si corresponde. El servidor la contrasta con la sesión real."},
         "previewIdentity":{"type":"object","description":"Identidad exacta de la tarea vigente elegida por el usuario en el panel. Obligatoria si esta conversación tiene diseños; nunca inferir la última fila ni reutilizar otra tarea.","properties":{"projectRoot":{"type":"string"},"sessionId":{"type":"string"},"taskId":{"type":"string"},"designId":{"type":"string"}},"required":["projectRoot","sessionId","taskId","designId"],"additionalProperties":false},
         "title":{"type":"string","description":"Nombre breve del trabajo"},
@@ -163,6 +163,7 @@ fn prepare_lead(
         directory: source.directory.clone(),
         created_at: now(),
         error: None,
+        preview_reference: source.preview_reference.clone(),
     });
     chat.memory = Some(memory);
     chat.auto_approve = Some(false);
