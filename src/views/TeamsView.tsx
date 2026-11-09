@@ -16,6 +16,11 @@ export function TeamsView() {
   const [templates, setTemplates] = useState(true)
   useEffect(() => startTeams(), [])
   const mine = teams.filter((team) => root && samePath(team.projectRoot, root))
+  const openTeamChat = (teamId: string) => {
+    const existing = chats.slice().reverse().find((chat) => chat.team.id === teamId && !chat.archived)
+    if (existing) selectTeamChat(existing.id)
+    else void newTeamChat(teamId)
+  }
   const returnToChat = (chat: (typeof chats)[number]) => {
     if (!chat.origin) return
     rememberSessionDirectory(chat.origin.sessionId, chat.origin.directory)
@@ -50,9 +55,9 @@ export function TeamsView() {
           { label: "Duplicar", icon: "copy", run: () => void duplicateTeam(team) },
           { label: "Eliminar plantilla", icon: "trash", danger: true, run: () => void deleteTeam(team) },
         ])}>
-          <button className="team-link" onClick={() => void newTeamChat(team.id)}><Icon name="organization" /> <strong>{team.name}</strong></button>
+          <button className="team-link" onClick={() => openTeamChat(team.id)}><Icon name="organization" /> <strong>{team.name}</strong></button>
           <p>{team.members.length} integrantes · {team.members.map((member) => member.role).join(", ")}</p>
-          <div className="team-actions"><button className="btn btn-xs" onClick={() => void newTeamChat(team.id)}>Abrir chat</button><button className="btn btn-xs" onClick={() => openTeam(team.id)}>Configurar</button></div>
+          <div className="team-actions"><button className="btn btn-xs" onClick={() => openTeamChat(team.id)}>Abrir chat</button><button className="btn btn-xs" onClick={() => openTeam(team.id)}>Configurar</button></div>
         </article>)}
       </section>}
       <h3>Trabajos</h3>
