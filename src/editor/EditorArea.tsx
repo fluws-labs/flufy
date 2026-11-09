@@ -40,6 +40,7 @@ import { MemoryEditor } from "./MemoryEditor"
 import { BrowserEditor } from "./BrowserEditor"
 import { AccountsEditor } from "./AccountsEditor"
 import { CodeIndexEditor } from "./CodeIndexEditor"
+import { ResourcesEditor } from "./ResourcesEditor"
 import { FeatureCreateEditor, FeatureIntegrateEditor } from "./FeatureEditor"
 import { SessionPane } from "../agent/AgentPanel"
 import { openContextMenu, openMenuAt, type MenuItem } from "../components/ContextMenu"
@@ -83,6 +84,8 @@ function tabIcon(input: EditorInput) {
       return <Icon name="account" className="tab-icon" />
     case "codeIndex":
       return <Icon name="search" className="tab-icon" />
+    case "resources":
+      return <Icon name="pulse" className="tab-icon" />
     case "featureCreate":
       return <Icon name="git-branch-create" className="tab-icon git" />
     case "featureIntegrate":
@@ -335,6 +338,8 @@ function EditorContent({ tab }: { tab: Tab }) {
       return <AccountsEditor />
     case "codeIndex":
       return <CodeIndexEditor />
+    case "resources":
+      return <ResourcesEditor />
     case "featureCreate":
       return <FeatureCreateEditor key={tab.id} repo={input.repo ?? null} />
     case "featureIntegrate":

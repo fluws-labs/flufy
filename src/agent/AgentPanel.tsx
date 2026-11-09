@@ -20,6 +20,8 @@ import { percent } from "../lib/format"
 import { planIsCurrent } from "../lib/plan"
 import { useLayout } from "../state/layout"
 import { useProject } from "../state/project"
+import { openEditor } from "../state/editors"
+import { useResources } from "../state/resources"
 import { Chat } from "./Chat"
 import { Composer } from "./Composer"
 import { SessionTabs } from "./SessionTabs"
@@ -79,6 +81,7 @@ export function SessionPane({ sessionId, variant, onPreviewOpen }: { sessionId: 
     paused: "pausado", blocked: "bloqueado", planning_blocked: "plan bloqueado",
     delivering: "revisando entrega", completed: "terminado", cancelled: "cancelado",
   }
+  const resourcePressure = useResources((s) => s.status?.pressure ?? "normal")
 
   useEffect(() => {
     if (sessionId) void ensureSessionView(sessionId)
@@ -213,6 +216,19 @@ export function SessionPane({ sessionId, variant, onPreviewOpen }: { sessionId: 
             )}
             <button type="button" className="btn btn-xs" onClick={() => void unbindLead()}>
               Desvincular
+            </button>
+          </div>
+        )}
+        {resourcePressure !== "normal" && (
+          <div className={`context-banner lead-banner${resourcePressure === "critical" ? " danger" : ""}`}>
+            <Icon name="pulse" />
+            <span>
+              {resourcePressure === "critical"
+                ? "La PC está al límite: Flufy no lanzará agentes nuevos. Cerrá otros programas o esperá."
+                : "La PC está cargada: Flufy está limitando la concurrencia del equipo."}
+            </span>
+            <button type="button" className="btn btn-xs" onClick={() => openEditor({ kind: "resources" })}>
+              Ver recursos
             </button>
           </div>
         )}

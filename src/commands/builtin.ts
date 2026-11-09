@@ -438,6 +438,13 @@ export function registerBuiltinCommands(): void {
       run: () => openEditor({ kind: "codeIndex" }),
     },
     {
+      id: "resources.open",
+      title: "Recursos de la PC: memoria, CPU y concurrencia",
+      category: "Flufy",
+      icon: "pulse",
+      run: () => openEditor({ kind: "resources" }),
+    },
+    {
       id: "routines.new",
       title: "Nueva rutina programada",
       category: "Flufy",

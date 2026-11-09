@@ -22,6 +22,7 @@ export type EditorInput =
   | { kind: "browser"; sessionId: string }
   | { kind: "accounts" }
   | { kind: "codeIndex" }
+  | { kind: "resources" }
   | { kind: "featureCreate"; repo?: string }
   | { kind: "featureIntegrate"; path: string }
   | { kind: "welcome" }
@@ -81,6 +82,8 @@ export function tabId(input: EditorInput): string {
       return "accounts"
     case "codeIndex":
       return "codeIndex"
+    case "resources":
+      return "resources"
     case "aiReview":
       return `aiReview:${input.scope}:${normalizePath(input.repo).toLowerCase()}:${input.number ?? ""}`
     case "featureCreate":
@@ -128,6 +131,8 @@ export function inputTitle(input: EditorInput): string {
       return "Cuentas de IA"
     case "codeIndex":
       return "Índice de código"
+    case "resources":
+      return "Recursos de la PC"
     case "aiReview":
       return input.scope === "pr" ? `Revisión IA · PR #${input.number}` : "Revisión IA · cambios"
     case "featureCreate":

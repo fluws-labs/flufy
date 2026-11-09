@@ -10,5 +10,6 @@
   "teams_start_work",
   "teams_adjust_plan",
   "teams_board",
-  "teams_control_run"
+  "teams_control_run",
+  "teams_system_resources"
 ]

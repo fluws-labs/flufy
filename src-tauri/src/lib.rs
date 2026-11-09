@@ -11,6 +11,7 @@ pub mod accounts;
 pub mod approvals;
 pub mod code_index;
 pub mod desktop;
+pub mod resources;
 pub mod features;
 mod engine_db_compat;
 mod engine_integrity;
@@ -481,6 +482,9 @@ pub fn run() {
             code_index::code_index_status,
             code_index::code_index_rebuild,
             code_index::code_index_search,
+            resources::resources_status,
+            resources::resources_config_get,
+            resources::resources_config_set,
             watch::watch_start,
             watch::watch_stop,
             gh::gh_status,
@@ -572,6 +576,7 @@ pub fn run() {
             app.manage(ServerState { child: Mutex::new(None), config: Mutex::new(None), project: Mutex::new(None), stopping: AtomicBool::new(false) });
             app.manage(windows::WindowsState::default());
             memory::start(app.handle());
+            resources::start(app.handle());
             desktop::start(app.handle());
             routines::start(app.handle());
             teams::start(app.handle());

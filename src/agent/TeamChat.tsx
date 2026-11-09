@@ -27,6 +27,7 @@ import { DeliveryResults } from "../team/DeliveryResults"
 import { GoalMessage } from "../team/GoalMessage"
 import { RunBudget } from "../team/RunBudget"
 import { TeamComposer, type TeamComposerHandle } from "../team/TeamComposer"
+import { useResources } from "../state/resources"
 
 function openSession(id: string, directory: string) {
   rememberSessionDirectory(id, directory)
@@ -43,6 +44,7 @@ export function TeamChat({ chatId }: { chatId: string }) {
   const [viewChoice, setViewChoice] = useState<{ runId?: string; view: string | null } | null>(null)
   const viewRun = chat?.runs.at(-1)
   const conversationLead = !!viewRun?.planV2?.conversationLead
+  const resourcePressure = useResources((s) => s.status?.pressure ?? "normal")
   const readOnly = !!chat?.archived
   const view = (viewChoice?.runId === viewRun?.id ? viewChoice?.view : null) ?? "Tablero"
   const setView = (view: string | null) => setViewChoice({ runId: viewRun?.id, view })
@@ -155,6 +157,7 @@ export function TeamChat({ chatId }: { chatId: string }) {
     {view !== "Configuración" && /carpeta.*ocupada|equipo o una sesión pendiente|otro equipo.*carpetas/i.test(folderFailure) && <TeamFolderConflicts chatId={chatId} failure={folderFailure} />}
     <nav className="team-chat-nav" aria-label="Vistas del trabajo">{(conversationLead ? ["Ahora", "Tablero", "Entrega"] : ["Chat", "Ahora", "Tablero", "Entrega"]).map((v) => <button key={v} className={view === v ? "active" : ""} onClick={() => setView(v)}>{v}</button>)}</nav>
     {conversationLead && <div className="context-banner lead-banner"><Icon name="comment-discussion" /><span>La conversación es el Lead. Podés escribir acá o volver al chat de origen.</span>{chat.origin && <button type="button" className="btn btn-xs" onClick={() => openSource()}>Volver al chat</button>}</div>}
+    {resourcePressure !== "normal" && <div className={`context-banner lead-banner${resourcePressure === "critical" ? " danger" : ""}`}><Icon name="pulse" /><span>{resourcePressure === "critical" ? "La PC está al límite: Flufy no lanzará agentes nuevos. Cerrá otros programas o esperá." : "La PC está cargada: Flufy está limitando la concurrencia del equipo."}</span><button type="button" className="btn btn-xs" onClick={() => openEditor({ kind: "resources" })}>Ver recursos</button></div>}
     {chat.runs.length > 1 && <label className="team-run-select">Entrega / ejecución<select aria-label="Entrega / ejecución" value={run?.id ?? ""} onChange={e => setSelectedRunId(e.target.value)}>{chat.runs.map((r, i) => <option key={r.id} value={r.id}>#{i + 1} · {formatDateTime(r.startedAt)} · {runStatusLabel(r.status)}</option>)}</select></label>}
     {nextAction && <div className="team-next-action" role="status">
       <div><strong>{nextAction.title}</strong><p>{nextAction.detail}</p></div>

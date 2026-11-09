@@ -550,6 +550,13 @@ fn ensure_fresh(app: &AppHandle, root: &Path, config: &CodeIndexConfig) -> Resul
         return Err("El índice de código se está construyendo en este momento. Probá de nuevo en unos segundos.".into());
     }
     let db = db_path(app, root)?;
+    if crate::resources::pressure(app) == "critical" {
+        if db.exists() {
+            // Serve the current index instead of rebuilding under memory pressure.
+            return Ok(db);
+        }
+        return Err("El índice de código está pausado porque la PC está al límite de memoria. Probá de nuevo cuando haya recursos.".into());
+    }
     let needs = if !db.exists() {
         true
     } else {
@@ -1108,6 +1115,9 @@ pub fn code_index_status(app: AppHandle) -> Result<IndexStatus, String> {
 #[tauri::command]
 pub async fn code_index_rebuild(app: AppHandle) -> Result<IndexStatus, String> {
     crate::proc::blocking(move || {
+        if crate::resources::pressure(&app) == "critical" {
+            return Err("El índice de código está pausado porque la PC está al límite de memoria. Cerrá otros programas o esperá un momento.".into());
+        }
         let config = load_config(&app);
         let root = root_for(&app)?;
         let db = db_path(&app, &root)?;

@@ -63,7 +63,8 @@ pub fn tools() -> Vec<Value> {
         json!({"name":"board","description":"Lee el tablero real de esta conversación: estado del run, tareas, bloqueos, coordinación, soporte activo y otros equipos que ocupan las mismas carpetas. Usalo antes de responder sobre tareas, bloqueos, conflictos o próxima acción; nunca inventes ese estado.","inputSchema":{"type":"object","additionalProperties":false,"properties":{
             "runId":{"type":"string","description":"Ejecución a leer. Si se omite, usa la última del trabajo."}
         }}}),
-        json!({"name":"control_run","description":"Controla el trabajo de esta conversación: retry/force_retry para reanudar tras una interrupción, pause/resume/cancel. Usalo después de leer teams_board. Si hay una sesión activa, pedí confirmación al usuario antes de force_retry.","inputSchema":{"type":"object","additionalProperties":false,"properties":{"runId":{"type":"string"},"action":{"type":"string","enum":["retry","force_retry","pause","resume","cancel","continue"]}},"required":["action"]}})]
+        json!({"name":"control_run","description":"Controla el trabajo de esta conversación: retry/force_retry para reanudar tras una interrupción, pause/resume/cancel. Usalo después de leer teams_board. Si hay una sesión activa, pedí confirmación al usuario antes de force_retry.","inputSchema":{"type":"object","additionalProperties":false,"properties":{"runId":{"type":"string"},"action":{"type":"string","enum":["retry","force_retry","pause","resume","cancel","continue"]}},"required":["action"]}}),
+        json!({"name":"system_resources","description":"Lee la memoria fisica, el commit libre, la CPU y las otras instancias de Flufy de esta PC. Usalo antes de iniciar un equipo o de incorporar muchos especialistas. Si pressure es tight, reduci la concurrencia; si es critical, no inicies trabajo nuevo y explica al usuario que cerrar. Flufy solo limita su propio trabajo: no cierra programas del usuario.","inputSchema":{"type":"object","additionalProperties":false,"properties":{}}})]
 }
 
 fn source_from(session_id: &str, session: &Value, messages: &Value) -> Result<Source, String> {
@@ -493,6 +494,7 @@ pub fn call(app: &AppHandle, name: &str, args: &Value) -> Value {
         "adjust_plan" => adjust_plan(app, args),
         "board" => board(app, args),
         "control_run" => control_run(app, args),
+        "system_resources" => Ok(crate::resources::tool_payload(app)),
         _ => Err("Herramienta de equipos desconocida".into()),
     };
     match result {
@@ -504,6 +506,10 @@ pub fn call(app: &AppHandle, name: &str, args: &Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn exposes_system_resources_to_the_lead() {
+        assert!(tools().iter().any(|tool| tool["name"] == "system_resources"));
+    }
     fn request() -> Request { serde_json::from_value(json!({"projectRoot":"C:/repo","title":"Filtro de consultas","goal":"Filtrar por estado","plan":"Reutilizar el filtro existente, persistir estado y probar el recorrido","context":"El panel usa componentes compartidos","decisions":[{"decision":"Conservar arquitectura y diseño","source":"AGENTS.md"}],"acceptanceCriteria":["El filtro se conserva al volver"]})).unwrap() }
     fn source() -> Source { source_from("ses_source", &json!({"id":"ses_source","directory":"C:/repo","title":"Investigación"}), &json!([
         {"info":{"id":"user1","role":"user","model":{"providerID":"openai","modelID":"lead"},"variant":"high"},"parts":[{"type":"text","text":"Quiero que un equipo implemente este plan"}]}

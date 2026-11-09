@@ -652,6 +652,8 @@ mod tests {
     fn policy_contract_forbids_partial_deliveries_and_plan_degradation() {
         for phrase in [
             "## Alcance completo, sin atajos",
+            "## Recursos de la PC",
+            "teams_system_resources",
             "no la reduzcas a una demo",
             "Un avance parcial se informa como parcial, nunca como terminado",
             "no reemplazar la solución acordada por un atajo silencioso",

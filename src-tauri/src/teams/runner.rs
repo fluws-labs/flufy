@@ -1945,14 +1945,25 @@ fn schedule(app: &AppHandle, id: &str) -> Result<(), String> {
             notify(app, &run(app, id)?, true);
             return Ok(());
         }
-        let dispatch = ready_tasks(&r, &workers.keys().cloned().collect())?;
-        if dispatch.is_empty() && workers.is_empty() && coordinator.is_none() {
+        let ready = ready_tasks(&r, &workers.keys().cloned().collect())?;
+        if ready.is_empty() && workers.is_empty() && coordinator.is_none() {
             if recover_deadlock(app, id, &r)? {
                 std::thread::sleep(Duration::from_millis(500));
                 continue;
             }
             return Err(r.tasks.iter().filter(|t| t.status == "blocked").find_map(|t| t.error.clone())
                 .unwrap_or("No hay tareas que puedan avanzar. El Lead debe revisar las dependencias pendientes".into()));
+        }
+        // Resource governor: never dispatch more agent sessions than the PC can
+        // afford. The loop retries every 500 ms, so queued work resumes as soon
+        // as the pressure drops. It never cancels a running worker.
+        let budget = crate::resources::worker_limit(app, r.team.max_parallel_tasks);
+        let active = workers.len() + if coordinator.is_some() { 1 } else { 0 };
+        let slots = budget.saturating_sub(active);
+        let dispatch: Vec<_> = ready.into_iter().take(slots).collect();
+        if dispatch.is_empty() {
+            std::thread::sleep(Duration::from_millis(500));
+            continue;
         }
         for task_id in dispatch {
             let (app, id) = (app.clone(), id.to_string());
