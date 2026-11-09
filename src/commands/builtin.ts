@@ -439,7 +439,7 @@ export function registerBuiltinCommands(): void {
     },
     {
       id: "resources.open",
-      title: "Recursos de la PC: memoria, CPU y concurrencia",
+      title: "Recursos de la PC: CPU, RAM y concurrencia",
       category: "Flufy",
       icon: "pulse",
       run: () => openEditor({ kind: "resources" }),
