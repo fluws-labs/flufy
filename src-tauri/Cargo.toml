@@ -16,7 +16,6 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 # Opt-in feature for the desktop end-to-end test that builds a real Tauri window.
 # It also makes build.rs add the Common Controls v6 manifest to test executables.
 desktop-e2e = []
-
 [build-dependencies]
 tauri-build = { version = "2.6.3", features = [] }
 
@@ -34,6 +33,7 @@ uuid = { version = "1.20.0", features = ["v4"] }
 portable-pty = "0.8"
 ignore = "0.4"
 regex = "1"
+similar = "2"
 notify-debouncer-mini = "0.7"
 trash = "5"
 rusqlite = { version = "0.40.2", features = ["bundled", "backup"] }
@@ -76,7 +76,9 @@ windows = { version = "0.62", features = [
   "Win32_System_Com",
   "Win32_System_Console",
   "Win32_System_DataExchange",
+  "Win32_System_Diagnostics_ToolHelp",
   "Win32_System_Memory",
+  "Win32_System_SystemInformation",
   "Win32_System_JobObjects",
   "Win32_Security",
   "Win32_System_Ole",

@@ -1,0 +1,13 @@
+{
+  "files": [
+    {
+      "path": "src/text.js",
+      "edits": [
+        {
+          "oldText": "  return text.toLowerCase().replace(/ /g, \"-\")\n}",
+          "newText": "  return text.toLowerCase().replace(/ /g, \"-\")\n}\n\nexport function isPalindrome(text) {\n  const normalized = text\n    .normalize(\"NFD\")\n    .replace(/[\\u0300-\\u036f]/g, \"\")\n    .toLowerCase()\n    .replace(/[^a-z0-9]/g, \"\")\n  return normalized === [...normalized].reverse().join(\"\")\n}"
+        }
+      ]
+    }
+  ]
+}

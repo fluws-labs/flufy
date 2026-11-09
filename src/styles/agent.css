@@ -213,6 +213,34 @@
 .chat-empty .codicon {
   color: var(--accent-2);
 }
+.chat-quote-btn {
+  position: fixed;
+  z-index: 60;
+  transform: translate(-50%, calc(-100% - 8px));
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-raised);
+  color: var(--fg);
+  font-size: 11.5px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  cursor: pointer;
+}
+.chat-quote-btn:hover {
+  background: var(--bg-hover);
+  color: var(--accent-strong);
+  border-color: var(--border-focus);
+}
+.chat-quote-btn .codicon {
+  font-size: 12px;
+}
+::highlight(quote-source) {
+  background: rgba(139, 92, 246, 0.4);
+  color: inherit;
+}
 
 .msg {
   display: flex;
@@ -241,6 +269,18 @@
   font-size: 10.5px;
   color: var(--fg-faint);
 }
+.msg-user-bubble .md blockquote {
+  margin: 0 0 6px;
+  padding: 4px 9px;
+  border-left: 3px solid rgba(255, 255, 255, 0.45);
+  border-radius: 0 6px 6px 0;
+  background: rgba(0, 0, 0, 0.18);
+  color: var(--fg);
+  opacity: 0.9;
+}
+.msg-user-bubble .md blockquote:last-child {
+  margin-bottom: 0;
+}
 .msg-action {
   opacity: 0;
   color: var(--fg-faint);
@@ -262,57 +302,6 @@
 }
 .msg:hover .msg-copy {
   opacity: 1;
-}
-.pin-sentinel {
-  height: 1px;
-  margin-bottom: -1px;
-}
-/* El mensaje fijado se dibuja como overlay sticky de alto 0, fuera del flujo.
-   Antes era el propio mensaje con position:sticky y su alto cambiaba al entrar
-   y salir de .stuck (padding, meta oculta y sobre todo el clamp del bubble):
-   ese cambio de alto realimentaba al scroll (scroll anchoring / clamp de
-   scrollTop / auto-scroll del ResizeObserver) y el mensaje oscilaba arriba y
-   abajo en el límite. Con alto 0 mostrar/ocultar no toca el alto del contenido. */
-.pin-overlay {
-  position: sticky;
-  top: 0;
-  z-index: 4;
-  height: 0;
-  /* misma columna que .chat-messages para que el bubble caiga alineado */
-  max-width: calc(var(--chat-col) + 28px);
-  margin-inline: auto;
-  padding: 0 14px;
-}
-.session-pane.editor .pin-overlay {
-  max-width: calc(var(--chat-col) + 56px);
-  padding: 0 28px;
-}
-.pin-overlay .msg {
-  animation: none;
-}
-.pin-overlay > .msg {
-  padding: 6px 0 8px;
-  background: linear-gradient(var(--bg-side) 80%, transparent);
-}
-.session-pane.editor .pin-overlay > .msg {
-  background: linear-gradient(var(--editor-bg) 80%, transparent);
-}
-.pin-overlay .msg-user-bubble {
-  pointer-events: auto;
-  max-height: 58px;
-  overflow: hidden;
-  box-shadow: var(--shadow-md);
-  -webkit-mask-image: linear-gradient(#000 55%, transparent);
-  mask-image: linear-gradient(#000 55%, transparent);
-}
-.pin-overlay .msg-user-bubble:hover {
-  max-height: 40vh;
-  overflow-y: auto;
-  -webkit-mask-image: none;
-  mask-image: none;
-}
-.msg.pin-hidden {
-  visibility: hidden;
 }
 .msg.reverted {
   opacity: 0.35;
@@ -1600,6 +1589,9 @@
   font-size: 11px;
   color: var(--fg-faint);
 }
+.agent-recent-time.tone-fresh { color: var(--success); }
+.agent-recent-time.tone-today { color: var(--warn); }
+.agent-recent-time.tone-old { color: var(--fg-faint); }
 
 .msg.queued .msg-user-bubble {
   opacity: 0.6;

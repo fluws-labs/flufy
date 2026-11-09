@@ -9,7 +9,8 @@ Cada usuario conecta sus propias cuentas. Se puede usar **solo ChatGPT**, **solo
 - **ChatGPT:** iniciar sesión desde el navegador o mediante un código de dispositivo. Se usan los modelos y los límites habilitados por la cuenta. No requiere cuenta ni API key de OpenCode.
 - **OpenCode Go:** pegar la API key del plan Go desde la consola de OpenCode. Flufy consulta la cuota para verificar la clave antes de guardarla; no genera mensajes para validarla.
 - **OpenCode Zen (opcional):** usa la misma clave y se activa con el interruptor «Incluir OpenCode Zen» en Cuentas de IA. Suma modelos que se cobran por token, aparte del plan Go; con «Solo modelos gratuitos de Zen» (por defecto) la lista se limita a los que no consumen saldo, y el interruptor se puede apagar para ver todos.
-- **Ambos:** elegir el proveedor y modelo desde el selector del chat o desde Cuentas de IA.
+- **Anthropic, Google y OpenRouter (opcional):** se conectan con una API key en la misma pantalla. Sus modelos se suman al selector y se pueden asignar por agente o por equipo.
+- **Varios a la vez:** elegir el proveedor y modelo desde el selector del chat o desde Cuentas de IA.
 
 OpenCode está incluido como **motor interno**, independientemente del proveedor elegido. El motor y la cuenta de OpenCode Go son cosas distintas.
 
@@ -84,6 +85,10 @@ npm run lint
 ```
 
 Los tests E2E usan Microsoft Edge con cuentas y llamadas IPC simuladas, sin modificar cuentas reales. El smoke test ejecuta el OpenCode incluido con un perfil temporal vacío y comprueba que el login de ChatGPT está disponible sin cuenta OpenCode. No consume tokens.
+
+### Evals del agente
+
+`npm run eval:mock` valida las tareas sin inferencia (control negativo y positivo). `npm run eval` ejecuta las tareas con un modelo conectado y guarda resultados en `evals/results/`; ver [`evals/README.md`](evals/README.md).
 
 Para comprobar el MCP del navegador instalado por Flufy, ejecutá `node tests/browser-smoke.mjs`. Con Chrome abierto y la depuración habilitada, `node tests/browser-smoke.mjs --live` también comprueba snapshot, formulario, clic y lectura en una pestaña local de prueba, que cierra al terminar. Puede pedir permiso en Chrome.
 

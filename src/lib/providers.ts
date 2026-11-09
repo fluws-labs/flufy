@@ -1,5 +1,12 @@
 // OpenCode is the engine; its paid providers are optional accounts.
-export const SUPPORTED_PROVIDERS = ["openai", "opencode", "opencode-go"] as const
+export const SUPPORTED_PROVIDERS = ["openai", "opencode", "opencode-go", "anthropic", "google", "openrouter"] as const
+export type SupportedProvider = (typeof SUPPORTED_PROVIDERS)[number]
+
+export const API_KEY_PROVIDERS: ReadonlyArray<{ id: SupportedProvider; name: string; hint: string; url: string }> = [
+  { id: "anthropic", name: "Anthropic", hint: "API key de Claude (console.anthropic.com)", url: "https://console.anthropic.com/settings/keys" },
+  { id: "google", name: "Google Gemini", hint: "API key de Google AI Studio", url: "https://aistudio.google.com/apikey" },
+  { id: "openrouter", name: "OpenRouter", hint: "Una sola clave para muchos modelos", url: "https://openrouter.ai/keys" },
+]
 export const EMPTY_MODEL = { providerID: "", modelID: "" }
 
 export type ProviderAccount = { id: string; source?: string; options?: { apiKey?: unknown } }

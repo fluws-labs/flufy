@@ -10,10 +10,10 @@ import { formatDateTime } from "../lib/time"
 import { firstTeamSentence } from "../lib/team-response"
 import { readableTeamError } from "../lib/provider-error"
 
-export function DeliveryResults({ run, history, chatId, onOpenPage, onSession, onPrepare, onApprove, onChanges }: {
+export function DeliveryResults({ run, history, chatId, onOpenPage, onSession, onPrepare, onApprove, onChanges, readOnly = false }: {
   run: TeamRun; history: TeamRun[]; chatId: string; onOpenPage: (label: string, title: string) => void
   onSession: (id: string, directory: string) => void; onPrepare: (flow: DeliveryFlow) => Promise<void>
-  onApprove: () => void; onChanges: () => void
+  onApprove: () => void; onChanges: () => void; readOnly?: boolean
 }) {
   const [preview, setPreview] = useState<{ title: string; text: string } | null>(null)
   const attempts = run.tasks.flatMap(task => {
@@ -34,7 +34,7 @@ export function DeliveryResults({ run, history, chatId, onOpenPage, onSession, o
       <span className={`team-status ${run.status}`}>{runStatusLabel(run.status)}</span>
     </header>
 
-    <DeliveryReview run={run} chatId={chatId} onOpenPage={onOpenPage} onSession={onSession} onPrepare={onPrepare} />
+    <DeliveryReview run={run} chatId={chatId} readOnly={readOnly} onOpenPage={onOpenPage} onSession={onSession} onPrepare={onPrepare} />
 
     <section className="delivery-section" aria-label="Qué se comprobó">
       <h3><Icon name="pass" /> Qué se comprobó</h3>
@@ -65,14 +65,14 @@ export function DeliveryResults({ run, history, chatId, onOpenPage, onSession, o
       <h3><Icon name="checklist" /> Qué decidís</h3>
       {approved ? <>
         <p>Entrega aprobada. Podés enviar el siguiente pedido cuando quieras.</p>
-      </> : canDecide ? <>
+      </> : canDecide && !readOnly ? <>
         <p>Revisá lo que cambió y las comprobaciones. Si está bien, aprobá la entrega; si falta algo, pedí cambios y el Lead lo organiza.</p>
         <div className="team-chat-actions">
           <button className="btn btn-primary" onClick={onApprove}><Icon name="pass" /> Aprobar entrega</button>
           <button className="btn" onClick={onChanges}><Icon name="edit" /> Pedir cambios</button>
         </div>
         <p className="team-note">Aprobar cierra esta ejecución y habilita el siguiente trabajo. Los cambios ya están aplicados en el proyecto.</p>
-      </> : <p className="team-note">{run.status === "failed" || run.status === "cancelled" ? "La ejecución se detuvo. Los cambios ya aplicados se conservan y podés pedirle al Lead que retome lo pendiente." : "La decisión aparece cuando el equipo termina la entrega."}</p>}
+      </> : <p className="team-note">{readOnly ? "Trabajo anterior: solo lectura." : run.status === "failed" || run.status === "cancelled" ? "La ejecución se detuvo. Los cambios ya aplicados se conservan y podés pedirle al Lead que retome lo pendiente." : "La decisión aparece cuando el equipo termina la entrega."}</p>}
     </section>
 
     <EvidenceComparison run={run} history={history} chatId={chatId} />

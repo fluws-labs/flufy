@@ -62,9 +62,14 @@ export async function teamCall<T>(command: string, args?: Record<string, unknown
     if (/REVISION_CONFLICT/.test(errorMessage(e))) {
       await refreshTeams()
       notify.error("El plan cambió", "Actualicé el tablero. Revisá el estado vigente antes de volver a aplicar el cambio.")
-    } else notify.error("Equipos IA", readableTeamError(e))
+    } else notify.error("Trabajos", readableTeamError(e))
     return null
   }
+}
+
+export async function isLeadBound(sessionId: string): Promise<boolean> {
+  if (!isTauri) return false
+  return call<boolean>("teams_lead_bound", { session: sessionId }).catch(() => false)
 }
 
 export function openTeam(id = `new:${crypto.randomUUID()}`) { openEditor({ kind: "team", id }) }
@@ -91,6 +96,7 @@ export async function newTeamChat(teamId?: string) {
   const chat = await teamCall<TeamChatRecord>("team_chats_create", { teamId })
   if (chat) selectTeamChat(chat.id)
 }
+
 export async function deleteTeam(team: Team) {
   if (await confirmAction("Eliminar equipo", `Se elimina la plantilla «${team.name}». Sus chats y evidencias se conservan.`, "Eliminar", true)) await teamCall("teams_delete", { id: team.id })
 }

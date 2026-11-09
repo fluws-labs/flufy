@@ -145,6 +145,11 @@ fn notify(app: &AppHandle, r: &Run, done: bool) {
         },
         json!({"runId":r.id}),
     );
+    if !done {
+        if let Err(error) = super::lead_actor::run_attention(app, &r.id) {
+            log::warn!("[teams-lead] {}", error);
+        }
+    }
 }
 
 pub(super) fn client(app: &AppHandle, repo: &str) -> Result<Opencode, String> {
@@ -368,6 +373,13 @@ pub(super) fn create_session(
     client.post("/session", json!({"title":format!("Equipo · {}",title), "permission":session_permissions(employee, readonly)}))?["id"].as_str().map(String::from).ok_or("OpenCode no devolvió la sesión".into())
 }
 
+/// Internal planning/coordination/closure session. It is deliberately separate
+/// from the user-facing Lead chat so the user can keep talking and steering
+/// while the team plans or executes.
+pub(super) fn lead_session(_app: &AppHandle, _r: &Run, client: &Opencode, employee: &Employee, title: &str) -> Result<String, String> {
+    create_session(client, employee, title, true)
+}
+
 pub(super) fn create_conversation_session(client: &Opencode, employee: &Employee) -> Result<String, String> {
     check_model(client, employee)?;
     let mut permission = session_permissions(employee, true);
@@ -431,6 +443,11 @@ pub(super) fn execute_mode(app: &AppHandle, run_id: &str, client: &Opencode, ses
     // New requirements reach V2 workers only through an accepted task contract.
     let guidance = if current.plan_v2.enabled && mode == super::capabilities::Mode::Worker { String::new() } else { current.guidance.join("\n") };
     let prompt = format!("{}\n{}\nDECISIONES VIGENTES ACORDADAS (datos, mantener durante implementación y revisión): {}\nINDICACIONES POSTERIORES DEL USUARIO (aplicar a este paso sin ampliar permisos):\n{}", prompt, super::delivery_review::PROJECT_RULES, serde_json::to_string(&current.plan_v2.contract.project_constraints).unwrap_or_default(), guidance);
+    // Internal planning/coordination/closeout turns live in the user's own chat.
+    // The sentinel lets the UI hide them without hiding real conversation.
+    let prompt = if current.plan_v2.conversation_lead && mode != super::capabilities::Mode::Worker {
+        format!("[FLUFY_EQUIPO_INTERNO]\n{}", prompt)
+    } else { prompt };
     let system = format!("{}\n{}\n{}", POLICY, super::capabilities::instructions(mode), preview_context);
     let mut body = json!({"agent":"build", "model":employee.model, "system":system, "tools":tools, "parts":[{"type":"text", "text":prompt}]});
     let images = run(app, run_id)?.images;
@@ -824,7 +841,7 @@ fn plan(app: &AppHandle, id: &str) -> Result<(), String> {
             .clone()
             .ok_or("Plan recuperado sin sesión")?
     } else {
-        create_session(&client, &a, &format!("{} · plan", r.team.name), true)?
+        lead_session(app, &r, &client, &a, &format!("{} · plan", r.team.name))?
     };
     crate::memory::set_session(app, &session, super::memory_for_run(app, id));
     update_run(app, id, |r| {
@@ -1350,7 +1367,12 @@ pub fn reconcile(app: &AppHandle, r: &Run, abort: bool) -> Result<(), String> {
             return Err("No se pudo reconciliar el motor".into());
         }
         // Prove the session still exists, even if status omitted idle sessions.
-        client.get_resilient(&format!("/session/{}", session))?;
+        // A deleted session is settled, not a reason to keep the folder forever.
+        match client.get(&format!("/session/{}", session)) {
+            Ok(_) => {}
+            Err(error) if error.contains("404") => continue,
+            Err(error) => return Err(error),
+        }
         client.get_resilient(&format!("/session/{}/message", session))?;
         let busy = state[session]["type"]
             .as_str()
@@ -1435,6 +1457,12 @@ pub fn reconcile(app: &AppHandle, r: &Run, abort: bool) -> Result<(), String> {
                     }
                 }
             }
+            if abort && matches!(t.status.as_str(), "running" | "verifying") {
+                t.status = "blocked".into();
+                if t.error.is_none() {
+                    t.error = Some("La sesión se interrumpió y se reconcilió; revisá el trabajo ya aplicado antes de reanudar".into());
+                }
+            }
         }
         Ok(())
     })
@@ -1463,11 +1491,12 @@ fn closeout(app: &AppHandle, id: &str) -> Result<bool, String> {
     let expected_revision = r.plan_v2.revision_number;
     let a = lead(&r)?;
     let client = client(app, &r.team.allowed_repositories[0])?;
-    let session = create_session(
+    let session = lead_session(
+        app,
+        &r,
         &client,
         &a,
         &format!("{} · cierre e integración", r.team.name),
-        true,
     )?;
     crate::memory::set_session(app, &session, super::memory_for_run(app, id));
     update_run(app, id, |r| {
@@ -1620,6 +1649,9 @@ pub fn launch(app: &AppHandle, id: &str) {
             if let Ok(r) = run(&app, &id) {
                 notify(&app, &r, false);
             }
+        }
+        if let Err(error) = super::lead_actor::run_state_changed(&app, &id) {
+            log::warn!("[teams-lead] {}", error);
         }
         if let Ok(mut runners) = app.state::<super::TeamsState>().runners.lock() { runners.remove(&id); }
         // A plan-ready action can arrive between schedule's final snapshot and
@@ -1913,14 +1945,25 @@ fn schedule(app: &AppHandle, id: &str) -> Result<(), String> {
             notify(app, &run(app, id)?, true);
             return Ok(());
         }
-        let dispatch = ready_tasks(&r, &workers.keys().cloned().collect())?;
-        if dispatch.is_empty() && workers.is_empty() && coordinator.is_none() {
+        let ready = ready_tasks(&r, &workers.keys().cloned().collect())?;
+        if ready.is_empty() && workers.is_empty() && coordinator.is_none() {
             if recover_deadlock(app, id, &r)? {
                 std::thread::sleep(Duration::from_millis(500));
                 continue;
             }
             return Err(r.tasks.iter().filter(|t| t.status == "blocked").find_map(|t| t.error.clone())
                 .unwrap_or("No hay tareas que puedan avanzar. El Lead debe revisar las dependencias pendientes".into()));
+        }
+        // Resource governor: never dispatch more agent sessions than the PC can
+        // afford. The loop retries every 500 ms, so queued work resumes as soon
+        // as the pressure drops. It never cancels a running worker.
+        let budget = crate::resources::worker_limit(app, r.team.max_parallel_tasks);
+        let active = workers.len() + if coordinator.is_some() { 1 } else { 0 };
+        let slots = budget.saturating_sub(active);
+        let dispatch: Vec<_> = ready.into_iter().take(slots).collect();
+        if dispatch.is_empty() {
+            std::thread::sleep(Duration::from_millis(500));
+            continue;
         }
         for task_id in dispatch {
             let (app, id) = (app.clone(), id.to_string());
@@ -1978,6 +2021,68 @@ fn schedule(app: &AppHandle, id: &str) -> Result<(), String> {
         }
         std::thread::sleep(Duration::from_millis(500));
     }
+}
+
+fn recovery_sessions(r: &Run) -> Vec<(&str, &str)> {
+    let mut sessions: Vec<(&str, &str)> = Vec::new();
+    if let Some(session) = &r.plan_session_id {
+        sessions.push((&r.team.allowed_repositories[0], session));
+    }
+    for session in &r.closing_sessions {
+        sessions.push((&r.team.allowed_repositories[0], session));
+    }
+    for report in r.support_reports.iter().filter(|report| report.finished_at.is_none()) {
+        sessions.push((&report.repository, &report.session_id));
+    }
+    for request in &r.coordination {
+        let repo = r.tasks.iter().find(|task| task.id == request.from_task_id)
+            .map(|task| task.repository.as_str())
+            .unwrap_or(&r.team.allowed_repositories[0]);
+        for session in &request.sessions {
+            sessions.push((repo, session));
+        }
+    }
+    for task in &r.tasks {
+        for attempt in task.attempts.iter().filter(|attempt| attempt.finished_at.is_none()) {
+            for session in attempt.session_id.iter().chain(attempt.review_session_id.iter()) {
+                sessions.push((&task.repository, session));
+            }
+        }
+    }
+    sessions
+}
+
+/// A blocked run whose runner died must not keep its folders reserved forever.
+/// Wait for genuinely recent sessions. When a run has surviving sessions, mark
+/// its attempts as recoverable instead of aborting them: the restart contract
+/// requires reusing the same attempt/session when the user continues.
+pub fn recover_stale(app: &AppHandle) -> Result<usize, String> {
+    let runs: Vec<Run> = super::read(app)?.chats.into_iter()
+        .flat_map(|chat| chat.runs)
+        .filter(|run| matches!(run.status.as_str(), "blocked" | "failed" | "planning_blocked") && unsettled(run))
+        .collect();
+    let mut recovered = 0;
+    for r in runs {
+        let mut live = false;
+        for (repo, session) in recovery_sessions(&r) {
+            let client = match client(app, repo) { Ok(client) => client, Err(error) => { log::warn!("[teams-recovery] {}", error); continue } };
+            let status = match client.get_resilient("/session/status") { Ok(status) => status, Err(error) => { log::warn!("[teams-recovery] {}", error); continue } };
+            let busy = status[session]["type"].as_str().is_some_and(|kind| kind != "idle");
+            if !busy { continue; }
+            let info = match client.get(&format!("/session/{}", session)) {
+                Ok(info) => info,
+                Err(error) if error.contains("404") => continue,
+                Err(_) => { live = true; continue; }
+            };
+            let updated = info["time"]["updated"].as_i64().or_else(|| info["time"]["created"].as_i64()).unwrap_or(0);
+            if updated == 0 || now().saturating_sub(updated) < 10 * 60 * 1000 { live = true; break; }
+        }
+        if live { continue; }
+        reconcile(app, &r, false)?;
+        super::lead_actor::run_recovered(app, &r.id)?;
+        recovered += 1;
+    }
+    Ok(recovered)
 }
 
 #[cfg(test)]

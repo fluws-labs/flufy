@@ -102,10 +102,10 @@ export function TeamsScreen({ route, back, open }: { route: Extract<Route, { kin
   const archived = chats.some(c => c.id === selection?.chatId && c.archived)
   const readOnly = !online || busy || archived
   return <main className="screen pwa-teams">
-    <header className="topbar"><button className="icon-btn" aria-label="Volver" onClick={() => selection ? choose(null) : back()}><Icon name="arrow-left" /></button><h1>Equipos</h1><span className="spacer" /><button className="btn btn-sm" onClick={() => void load()}>Actualizar</button></header>
+    <header className="topbar"><button className="icon-btn" aria-label="Volver" onClick={() => selection ? choose(null) : back()}><Icon name="arrow-left" /></button><h1>Trabajos</h1><span className="spacer" /><button className="btn btn-sm" onClick={() => void load()}>Actualizar</button></header>
     {error && <div className="alert" role="alert">{error}</div>}
     {online && live === "down" && <p className="muted">Reconectando eventos · actualización periódica activa</p>}
-    {!selection ? <section aria-label="Ejecuciones de equipos">{!chats.length && <p className="muted">No hay ejecuciones disponibles.</p>}{chats.map(chat => <section key={chat.id}><h2>{chat.title}{chat.archived ? " · Archivado" : ""}</h2>{chat.runs.map(run => <button className="card team-run-link" key={run.id} onClick={() => choose({ chatId: chat.id, runId: run.id })}><strong>{run.goal}</strong><small>{run.status}</small></button>)}</section>)}</section> : run ? <>
+    {!selection ? <section aria-label="Trabajos">{!chats.length && <p className="muted">No hay trabajos disponibles.</p>}{chats.map(chat => <section key={chat.id}><h2>{chat.title}{chat.archived ? " · Archivado" : ""}</h2>{chat.runs.map(run => <button className="card team-run-link" key={run.id} onClick={() => choose({ chatId: chat.id, runId: run.id })}><strong>{run.goal}</strong><small>{run.status}</small></button>)}</section>)}</section> : run ? <>
       <h2>{run.goal}</h2><p className="muted">{run.status} · Secuencia {run.planV2?.sequence ?? 0}{archived ? " · Solo lectura" : ""}</p>
       <div className="row team-controls">
         {run.status === "running" && <button className="btn" disabled={readOnly} onClick={() => act("pause")}>Pausar</button>}

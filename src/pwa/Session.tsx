@@ -758,7 +758,12 @@ export function SessionScreen({ route, back }: { route: Extract<Route, { kind: "
     window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "smooth" })
   }
 
-  const lastUser = [...messages].reverse().find((m) => m.info.role === "user")
+  const hiddenInternal = new Set(messages
+    .filter((m) => m.info.role === "user" && m.parts.some((p) => p.type === "text" && (p.text ?? "").trimStart().startsWith("[FLUFY_EQUIPO_INTERNO]")))
+    .map((m) => m.info.id))
+  const parentOf = (m: Message) => (m.info as { parentID?: string }).parentID
+  const visibleMessages = messages.filter((m) => !hiddenInternal.has(m.info.id) && !(parentOf(m) && hiddenInternal.has(parentOf(m)!)))
+  const lastUser = [...visibleMessages].reverse().find((m) => m.info.role === "user")
   const lastModel = lastUser?.info.model ?? (lastUser?.info.providerID && lastUser.info.modelID ? { providerID: lastUser.info.providerID, modelID: lastUser.info.modelID } : null)
   const initialModel = lastModel ?? info?.prefs?.model ?? null
 
@@ -858,11 +863,11 @@ export function SessionScreen({ route, back }: { route: Extract<Route, { kind: "
         </div>
       )}
       <div className="messages">
-        {messages.map((m, i) => (
+        {visibleMessages.map((m, i) => (
           <MessageView
             key={m.info.id}
             message={m}
-            live={busy && i === messages.length - 1}
+            live={busy && i === visibleMessages.length - 1}
             voice={{ session: route.id, enabled: !!(voiceMode && speech?.enabled && speech.ready), notes }}
           />
         ))}
