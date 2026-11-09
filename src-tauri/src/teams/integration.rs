@@ -1,8 +1,188 @@
 // Opt-in Windows test. tests/teams-engine.mjs supplies an isolated real OpenCode
 // instance backed by loopback deterministic inference. No real account is used.
+// Fallback protocol: `native_fallback_phase` below is driven by QA's
+// tests/fallback-native.mjs. It uses the real engine, runner and on-disk store;
+// only inference responses are deterministic. It is not a live-account/UI test.
 use super::*;
 use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
+
+/// Contract for tests/fallback-native.mjs:
+/// - GUILLE_FALLBACK_PHASE=prepare|resume|reopen; same GUILLE_FALLBACK_APP_ID
+///   (com.guillecode.fallback-test-<unique>) and GUILLE_TEAM_TEST_REPO each phase.
+/// - GUILLE_TEAM_TEST_ENGINE=http://127.0.0.1:<port>, normal fixture auth below.
+/// - GUILLE_FALLBACK_REPORT=<absolute JSON path>; siblings `.initial.json` and
+///   `.prepared.json` are durable gates, the base path is the final report.
+/// - Provider openai exposes synthetic primary (variant high), secondary, tertiary.
+///   Hold the FIRST primary inference until .initial.json exists. Then return
+///   HTTP 429 usage_limit_reached. Secondary conversational continuation returns
+///   {action:work,reply:"Empiezo",questions:[]}; secondary planning returns 429.
+///   Tertiary plans two sequential worker tasks fallback-done/fallback-pending,
+///   assigned to worker, owning their respective .effect files. Each executes
+///   exactly one bash append and declares that exact observed command as check.
+///   Hold pending's final inference AFTER its completed append until the harness
+///   kills prepare and explicitly releases inference. Reviews/assessment/closeout
+///   return valid approved contracts (uiRequired:false for this backend fixture).
+/// - Wait for .prepared.json, kill ONLY prepare, release pending inference, wait
+///   engine idle, run resume then reopen. Never kill/reuse the user's engine.
+/// Assertions cover initial disk snapshot, message->Run linkage, two ordered
+/// transitions, completed-task/session/attempt preservation, once-only appends,
+/// restored original variant and untouched later chat model selection.
+#[test]
+#[ignore = "Run via node tests/fallback-native.mjs with deterministic local inference"]
+fn native_fallback_phase() {
+    let phase = std::env::var("GUILLE_FALLBACK_PHASE").expect("fallback phase");
+    assert!(["prepare", "resume", "reopen"].contains(&phase.as_str()));
+    let repo = std::env::var("GUILLE_TEAM_TEST_REPO").expect("fixture repository");
+    let url = std::env::var("GUILLE_TEAM_TEST_ENGINE").expect("fixture engine");
+    assert!(url.starts_with("http://127.0.0.1:"));
+    let identifier = std::env::var("GUILLE_FALLBACK_APP_ID").expect("unique test app id");
+    assert!(identifier.starts_with("com.guillecode.fallback-test-"));
+    let report = std::env::var("GUILLE_FALLBACK_REPORT").expect("report path");
+    assert!(std::path::Path::new(&report).is_absolute());
+    let mut context = tauri::generate_context!();
+    context.config_mut().identifier = identifier;
+    context.config_mut().app.windows.clear();
+    let mut app = tauri::Builder::default().any_thread()
+        .manage(crate::ServerState {
+            child: Mutex::new(None),
+            config: Mutex::new(Some(crate::ServerConfig { url, username:"opencode".into(), password:"qa-password".into(), worktree:repo.clone() })),
+            project: Mutex::new(Some(repo.clone())), stopping: AtomicBool::new(false),
+        }).manage(crate::updates::UpdatesState::default()).build(context).expect("fallback test runtime");
+    start(app.handle());
+    crate::approvals::start(app.handle());
+    let handle = app.handle().clone();
+    let (tx,rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| fallback_phase(&handle,&repo,&phase,&report)));
+        let _ = tx.send(result);
+    });
+    let deadline = Instant::now() + Duration::from_secs(300);
+    loop {
+        app.run_iteration(|_,_|{});
+        if let Ok(result) = rx.try_recv() { if let Err(error) = result { std::panic::resume_unwind(error); } break; }
+        assert!(Instant::now() < deadline,"fallback phase timed out");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn fallback_phase(app: &AppHandle, repo: &str, phase: &str, report: &str) {
+    use serde_json::json;
+    let model = |name:&str| ModelRef { provider_id:"openai".into(),model_id:name.into() };
+    let save = |suffix:&str,value:&serde_json::Value| {
+        std::fs::write(format!("{report}{suffix}"),serde_json::to_string_pretty(value).unwrap()).unwrap();
+    };
+    let client = runner::test_client(app,repo).unwrap();
+    let approve = || {
+        for p in client.get_resilient("/permission").unwrap().as_array().into_iter().flatten() {
+            client.post(&format!("/permission/{}/reply",p["id"].as_str().unwrap()),json!({"reply":"once"})).unwrap();
+        }
+    };
+    let deadline = Instant::now() + Duration::from_secs(240);
+    let run_id = if phase == "prepare" {
+        let mut team = domain::tests::team();
+        team.project_root=repo.into(); team.allowed_repositories=vec![repo.into()]; team.max_parallel_tasks=1;
+        team.members[0].model=model("primary"); team.members[0].variant=Some("high".into());
+        let mut worker=team.members[0].clone(); worker.id="worker".into(); worker.role="Backend".into();
+        worker.name="Worker".into(); worker.variant=None; worker.tools=vec!["read".into(),"write".into(),"bash".into()];
+        team.members.push(worker);
+        let team=teams_save(app.clone(),team).unwrap();
+        let chat=team_chats_create(app.clone(),team.id).unwrap();
+        team_fallback_models_set(app.clone(),vec![model("secondary"),model("tertiary")]).unwrap();
+        team_chats_continuous(app.clone(),chat.id.clone(),true).unwrap();
+        let reply=team_chat_send(app.clone(),chat.id.clone(),"QA-FALLBACK comprobar persistencia, cuota y recuperación sin repetir efectos".into(),None).unwrap();
+        let initial=loop {
+            let disk=read_db(&db(app).unwrap()).unwrap();
+            let saved=disk.chats.iter().find(|c|c.id==chat.id).unwrap();
+            let message=saved.messages.iter().find(|m|m.id==reply).unwrap();
+            assert_eq!(message.status,"pending","initial conversation stopped before snapshot gate: {}",message.text);
+            if message.session_id.is_some() {
+                assert!(saved.runs.is_empty(),"fixture must gate first inference until initial report");
+                let state=message.continuous_fallback.as_ref().expect("snapshot persisted before inference");
+                assert_eq!(state.original_model,model("primary")); assert_eq!(state.current_model,model("primary"));
+                assert_eq!(state.original_variant.as_deref(),Some("high")); assert_eq!(state.next_index,0);
+                assert!(saved.messages.iter().find(|m|m.role=="user").unwrap().continuous_fallback.is_some());
+                break json!({"chatId":chat.id,"replyId":reply,"sessionId":message.session_id,"snapshot":state});
+            }
+            assert!(Instant::now()<deadline,"initial message not persisted"); std::thread::sleep(Duration::from_millis(20));
+        };
+        // A later configuration update must not rewrite the accepted request.
+        update(app,|store| {
+            let c=store.chats.iter_mut().find(|c|c.id==chat.id).unwrap();
+            c.team.members[0].model=model("tertiary"); c.team.members[0].variant=Some("later-choice".into()); Ok(())
+        }).unwrap();
+        team_fallback_models_set(app.clone(),vec![model("tertiary")]).unwrap();
+        save(".initial.json",&initial);
+        loop {
+            approve();
+            let disk=read_db(&db(app).unwrap()).unwrap(); let c=disk.chats.iter().find(|c|c.id==chat.id).unwrap();
+            if let Some(r)=c.runs.last() {
+                let state=r.continuous_fallback.as_ref().unwrap();
+                assert_eq!(state.original_model,model("primary")); assert_eq!(state.original_variant.as_deref(),Some("high"));
+                assert_eq!(state.candidates,vec![model("secondary"),model("tertiary")]);
+                assert_eq!(c.messages.iter().find(|m|m.id==reply).unwrap().run_id.as_deref(),Some(r.id.as_str()));
+                let source=c.messages.iter().find(|m|m.role=="user" && m.run_id.as_deref()==Some(r.id.as_str())).unwrap();
+                assert_eq!(source.continuous_fallback.as_ref().unwrap().next_index,1,"Run must inherit preflight progress");
+                assert_eq!(source.continuous_fallback.as_ref().unwrap().current_model,model("secondary"));
+                let done=r.tasks.iter().find(|t|t.id=="fallback-done" && t.status=="completed");
+                let pending=r.tasks.iter().find(|t|t.id=="fallback-pending");
+                if let (Some(done),Some(pending))=(done,pending) {
+                    if let Some(session)=pending.attempts.last().and_then(|a|a.session_id.as_ref()) {
+                        let history=client.get_resilient(&format!("/session/{session}/message")).unwrap();
+                        if !runner::observed_commands(&history).is_empty() && fallback::settled_tools(&history) {
+                            assert_eq!(state.next_index,2); assert_eq!(state.current_model,model("tertiary"));
+                            assert_eq!(r.configuration_changes.iter().filter(|change|change["kind"]=="continuousFallback").count(),1,
+                                "the Run inherits candidate one and advances exactly once to candidate two");
+                            assert_eq!(done.attempts.len(),1); assert_eq!(pending.attempts.len(),1);
+                            save(".prepared.json",&json!({"runId":r.id,"chatId":chat.id,"replyId":reply,"snapshot":state,
+                                "planSessionId":r.plan_session_id,"tasks":r.tasks,"initial":initial}));
+                            // The harness kills this process only after this durable checkpoint.
+                            loop { std::thread::sleep(Duration::from_secs(1)); }
+                        }
+                    }
+                }
+                assert!(!["failed","blocked","planning_blocked","completed"].contains(&r.status.as_str()),"unexpected fixture result: {:?}",r);
+            }
+            assert!(Instant::now()<deadline,"fallback checkpoint not reached"); std::thread::sleep(Duration::from_millis(50));
+        }
+    } else {
+        let prepared:serde_json::Value=serde_json::from_str(&std::fs::read_to_string(format!("{report}.prepared.json")).unwrap()).unwrap();
+        let id=prepared["runId"].as_str().unwrap().to_string();
+        let before=run(app,&id).unwrap();
+        assert_eq!(before.continuous_fallback.as_ref().unwrap().next_index,2);
+        assert_eq!(before.plan_session_id.as_deref(),prepared["planSessionId"].as_str());
+        let done=before.tasks.iter().find(|t|t.id=="fallback-done").unwrap();
+        assert_eq!(serde_json::to_value(done).unwrap(),prepared["tasks"].as_array().unwrap().iter().find(|t|t["id"]=="fallback-done").unwrap().clone());
+        if phase=="resume" { assert_eq!(before.status,"blocked"); control(app,&id,"retry").unwrap(); }
+        else { assert_eq!(before.status,"completed"); }
+        id
+    };
+    loop {
+        approve(); let r=run(app,&run_id).unwrap();
+        if !active(&r.status) {
+            assert_eq!(r.status,"completed","{:?}",r);
+            let disk=read_db(&db(app).unwrap()).unwrap(); let c=disk.chats.iter().find(|c|c.runs.iter().any(|r|r.id==run_id)).unwrap();
+            let state=r.continuous_fallback.as_ref().unwrap(); assert!(state.restored);
+            assert_eq!(state.current_model,model("primary")); assert_eq!(state.original_variant.as_deref(),Some("high"));
+            assert_eq!(c.team.members[0].model,model("tertiary")); assert_eq!(c.team.members[0].variant.as_deref(),Some("later-choice"));
+            let prepared:serde_json::Value=serde_json::from_str(&std::fs::read_to_string(format!("{report}.prepared.json")).unwrap()).unwrap();
+            for t in &r.tasks {
+                assert_eq!(t.status,"completed"); assert_eq!(t.attempts.len(),1);
+                let prior=prepared["tasks"].as_array().unwrap().iter().find(|old|old["id"]==t.id).unwrap();
+                assert_eq!(t.attempts[0].id,prior["attempts"][0]["id"].as_str().unwrap());
+                assert_eq!(t.attempts[0].session_id.as_deref(),prior["attempts"][0]["sessionId"].as_str());
+                let effects=std::fs::read_to_string(std::path::Path::new(repo).join(format!("{}.effect",t.id))).unwrap();
+                assert_eq!(effects.lines().count(),1,"completed side effect replayed");
+            }
+            save(if phase=="reopen" {".reopened.json"} else {""},&json!({"phase":phase,"status":"completed","runId":r.id,
+                "chatId":c.id,"snapshot":state,"tasks":r.tasks,"planSessionId":r.plan_session_id,
+                "configurationChanges":r.configuration_changes,"chatLeadModel":c.team.members[0].model,"chatLeadVariant":c.team.members[0].variant,
+                "effects":{"fallback-done":1,"fallback-pending":1},"initial":prepared["initial"]}));
+            println!("FALLBACK_NATIVE_PHASE_OK {phase}"); break;
+        }
+        assert!(Instant::now()<deadline,"fallback recovery timed out: {:?}",r); std::thread::sleep(Duration::from_millis(100));
+    }
+}
 
 #[test]
 #[ignore = "Run via node tests/teams-engine.mjs (isolated OpenCode + Tauri + Git)"]
@@ -270,7 +450,7 @@ fn native_team_end_to_end() {
             assert!(read_db(&db(&handle).unwrap()).unwrap().chats[0].runs[0].notified);
             update(&handle, |store| {
                 let saved = store.chats.iter_mut().find(|c| c.id == chat.id).unwrap();
-                saved.messages.push(ChatMessage { clarification_start: None, id: "pending-status-test".into(), role: "assistant".into(), text: String::new(), created_at: now(), status: "pending".into(), run_id: Some(run_id.clone()), session_id: Some("lead-status-observation".into()), images: vec![] });
+                saved.messages.push(ChatMessage { continuous_fallback: None, clarification_start: None, id: "pending-status-test".into(), role: "assistant".into(), text: String::new(), created_at: now(), status: "pending".into(), run_id: Some(run_id.clone()), session_id: Some("lead-status-observation".into()), images: vec![] });
                 Ok(())
             }).unwrap();
             let query = conversation::send(handle.clone(), chat.id.clone(), "¿Quién está bloqueado y qué falló?".into(), vec![]).unwrap();

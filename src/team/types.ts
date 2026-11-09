@@ -20,12 +20,28 @@ export type DeliveryReviewReport = { uiRequired: boolean; summary: string; reaso
 export type TeamImageInput = { filename: string; mime: string; url: string }
 export type TeamImage = { id: string; filename: string; mime: string; bytes: number; sha256: string }
 export type SupportReport = { routing?: RoutingReceipt | null; id:string;kind:"investigation"|"task_review"|"goal_analysis"|"plan_change"|"plan_review";agent:Employee;sessionId:string;repository:string;taskId:string|null;requestId:string|null;startedAt:number;finishedAt:number|null;status:string;summary:string;result:{criteriaSatisfied?:boolean;criteria?:{requirement:string;status:string;evidence:string}[];findings?:string[];nextStep?:string}|null }
-export type TeamRun = { deliveryReviewVersion?: number; deliveryReview?: DeliveryReviewReport | null; planV2?: PlanV2State; supportReports?:SupportReport[]; images?: TeamImage[]; guidance?: string[]; chatSummary?: ChatSummary | null; id: string; goal: string; team: Team; skills: Skill[]; status: RunStatus; startedAt: number; finishedAt: number | null; planSessionId: string | null; closingSessions?: string[]; coordination?: Coordination[]; closingReviews?: Review[]; tasks: TeamTask[]; summary: string; error: string | null; evidenceDir: string; artifacts: Artifact[]; notified: boolean; captureTargets?: CaptureTarget[]; observations?: Observation[]; sessionUsage?: Record<string, {costUsd: number | null; tokens: number | null}>; evidenceExpiredAt?: number | null }
-export type TeamChatMessage = { images?: TeamImage[]; id: string; role: string; text: string; createdAt: number; status: string; runId: string | null; sessionId: string | null }
+export type TeamRun = { continuousFallback?: ContinuousFallback | null; deliveryReviewVersion?: number; deliveryReview?: DeliveryReviewReport | null; planV2?: PlanV2State; supportReports?:SupportReport[]; images?: TeamImage[]; guidance?: string[]; chatSummary?: ChatSummary | null; id: string; goal: string; team: Team; skills: Skill[]; status: RunStatus; startedAt: number; finishedAt: number | null; planSessionId: string | null; closingSessions?: string[]; coordination?: Coordination[]; closingReviews?: Review[]; tasks: TeamTask[]; summary: string; error: string | null; evidenceDir: string; artifacts: Artifact[]; notified: boolean; captureTargets?: CaptureTarget[]; observations?: Observation[]; sessionUsage?: Record<string, {costUsd: number | null; tokens: number | null}>; evidenceExpiredAt?: number | null }
+export type TeamChatMessage = { continuousFallback?: ContinuousFallback | null; clarificationStart?: string | null; images?: TeamImage[]; id: string; role: string; text: string; createdAt: number; status: string; runId: string | null; sessionId: string | null }
 export type ApprovedPreviewReference = PreviewReference
 export type TeamOrigin = { sessionId: string; messageId: string; title: string; directory: string; createdAt: number; error?: string | null; previewReference?: ApprovedPreviewReference | null }
-export type TeamChatRecord = { origin?: TeamOrigin | null; messages?: TeamChatMessage[]; id: string; title: string; archived: boolean; team: Team; skills: Skill[]; createdAt: number; runs: TeamRun[]; memory?: boolean | null; autoApprove?: boolean | null }
-export type TeamStore = { schemaVersion: number; teams: Team[]; skills: Skill[]; chats: TeamChatRecord[] }
+export type TeamChatRecord = { continuousMode?: boolean; origin?: TeamOrigin | null; messages?: TeamChatMessage[]; id: string; title: string; archived: boolean; team: Team; skills: Skill[]; createdAt: number; runs: TeamRun[]; memory?: boolean | null; autoApprove?: boolean | null }
+export type TeamStore = { schemaVersion: number; teams: Team[]; skills: Skill[]; chats: TeamChatRecord[]; fallbackModels?: ModelRef[] }
+export type ContinuousFallback = { enabled: boolean; originalModel: ModelRef; originalVariant: string | null; currentModel: ModelRef; candidates: ModelRef[]; nextIndex: number; restored: boolean }
+
+// Initial Lead replies have the same native snapshot before a Run exists.
+export function chatFallback(chat: TeamChatRecord, selectedRunId?: string | null) {
+  const run = chat.runs.find(run => run.id === selectedRunId) ?? chat.runs.at(-1)
+  const latest = !selectedRunId || selectedRunId === chat.runs.at(-1)?.id
+  const message = latest ? chat.messages?.findLast(message => message.role === "assistant" && message.continuousFallback
+    && message.createdAt >= (run?.startedAt ?? 0)
+    && (!message.runId || (message.status === "pending" && message.createdAt > (run?.startedAt ?? 0))
+      || message.createdAt > (run?.finishedAt ?? Infinity))) : undefined
+  if (message?.continuousFallback) return { id: message.id, state: message.continuousFallback, finished: message.continuousFallback.restored, status: message.status }
+  if (!run?.continuousFallback) return null
+  const source = chat.messages?.findLast(message => message.role === "assistant" && message.runId === run.id
+    && message.continuousFallback && message.createdAt <= run.startedAt)
+  return { id: source?.id ?? run.id, state: run.continuousFallback, finished: run.finishedAt != null, status: run.status }
+}
 
 export const statusLabel: Record<string, string> = { planning_blocked: "Plan bloqueado", plan_ready: "Plan validado · pendiente de iniciar", waiting_dependency: "Esperando respuesta del Lead", checking: "Lead revisando pedido", waiting: "Esperando entrega", resolved: "Resuelto", planning: "Planificando", running: "Trabajando", paused: "Pausado", blocked: "Necesita atención", delivering: "Guardando entrega", awaiting_manual_qa: "Listo para tu revisión", qa_approved: "Aprobado por usuario", cancelling: "Deteniendo sesiones", cancelled: "Cancelado · cambios conservados", failed: "Falló", pending: "Pendiente", verifying: "Revisando", completed: "Completada", changes_requested: "Correcciones solicitadas", interrupted: "Interrumpido", review_error: "Error de revisión" }
 export const runActive = (status: string) => ["planning", "plan_ready", "running", "paused", "delivering", "cancelling"].includes(status)

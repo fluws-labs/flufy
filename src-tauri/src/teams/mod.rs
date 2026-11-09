@@ -12,6 +12,7 @@ mod conflicts;
 mod conversation;
 pub mod domain;
 mod errors;
+mod fallback;
 mod evidence;
 mod folder_snapshot;
 #[cfg(all(test, feature = "desktop-e2e"))]
@@ -49,6 +50,7 @@ pub struct TeamsState {
 
 fn empty() -> Store {
     Store {
+        fallback_models: vec![],
         schema_version: 3,
         teams: vec![],
         skills: catalog(),
@@ -280,6 +282,7 @@ pub fn update<T>(
     let mut guard = state.store.lock().map_err(|e| e.to_string())?;
     let mut next = guard.clone();
     let result = f(&mut next)?;
+    fallback::restore_finished(&mut next);
     for run in next.chats.iter_mut().flat_map(|c| &mut c.runs) {
         let previous = guard.chats.iter().flat_map(|c| &c.runs).find(|r| r.id == run.id);
         if previous.is_none_or(|p| serde_json::to_value(p).ok() != serde_json::to_value(&*run).ok()) {
@@ -329,6 +332,7 @@ pub fn start(app: &AppHandle) {
         }
     };
     recover(&mut store);
+    fallback::restore_finished(&mut store);
     app.manage(TeamsState {
         store: Mutex::new(store),
         controls: Mutex::new(()),
@@ -534,6 +538,7 @@ pub fn team_chats_create(app: AppHandle, team_id: String) -> Result<Chat, String
             .ok_or("Equipo inexistente")?
             .clone();
         let chat = Chat {
+            continuous_mode: false,
             origin: None,
             messages: vec![],
             id: id(),
@@ -621,6 +626,7 @@ fn autonomous_chat(s: &Store, root: String, model: ModelRef, variant: Option<Str
         };
         validate_team(&team, &s.skills)?;
         let chat = Chat {
+            continuous_mode: false,
             origin: None,
             messages: vec![],
             id: id(),
@@ -654,6 +660,30 @@ pub fn team_chats_edit(
             .ok_or("Chat inexistente")?;
         c.title = title;
         c.archived = archived;
+        Ok(())
+    })
+}
+
+#[tauri::command]
+pub fn team_fallback_models_set(app: AppHandle, models: Vec<ModelRef>) -> Result<(), String> {
+    fallback::validate_models(&models)?;
+    update(&app, |s| { s.fallback_models = models; Ok(()) })
+}
+
+#[tauri::command]
+pub fn team_chats_continuous(app: AppHandle, chat_id: String, enabled: bool) -> Result<(), String> {
+    update(&app, |s| {
+        if enabled && s.fallback_models.is_empty() { return Err("Configurá Modelos Fallback antes de activar el modo continuo".into()); }
+        let chat = s.chats.iter_mut().find(|c| c.id == chat_id).ok_or("Chat inexistente")?;
+        chat.continuous_mode = enabled;
+        for run in &mut chat.runs {
+            if active(&run.status) || ["blocked","planning_blocked"].contains(&run.status.as_str()) {
+                if let Some(state) = &mut run.continuous_fallback { state.enabled = enabled; }
+            }
+        }
+        for message in chat.messages.iter_mut().filter(|m| m.status == "pending") {
+            if let Some(state) = &mut message.continuous_fallback { state.enabled = enabled; }
+        }
         Ok(())
     })
 }
@@ -741,6 +771,14 @@ fn start_run_with(app: AppHandle, chat_id: String, goal: String, images: Vec<Cha
             return Err("Pedido del Lead detenido o ya finalizado; no se inició una ejecución nueva".into());
         }
         validate_team(&c.team, &c.skills)?;
+        let continuous_fallback = fallback::snapshot_for_run(c, &s.fallback_models, source_reply)?;
+        let mut team = c.team.clone();
+        if let Some(state) = &continuous_fallback {
+            if let Some(lead) = team.members.iter_mut().find(|m| m.id == team.lead_agent_id) {
+                lead.model = state.original_model.clone();
+                lead.variant = state.original_variant.clone();
+            }
+        }
         if let Some((owner,r)) = conflicts::first(s,c) {
             let task = r.tasks.iter().find(|t| t.status != "completed").map(|t|t.title.as_str()).unwrap_or("Organizar y revisar el trabajo");
             return Err(format!("La carpeta está ocupada por el equipo «{}» ({task}). Abrí «Ver equipos que ocupan la carpeta» para verlo o detenerlo; su trabajo se conserva.",owner.title));
@@ -763,7 +801,10 @@ Feedback actual: ",
                 )
             })
             .unwrap_or_default();
+        let source_start = source_reply.and_then(|reply| conversation::clarification_start(c,reply))
+            .and_then(|first| c.messages.iter().position(|m|m.id==first));
         c.runs.push(Run {
+            continuous_fallback,
             delivery_review_version: 1,
             delivery_review: None,
             plan_v2: plan_v2::PlanV2State { enabled: c.team.plan_v2.enabled, conversation_lead, review_before_start: c.team.plan_v2.review_before_start, stage: "discovery".into(), ..Default::default() },
@@ -773,7 +814,7 @@ Feedback actual: ",
             chat_summary: None,
             id: run_id.clone(),
             goal: format!("{}{}", prior, goal),
-            team: c.team.clone(),
+            team,
             skills: c.skills.clone(),
             status: "planning".into(),
             started_at: now(),
@@ -796,6 +837,15 @@ Feedback actual: ",
             session_usage: Default::default(),
             evidence_expired_at: None,
         });
+        if let Some(reply) = source_reply {
+            if let Some(end) = c.messages.iter().position(|m| m.id == reply) {
+                c.messages[end].run_id = Some(run_id.clone());
+                let first = source_start.or_else(|| c.messages[..end].iter().rposition(|m|m.role=="user")).unwrap_or(end);
+                for message in &mut c.messages[first..end] {
+                    message.run_id = Some(run_id.clone());
+                }
+            }
+        }
         Ok(())
     })?;
     runner::launch(&app, &run_id);
@@ -956,6 +1006,7 @@ fn control(app: &AppHandle, id: &str, action: &str) -> Result<(), String> {
                 }
                 .into();
                 r.error = None;
+                if let Some(state) = &mut r.continuous_fallback { state.resume(); }
                 if r.tasks.is_empty() { r.recovered_plan = None; }
                 Ok(())
             })?;

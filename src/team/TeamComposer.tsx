@@ -1,6 +1,7 @@
 import { useEffect, useImperativeHandle, useRef, useState, type Ref } from "react"
 import { Icon } from "../components/ui"
 import { teamCall } from "../state/teams"
+import { setContinuousMode, validateContinuousSend } from "../state/fallback"
 import { openImage } from "../state/lightbox"
 import { CHATGPT } from "../state/accounts"
 import { openEditor } from "../state/editors"
@@ -28,6 +29,8 @@ export function TeamComposer({ ref, chat, label, pending, onSent, onBrowser, all
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState("")
   const [voiceSetup, setVoiceSetup] = useState(false)
+  const [changingContinuous, setChangingContinuous] = useState(false)
+  const continuousBusy = useRef(false)
   const fileInput = useRef<HTMLInputElement>(null)
   const adding = useRef(false)
   const submitting = useRef(false)
@@ -65,6 +68,7 @@ export function TeamComposer({ ref, chat, label, pending, onSent, onBrowser, all
     submitting.current = true
     setSending(true)
     try {
+      if (!await validateContinuousSend(chatId)) return
       const id = await teamCall<string>("team_chat_send", { chatId, text: message, images: attached })
       if (id) { setText(previous => previous.trim() === message ? "" : previous); setImages(previous => previous.filter(image => !attached.includes(image))); setError(""); onSent() }
     } finally { submitting.current = false; setSending(false) }
@@ -140,6 +144,12 @@ export function TeamComposer({ ref, chat, label, pending, onSent, onBrowser, all
         <span className="composer-pill-text">{leadModelName}</span>
         <Icon name="chevron-down" />
       </button>
+      <button type="button" className="btn btn-xs" role="switch" aria-checked={chat.continuousMode === true} disabled={changingContinuous || chat.archived} onClick={async () => {
+        if (continuousBusy.current) return
+        continuousBusy.current = true; setChangingContinuous(true)
+        try { await setContinuousMode(chatId, !chat.continuousMode) }
+        finally { continuousBusy.current = false; setChangingContinuous(false) }
+      }}>Modo continuo {chat.continuousMode ? "activado" : "desactivado"}</button>
     </div>
     {voiceSetup && <VoiceSetup onClose={() => setVoiceSetup(false)} onRecord={recorder.start} />}
     <div className="team-composer-actions">
