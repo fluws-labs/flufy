@@ -1,0 +1,5 @@
+Flufy 0.24.0 incorpora la previsualización editable al chat y al flujo de equipos. El editor flotante permite minimizar y restaurar, trabajar en escritorio o móvil, conversar con el agente sobre el diseño, deshacer y rehacer, y guardar una biblioteca de diseños por conversación.
+
+Ahora se pueden crear y renombrar pantallas y capas, y navegar entre pantallas usando botones y textos con destinos persistentes. El inspector queda organizado y la paleta de colores suma selector visual, códigos hexadecimales y muestras rápidas.
+
+El arrastre es más fluido y estable: seleccionar o comenzar un guardado ya no recarga la vista, y el contenido conserva su posición mientras se mueve, se guarda y se vuelve a abrir. Los diseños mantienen el CSS nativo al editar, usan una referencia aprobada inmutable y comparan capturas atribuidas a la revisión correspondiente.
