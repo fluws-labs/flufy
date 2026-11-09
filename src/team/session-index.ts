@@ -36,6 +36,11 @@ export type TeamSessionGroup = { id: string; title: string; chat?: TeamChatRecor
 // with their team even when the parent is outside the current filtered list.
 export function groupTeamSessions(visible: Session[], chats: TeamChatRecord[], all: Session[] = visible) {
   const owners = teamSessionOwners(chats)
+  // The source conversation is the Lead, not an auxiliary team session. It
+  // stays in the normal chat list even though it plans and coordinates.
+  for (const chat of chats) {
+    if (chat.origin?.sessionId) owners.delete(chat.origin.sessionId)
+  }
   const byId = new Map([...all, ...visible].map(s => [s.id, s]))
   const groups = new Map<string, TeamSessionGroup>()
   const normal: Session[] = []

@@ -158,6 +158,7 @@ pub fn request(
                 "continue",
                 "cancel",
                 "retry",
+                "force_retry",
                 "start_plan",
                 "approve",
             ]

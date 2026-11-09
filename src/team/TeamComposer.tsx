@@ -20,7 +20,7 @@ export type TeamComposerHandle = { write: (text: string) => void }
 
 const CONNECT_CHATGPT = "__connect_chatgpt__"
 
-export function TeamComposer({ ref, chat, label, pending, onSent, onBrowser }: { ref?: Ref<TeamComposerHandle>; chat: TeamChatRecord; label: string; pending: boolean; onSent: () => void; onBrowser?: () => void }) {
+export function TeamComposer({ ref, chat, label, pending, onSent, onBrowser, allowImages = true }: { ref?: Ref<TeamComposerHandle>; chat: TeamChatRecord; label: string; pending: boolean; onSent: () => void; onBrowser?: () => void; allowImages?: boolean }) {
   const chatId = chat.id
   const [text, setText] = useState("")
   const [images, setImages] = useState<TeamImageInput[]>([])
@@ -48,7 +48,7 @@ export function TeamComposer({ ref, chat, label, pending, onSent, onBrowser }: {
   useImperativeHandle(ref, () => ({ write(value) { setText(value); textarea.current?.focus() } }))
   const locked = sending || loading
   const addImages = async (files: File[]) => {
-    if (locked || adding.current || !files.length) return
+    if (!allowImages || locked || adding.current || !files.length) return
     adding.current = true; setLoading(true); setError("")
     try {
       const added = await readTeamImages(files)
@@ -125,12 +125,12 @@ export function TeamComposer({ ref, chat, label, pending, onSent, onBrowser }: {
     await teamCall("team_chats_model", { chatId, agentId: lead.id, model: { providerID, modelID: rest.join("/") }, variant: null })
   }
   return <form className="team-composer" onSubmit={e => { e.preventDefault(); void submit() }}
-    onDragOver={e => { if (e.dataTransfer.types.includes("Files")) e.preventDefault() }}
-    onDrop={e => { if (e.dataTransfer.files.length) { e.preventDefault(); void addImages(Array.from(e.dataTransfer.files)) } }}>
+    onDragOver={e => { if (allowImages && e.dataTransfer.types.includes("Files")) e.preventDefault() }}
+    onDrop={e => { if (allowImages && e.dataTransfer.files.length) { e.preventDefault(); void addImages(Array.from(e.dataTransfer.files)) } }}>
     <div className="team-composer-heading"><label htmlFor={`team-goal-${chatId}`}>{label}</label>{pending && <button className="btn btn-xs" type="button" aria-label="Detener pedido del Lead" title="Detener pedido del Lead" onClick={() => void teamCall("team_chat_cancel", { chatId })}>Detener</button>}</div>
     {images.length > 0 && <div className="team-chat-images team-image-drafts">{images.map((image, i) => <figure key={i}><button type="button" onClick={() => openImage(image.url, image.filename)} title={`Ampliar ${image.filename}`}><img src={image.url} alt={image.filename} /></button><figcaption>{image.filename}</figcaption><button type="button" className="btn btn-xs" disabled={locked} aria-label={`Quitar ${image.filename}`} onClick={() => setImages(previous => previous.filter((_, index) => index !== i))}><Icon name="close" /></button></figure>)}</div>}
     <textarea ref={textarea} id={`team-goal-${chatId}`} rows={3} value={text} onChange={e => setText(e.target.value)} placeholder={pending ? "Escribile al Lead: si hay trabajo en curso, lo ajusta…" : "Hablá con el Lead: pedí un cambio o preguntá qué falló…"}
-      onPaste={e => { const files = Array.from(e.clipboardData.items).filter(item => item.type.startsWith("image/")).map(item => item.getAsFile()).filter((file): file is File => !!file); if (files.length) { e.preventDefault(); void addImages(files) } }}
+      onPaste={e => { if (!allowImages) return; const files = Array.from(e.clipboardData.items).filter(item => item.type.startsWith("image/")).map(item => item.getAsFile()).filter((file): file is File => !!file); if (files.length) { e.preventDefault(); void addImages(files) } }}
       onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void submit() } }} />
     <input ref={fileInput} type="file" accept={IMAGE_TYPES} multiple hidden aria-label="Imágenes para el equipo" onChange={e => { if (e.target.files) void addImages(Array.from(e.target.files)); e.target.value = "" }} />
     {error && <p className="team-error" role="alert">{error}</p>}
@@ -145,7 +145,7 @@ export function TeamComposer({ ref, chat, label, pending, onSent, onBrowser }: {
     <div className="team-composer-actions">
       <div className="team-composer-tools">
         {onBrowser && <button className="btn btn-sm" type="button" onClick={onBrowser}><Icon name="browser" /> Navegador</button>}
-        <button className="btn btn-sm" type="button" disabled={locked} onClick={() => fileInput.current?.click()}><Icon name="file-media" /> {loading ? "Cargando imágenes…" : "Adjuntar imagen"}</button>
+        {allowImages && <button className="btn btn-sm" type="button" disabled={locked} onClick={() => fileInput.current?.click()}><Icon name="file-media" /> {loading ? "Cargando imágenes…" : "Adjuntar imagen"}</button>}
       </div>
       <div className="team-composer-send">
         {recording ? (

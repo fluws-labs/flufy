@@ -111,13 +111,15 @@ export function SessionTabs() {
         const session = draft ? null : allSessions.find((x) => x.id === id) ?? null
         const active = !teamState.activeChatId && (draft ? activeId === null : activeId === id)
         const mark = draft ? "idle" : sessionMark({ allSessions, permissions, questions, statuses }, unseen, id, approvals)
+        const teamBusy = !draft && teamState.chats.some((chat) => chat.origin?.sessionId === id && chat.runs.some((run) => run.finishedAt == null && ["planning", "running", "delivering", "cancelling"].includes(run.status)))
+        const displayMark = mark === "attention" ? "attention" : teamBusy ? "busy" : mark
         const title = draft ? "Nueva conversación" : session?.title || "Sin título"
         const archived = archivedSessionOwner(session, allSessions)
-        const hint = (archived ? " · archivada" : "") + (mark === "attention" ? " · espera tu respuesta" : mark === "unseen" ? " · terminó, sin ver" : "")
+        const hint = (archived ? " · archivada" : "") + (displayMark === "attention" ? " · espera tu respuesta" : displayMark === "unseen" ? " · terminó, sin ver" : "")
         return (
           <div
             key={id}
-            className={`agent-tab state-${mark}${active ? " active" : ""}`}
+            className={`agent-tab state-${displayMark}${active ? " active" : ""}`}
             title={title + hint}
             onMouseDown={(e) => {
               if (e.button === 1) {
@@ -131,11 +133,11 @@ export function SessionTabs() {
             }}
             onContextMenu={(e) => tabMenu(e, id, session)}
           >
-            {mark === "attention" ? (
+            {displayMark === "attention" ? (
               <Icon name="bell-dot" className="agent-tab-icon" />
-            ) : mark === "busy" || mark === "retry" ? (
+            ) : displayMark === "busy" || displayMark === "retry" ? (
               <Icon name="loading" spin className="agent-tab-icon" />
-            ) : mark === "unseen" ? (
+            ) : displayMark === "unseen" ? (
               <Icon name="pass-filled" className="agent-tab-icon" />
             ) : (
               <Icon name={draft ? "add" : archived ? "archive" : "comment-discussion"} className="agent-tab-icon" />

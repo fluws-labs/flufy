@@ -32,3 +32,7 @@ graphify-out/
 # Datos de runtime del agente (se siembran solos; los defaults viven en src-tauri)
 /plane/
 /memory/
+
+# Evals: copias de trabajo y resultados locales
+evals/.runs/
+evals/results/

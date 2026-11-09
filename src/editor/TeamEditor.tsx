@@ -1,6 +1,6 @@
 import { useState } from "react"
 import { open as openDialog } from "@tauri-apps/plugin-dialog"
-import { useTeams, teamCall, saveSkill, newTeamChat } from "../state/teams"
+import { useTeams, teamCall, saveSkill } from "../state/teams"
 import { useAgent } from "../state/agent"
 import { useProject } from "../state/project"
 import { activeWorkspace } from "../state/features"
@@ -61,11 +61,11 @@ function TeamEditorForm({ id }: { id: string }) {
   const latest = latestSkills(skills)
   const patch = (p: Partial<Team>) => { setDraft((d) => ({ ...d, ...p })); setChanged(true) }
   const patchEmployee = (id: string, p: Partial<Employee>) => patch({ members: draft.members.map((m) => m.id === id ? { ...m, ...p } : m) })
-  const save = async (chat: boolean) => {
+  const save = async () => {
     setBusy(true)
     const team = await teamCall<Team>("teams_save", { team: draft })
     setBusy(false)
-    if (team) { setDraft(team); setChanged(false); if (chat) await newTeamChat(team.id); else { openEditor({ kind: "team", id: team.id }); notify.success("Equipo guardado") } }
+    if (team) { setDraft(team); setChanged(false); openEditor({ kind: "team", id: team.id }); notify.success("Plantilla guardada") }
   }
   const propose = async () => {
     const goal = await promptInput({ title: "Propuesta asistida de equipo", prompt: "Describí el proyecto y las especialidades que necesitás." })
@@ -122,6 +122,6 @@ function TeamEditorForm({ id }: { id: string }) {
       <section className="team-card"><div className="team-section-title"><h3>Registro de skills</h3><button className="btn btn-sm" onClick={() => setEditingSkill(null)}>Crear skill</button></div><p className="team-note">Las versiones guardadas se conservan. Los chats usan su snapshot; editar la plantilla afecta solo a chats nuevos.</p><div className="team-skill-list">{latest.map((s) => <button className="btn btn-xs" key={s.id} onClick={() => setEditingSkill(s)}>{s.name} v{s.version} · editar</button>)}</div></section>
       {editingSkill !== undefined && <SkillEditor key={`${editingSkill?.id ?? "new"}-${editingSkill?.version ?? 0}`} skill={editingSkill} onClose={() => setEditingSkill(undefined)} />}
     </div>
-    <footer className="team-editor-footer"><span>{changed ? "Cambios sin guardar" : "Plantilla de equipo"}</span><button className="btn" disabled={busy || !draft.name.trim()} onClick={() => void save(false)}>Guardar equipo</button><button className="btn btn-primary" disabled={busy || !draft.name.trim()} onClick={() => void save(true)}>Guardar y abrir Team Chat</button></footer>
+    <footer className="team-editor-footer"><span>{changed ? "Cambios sin guardar" : "Plantilla de equipo"}</span><button className="btn btn-primary" disabled={busy || !draft.name.trim()} onClick={() => void save()}>Guardar plantilla</button></footer>
   </div>
 }

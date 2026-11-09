@@ -26,12 +26,15 @@ import { SessionTabs } from "./SessionTabs"
 import { ChangesBar, PermissionCard, QuestionCard, TodoList } from "./Interactions"
 import { Icon, IconButton } from "../components/ui"
 import { Logo } from "../components/Logo"
-import { shortAgo } from "../lib/time"
+import { ageTone, shortAgo } from "../lib/time"
 import { projectName } from "../lib/paths"
 import { archivedSessionOwner, unarchivedSessions } from "../lib/sessions"
 import { providerErrorMessage } from "../lib/autoretry"
+
+import { newTeamChat, refreshTeams, selectTeamChat, useTeams } from "../state/teams"
+import { call } from "../lib/tauri"
 import { openMenuAt } from "../components/ContextMenu"
-import { newTeamChat, useTeams } from "../state/teams"
+import { confirmAction } from "../components/Dialog"
 import { TeamChat } from "./TeamChat"
 import { groupTeamSessions } from "../team/session-index"
 import { TeamSessionHistory } from "../team/TeamSessionHistory"
@@ -66,10 +69,48 @@ export function SessionPane({ sessionId, variant, onPreviewOpen }: { sessionId: 
   const chats = useTeams(s => s.chats)
   const history = useMemo(() => groupTeamSessions(unarchivedSessions(sessions), chats, allSessions), [sessions, chats, allSessions])
   const recent = history.normal.filter(s => !s.parentID).slice(0, 6)
+  const [leadBound, setLeadBound] = useState(false)
+  const leadChat = useMemo(() => chats.find((chat) => chat.origin?.sessionId === sessionId), [chats, sessionId])
+  const leadRun = leadChat?.runs.at(-1)
+  const leadTasks = leadRun?.tasks.filter((task) => task.taskKind !== "group") ?? []
+  const leadDone = leadTasks.filter((task) => task.status === "completed").length
+  const leadStatus: Record<string, string> = {
+    planning: "planificando", plan_ready: "plan listo", running: "en curso",
+    paused: "pausado", blocked: "bloqueado", planning_blocked: "plan bloqueado",
+    delivering: "revisando entrega", completed: "terminado", cancelled: "cancelado",
+  }
 
   useEffect(() => {
     if (sessionId) void ensureSessionView(sessionId)
   }, [sessionId])
+
+  useEffect(() => {
+    setLeadBound(false)
+    if (!sessionId) return
+    let live = true
+    void call<boolean>("teams_lead_bound", { session: sessionId })
+      .then((bound) => { if (live) setLeadBound(bound) })
+      .catch(() => undefined)
+    return () => { live = false }
+  }, [sessionId, chats])
+
+  const unbindLead = async () => {
+    if (!sessionId) return
+    const ok = await confirmAction(
+      "Desvincular el equipo",
+      "La conversación vuelve a ser un chat normal. El equipo y su tablero quedan disponibles como equipo manual.",
+      "Desvincular",
+      true,
+    )
+    if (!ok) return
+    try {
+      await call("teams_lead_unbind", { session: sessionId })
+      setLeadBound(false)
+      await refreshTeams()
+    } catch (e) {
+      notify.error("No se pudo desvincular el equipo", e instanceof Error ? e.message : String(e))
+    }
+  }
 
   const mine = useMemo(() => {
     if (!sessionId) return { permissions: [], questions: [] }
@@ -138,12 +179,13 @@ export function SessionPane({ sessionId, variant, onPreviewOpen }: { sessionId: 
                 <button key={s.id} type="button" className="agent-recent-item" onClick={() => selectSession(s.id)}>
                   <Icon name="comment-discussion" />
                   <span className="agent-recent-name">{s.title || "Sin título"}</span>
-                  <span className="agent-recent-time">{shortAgo(s.time.updated)}</span>
+                  <span className={`agent-recent-time tone-${ageTone(s.time.updated)}`}>{shortAgo(s.time.updated)}</span>
                 </button>
               ))}
               {history.groups.map(group => <TeamSessionHistory key={group.id} group={group}>
                 {group.sessions.map(s => <button key={s.id} type="button" className="agent-recent-item" onClick={() => selectSession(s.id)}>
                   <Icon name="hubot" /><span className="agent-recent-name">{s.title}</span>
+                  <span className={`agent-recent-time tone-${ageTone(s.time.updated)}`}>{shortAgo(s.time.updated)}</span>
                 </button>)}
               </TeamSessionHistory>)}
             </div>
@@ -155,6 +197,25 @@ export function SessionPane({ sessionId, variant, onPreviewOpen }: { sessionId: 
           <span className="preview-note">Los ajustes continúan la tarea actual.</span>
           <button type="button" className="btn btn-xs" disabled={busy} onClick={() => startPreviewTask(root, sessionId)}>Nueva tarea en este chat</button>
         </div>}
+        {leadBound && (
+          <div className="context-banner lead-banner">
+            <Icon name="organization" />
+            <span>
+              {leadRun
+                ? `Equipo: ${leadStatus[leadRun.status] ?? leadRun.status} · ${leadDone}/${leadTasks.length} tareas`
+                : "Lead de equipo activo. Pedile que implemente algo y vas a ver el tablero acá."}
+              {leadChat?.origin?.error && <span className="team-error"> · El Lead no pudo responder: {leadChat.origin.error}</span>}
+            </span>
+            {leadChat && (
+              <button type="button" className="btn btn-xs" onClick={() => selectTeamChat(leadChat.id)}>
+                Ver tablero
+              </button>
+            )}
+            <button type="button" className="btn btn-xs" onClick={() => void unbindLead()}>
+              Desvincular
+            </button>
+          </div>
+        )}
         {retry?.type === "retry" && (
           <div className="retry-banner">
             <Icon name="sync" spin /> Reintentando ({retry.attempt}): {providerErrorMessage({ data: { message: retry.message } })}

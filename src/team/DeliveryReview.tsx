@@ -7,8 +7,8 @@ import "./delivery-review.css"
 
 type LivePage = { label: string; actor: string; url: string }
 
-export function DeliveryReview({ run, chatId, onOpenPage, onSession, onPrepare }: {
-  run: TeamRun; chatId: string; onOpenPage: (label: string, title: string) => void; onSession: (id: string, directory: string) => void; onPrepare: (flow: DeliveryFlow) => Promise<void>
+export function DeliveryReview({ run, chatId, onOpenPage, onSession, onPrepare, readOnly = false }: {
+  run: TeamRun; chatId: string; onOpenPage: (label: string, title: string) => void; onSession: (id: string, directory: string) => void; onPrepare: (flow: DeliveryFlow) => Promise<void>; readOnly?: boolean
 }) {
   const [opening, setOpening] = useState<string | null>(null)
   const [preparing, setPreparing] = useState<string | null>(null)
@@ -46,7 +46,7 @@ export function DeliveryReview({ run, chatId, onOpenPage, onSession, onPrepare }
         <div className="delivery-flow-heading"><span className="delivery-flow-number">{index + 1}</span><div><h4>{flow.title}</h4><p>{flow.change}</p></div></div>
         <div className="team-actions">
           {flow.ready && <button className="btn btn-sm" disabled={opening !== null || preparing !== null} onClick={() => void open(flow)}><Icon name="browser" />{opening === flow.title ? "Buscando escenario…" : "Abrir escenario preparado"}</button>}
-          {(!flow.ready || problem?.title === flow.title) && <button className="btn btn-sm" disabled={preparing !== null} onClick={async () => {
+          {!readOnly && (!flow.ready || problem?.title === flow.title) && <button className="btn btn-sm" disabled={preparing !== null} onClick={async () => {
             setPreparing(flow.title)
             try { await onPrepare(flow) }
             catch (error) { setProblem({ title: flow.title, text: errorMessage(error) }) }

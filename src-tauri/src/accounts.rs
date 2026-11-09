@@ -4,7 +4,7 @@ use serde_json::Value;
 
 pub fn available_models(catalog: &Value) -> Vec<(String, String)> {
     catalog["providers"].as_array().into_iter().flatten().filter(|p| {
-        matches!(p["id"].as_str(), Some("openai" | "opencode" | "opencode-go")) &&
+        matches!(p["id"].as_str(), Some("openai" | "opencode" | "opencode-go" | "anthropic" | "google" | "openrouter")) &&
             p["options"]["apiKey"].as_str() != Some("public") &&
             (matches!(p["source"].as_str(), Some("api" | "env")) || p["options"]["apiKey"].as_str().map(|k| !k.is_empty()).unwrap_or(false))
     }).flat_map(|p| {
@@ -119,6 +119,24 @@ mod tests {
         assert_eq!(available_models(&json!({ "providers": [chatgpt.clone()] })), vec![("openai".into(), "gpt".into())]);
         assert_eq!(available_models(&json!({ "providers": [go.clone()] })), vec![("opencode-go".into(), "deepseek".into())]);
         assert_eq!(available_models(&json!({ "providers": [chatgpt, go] })).len(), 2);
+    }
+
+    #[test]
+    fn api_key_providers_join_the_catalog_only_when_connected() {
+        let connected = json!({ "providers": [
+            { "id": "anthropic", "source": "api", "options": { "apiKey": "sk-ant" }, "models": { "claude": { "id": "claude" } } },
+            { "id": "google", "source": "api", "options": { "apiKey": "AIza" }, "models": { "gemini": { "id": "gemini" } } },
+            { "id": "openrouter", "source": "api", "options": { "apiKey": "sk-or" }, "models": { "routed": { "id": "routed" } } }
+        ] });
+        assert_eq!(available_models(&connected), vec![
+            ("anthropic".into(), "claude".into()),
+            ("google".into(), "gemini".into()),
+            ("openrouter".into(), "routed".into()),
+        ]);
+        let unconnected = json!({ "providers": [
+            { "id": "anthropic", "source": "custom", "options": {}, "models": { "claude": { "id": "claude" } } }
+        ] });
+        assert!(available_models(&unconnected).is_empty());
     }
 
     #[test]

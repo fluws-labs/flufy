@@ -53,6 +53,7 @@ fn handle(app: &AppHandle, mut req: Request, token: &str) {
         "/mcp/teams" => Channel::Teams,
         "/mcp/memory" => Channel::Memory,
         "/mcp/self" => Channel::Plane,
+        "/mcp/code" => Channel::Code,
         _ => return reply(req, 404, Some(&json!({ "error": "no existe" }))),
     };
     let expected = format!("Bearer {}", token);

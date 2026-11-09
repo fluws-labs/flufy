@@ -1,4 +1,6 @@
 mod activity;
+mod lead_actor;
+mod lead_inbox;
 mod delivery_review;
 pub mod handoff;
 mod capture;
@@ -32,7 +34,7 @@ mod benchmarks;
 mod routing_tests;
 
 use domain::*;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -57,10 +59,11 @@ fn empty() -> Store {
 fn db(app: &AppHandle) -> Result<Connection, String> {
     let path = crate::app_data_file(app, "teams.sqlite")
         .ok_or("No se pudo localizar la carpeta de datos")?;
-    let db = Connection::open(path).map_err(|e| e.to_string())?;
+    let mut db = Connection::open(path).map_err(|e| e.to_string())?;
     db.busy_timeout(std::time::Duration::from_secs(5))
         .map_err(|e| e.to_string())?;
     db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS team_store (id INTEGER PRIMARY KEY CHECK(id=1), document TEXT NOT NULL);").map_err(|e| e.to_string())?;
+    lead_inbox::migrate(&mut db)?;
     Ok(db)
 }
 
@@ -88,11 +91,81 @@ fn read_db(db: &Connection) -> Result<Store, String> {
     Ok(store)
 }
 
-fn write_db(db: &mut Connection, store: &Store) -> Result<(), String> {
+fn write_snapshot(tx: &rusqlite::Transaction<'_>, store: &Store) -> Result<(), String> {
     let data = serde_json::to_string(store).map_err(|e| e.to_string())?;
+    tx.execute("INSERT INTO team_store(id, document) VALUES(1, ?1) ON CONFLICT(id) DO UPDATE SET document=excluded.document", params![data])
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+fn write_db(db: &mut Connection, store: &Store) -> Result<(), String> {
     let tx = db.transaction().map_err(|e| e.to_string())?;
-    tx.execute("INSERT INTO team_store(id, document) VALUES(1, ?1) ON CONFLICT(id) DO UPDATE SET document=excluded.document", params![data]).map_err(|e| e.to_string())?;
+    write_snapshot(&tx, store)?;
     tx.commit().map_err(|e| e.to_string())
+}
+
+/// Snapshot and Lead mailbox commit together. Callers persist an event/intent
+/// in the same transaction as the domain change, so neither can exist alone.
+pub fn update_lead<T>(
+    app: &AppHandle,
+    f: impl FnOnce(&mut Store, &rusqlite::Transaction<'_>) -> Result<T, String>,
+) -> Result<T, String> {
+    let state = app.state::<TeamsState>();
+    if let Some(e) = &state.error {
+        return Err(e.clone());
+    }
+    let mut guard = state.store.lock().map_err(|e| e.to_string())?;
+    let mut next = guard.clone();
+    let mut db = db(app)?;
+    let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate).map_err(|e| e.to_string())?;
+    let result = f(&mut next, &tx)?;
+    for run in next.chats.iter_mut().flat_map(|c| &mut c.runs) {
+        let previous = guard.chats.iter().flat_map(|c| &c.runs).find(|r| r.id == run.id);
+        if previous.is_none_or(|p| serde_json::to_value(p).ok() != serde_json::to_value(&*run).ok()) {
+            run.plan_v2.sequence = previous.map_or(1, |p| p.plan_v2.sequence.saturating_add(1));
+        }
+    }
+    write_snapshot(&tx, &next)?;
+    tx.commit().map_err(|e| e.to_string())?;
+    *guard = next;
+    drop(guard);
+    let _ = app.emit("team://changed", ());
+    crate::live::teams_changed(app);
+    Ok(result)
+}
+
+/// The source session when this run belongs to a conversation Lead. Plan,
+/// coordination and closeout reuse it instead of creating a second Lead.
+pub fn conversation_source(app: &AppHandle, run_id: &str) -> Result<Option<String>, String> {
+    let store = read(app)?;
+    for chat in store.chats {
+        if chat.runs.iter().any(|run| run.id == run_id && run.plan_v2.conversation_lead) {
+            return Ok(chat.origin.map(|origin| origin.session_id));
+        }
+    }
+    Ok(None)
+}
+
+pub fn run_chat(app: &AppHandle, run_id: &str) -> Result<Option<String>, String> {
+    Ok(read(app)?.chats.into_iter()
+        .find(|chat| chat.runs.iter().any(|run| run.id == run_id))
+        .map(|chat| chat.id))
+}
+
+pub fn start_conversation_run(app: &AppHandle, chat_id: &str, goal: &str) -> Result<String, String> {
+    start_run_with(app.clone(), chat_id.into(), goal.into(), vec![], None, true)
+}
+
+/// Native lookup used by activation and guards. Never accepts a model-supplied
+/// session as authority: call this with the session bound in the task context.
+pub fn bound_chat(app: &AppHandle, session: &str) -> Result<Option<String>, String> {
+    if session.is_empty() { return Ok(None); }
+    let db = db(app)?;
+    let chat: Option<String> = db.query_row(
+        "SELECT team_chat_id FROM team_conversation_bindings WHERE source_session_id=?1",
+        [session], |row| row.get(0),
+    ).optional().map_err(|e| e.to_string())?;
+    Ok(chat)
 }
 
 pub fn read(app: &AppHandle) -> Result<Store, String> {
@@ -267,6 +340,14 @@ pub fn start(app: &AppHandle) {
     if let Err(e) = update(app, |_| Ok(())) {
         log::error!("[teams] {}", e);
     }
+    lead_actor::start(app.clone());
+    let recovery = app.clone();
+    std::thread::spawn(move || loop {
+        if let Err(error) = runner::recover_stale(&recovery) {
+            log::warn!("[teams-recovery] {}", error);
+        }
+        std::thread::sleep(std::time::Duration::from_secs(30));
+    });
     let handle = app.clone();
     std::thread::spawn(move || loop {
         if let Err(e) = retention::sweep(&handle) {
@@ -309,6 +390,46 @@ pub fn teams_state(app: AppHandle) -> Result<Store, String> {
     read(&app)
 }
 
+/// Native activation gateway. The caller cannot supply its session: identity
+/// comes from the bound task context. Kept out of the model tool list until the
+/// durable actor can safely take over the conversation.
+#[tauri::command]
+pub fn teams_lead_activate(app: AppHandle, request: serde_json::Value) -> Result<serde_json::Value, String> {
+    handoff::activate_lead(&app, &request)
+}
+
+#[tauri::command]
+pub fn teams_lead_bound(app: AppHandle, session: String) -> Result<bool, String> {
+    Ok(bound_chat(&app, &session)?.is_some())
+}
+
+#[tauri::command]
+pub fn teams_lead_unbind(app: AppHandle, session: String) -> Result<bool, String> {
+    let Some(chat_id) = bound_chat(&app, &session)? else { return Ok(false) };
+    update_lead(&app, |store, tx| {
+        lead_inbox::unbind(tx, &session)?;
+        if let Some(chat) = store.chats.iter_mut().find(|chat| chat.id == chat_id) {
+            if let Some(origin) = chat.origin.as_mut() { origin.error = None; }
+            // Back to the legacy team executor: the chat is a normal chat again
+            // and the board behaves like a manual team.
+            for run in chat.runs.iter_mut() { run.plan_v2.conversation_lead = false; }
+        }
+        Ok(())
+    })?;
+    Ok(true)
+}
+
+#[tauri::command]
+pub fn teams_lead_send(app: AppHandle, session: String, text: String) -> Result<String, String> {
+    lead_actor::send_user(&app, &session, &text)
+}
+
+/// Remote/PWA entry point. It stores the message before any engine effect and
+/// lets the durable actor serialize it with team work.
+pub fn send_lead_message(app: &AppHandle, session: &str, text: &str) -> Result<String, String> {
+    lead_actor::send_user(app, session, text)
+}
+
 #[tauri::command]
 pub fn team_activity(app: AppHandle, run_id: String) -> Vec<activity::Activity> {
     app.state::<TeamsState>()
@@ -320,7 +441,19 @@ pub fn team_activity(app: AppHandle, run_id: String) -> Vec<activity::Activity> 
 
 #[tauri::command]
 pub fn team_chat_send(app: AppHandle, chat_id: String, text: String, images: Option<Vec<ImageInput>>) -> Result<String, String> {
-    conversation::send(app, chat_id, text, images.unwrap_or_default())
+    // A bound chat must use the source conversation's durable actor. Sending to
+    // the legacy team chat would open a second, invisible Lead.
+    let images = images.unwrap_or_default();
+    if let Some(origin) = read(&app)?.chats.iter()
+        .find(|chat| chat.id == chat_id)
+        .and_then(|chat| chat.origin.clone())
+    {
+        if bound_chat(&app, &origin.session_id)?.as_deref() == Some(chat_id.as_str()) {
+            if !images.is_empty() { return Err("En una conversación con Lead, enviá texto sin adjuntos por ahora".into()); }
+            return lead_actor::send_user(&app, &origin.session_id, &text);
+        }
+    }
+    conversation::send(app, chat_id, text, images)
 }
 
 #[tauri::command]
@@ -561,10 +694,20 @@ fn change_chat_model(chat: &mut Chat, agent_id: &str, model: ModelRef, variant: 
 
 #[tauri::command]
 pub fn team_runs_start(app: AppHandle, chat_id: String, goal: String) -> Result<String, String> {
+    let bound = read(&app)?.chats.iter()
+        .find(|chat| chat.id == chat_id)
+        .and_then(|chat| chat.origin.as_ref().map(|origin| origin.session_id.clone()))
+        .map(|session| bound_chat(&app, &session).ok().flatten().as_deref() == Some(chat_id.as_str()))
+        .unwrap_or(false);
+    if bound { return start_conversation_run(&app, &chat_id, &goal); }
     start_run(app, chat_id, goal, vec![], None)
 }
 
 fn start_run(app: AppHandle, chat_id: String, goal: String, images: Vec<ChatImage>, source_reply: Option<&str>) -> Result<String, String> {
+    start_run_with(app, chat_id, goal, images, source_reply, false)
+}
+
+fn start_run_with(app: AppHandle, chat_id: String, goal: String, images: Vec<ChatImage>, source_reply: Option<&str>, conversation_lead: bool) -> Result<String, String> {
     if goal.trim().is_empty() || goal.len() > 64_000 {
         return Err("Ingresá un objetivo (máximo 64 KB)".into());
     }
@@ -612,7 +755,10 @@ fn start_run(app: AppHandle, chat_id: String, goal: String, images: Vec<ChatImag
             .last()
             .map(|r| {
                 format!(
-                    "\n\nEntrega previa ({}): {}\nFeedback actual: ",
+                    "
+
+Entrega previa ({}): {}
+Feedback actual: ",
                     r.id, r.summary
                 )
             })
@@ -620,7 +766,7 @@ fn start_run(app: AppHandle, chat_id: String, goal: String, images: Vec<ChatImag
         c.runs.push(Run {
             delivery_review_version: 1,
             delivery_review: None,
-            plan_v2: plan_v2::PlanV2State { enabled: c.team.plan_v2.enabled, review_before_start: c.team.plan_v2.review_before_start, stage: "discovery".into(), ..Default::default() },
+            plan_v2: plan_v2::PlanV2State { enabled: c.team.plan_v2.enabled, conversation_lead, review_before_start: c.team.plan_v2.review_before_start, stage: "discovery".into(), ..Default::default() },
             support_reports: vec![],
             images: images.clone(),
             guidance: vec![],
@@ -748,8 +894,9 @@ fn control(app: &AppHandle, id: &str, action: &str) -> Result<(), String> {
             })?;
             runner::launch(app,id);
         }
-        "retry" if ["blocked","failed","planning_blocked"].contains(&r.status.as_str()) => {
-            runner::reconcile(app, &r, false)?;
+        "retry" | "force_retry" if ["blocked","failed","planning_blocked"].contains(&r.status.as_str()) => {
+            let force = action == "force_retry";
+            runner::reconcile(app, &r, force)?;
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
             while state.runners.lock().map_err(|e| e.to_string())?.contains(id) {
                 if std::time::Instant::now() >= deadline { return Err("El scheduler todavía está cerrando las sesiones anteriores; esperá antes de continuar".into()); }

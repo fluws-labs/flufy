@@ -1,0 +1,13 @@
+{
+  "files": [
+    {
+      "path": "src/text.js",
+      "edits": [
+        {
+          "oldText": "  return text.toLowerCase().replace(/ /g, \"-\")",
+          "newText": "  return text\n    .normalize(\"NFD\")\n    .replace(/[\\u0300-\\u036f]/g, \"\")\n    .toLowerCase()\n    .trim()\n    .replace(/[^a-z0-9]+/g, \"-\")\n    .replace(/^-+|-+$/g, \"\")"
+        }
+      ]
+    }
+  ]
+}

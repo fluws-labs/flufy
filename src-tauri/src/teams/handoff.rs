@@ -1,5 +1,5 @@
 //! Explicit, session-bound delegation from an ordinary chat to the existing team runner.
-use super::{domain::*, update};
+use super::{domain::*, lead_inbox, update};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager};
@@ -44,7 +44,7 @@ struct Source {
 }
 
 pub fn tools() -> Vec<Value> {
-    vec![json!({"name":"delegate","description":"Inicia un equipo para implementar el plan acordado en ESTE chat después de que el usuario elija «Con un equipo» o pida explícitamente esa delegación. Antes de empezar un trabajo de implementación no trivial, si no eligió modo, preguntale una sola vez con question: «¿Querés que lo resuelva un equipo o seguimos en este chat?»; no preguntes en consultas ni cambios triviales. Transfiere objetivo, plan, investigación relevante, decisiones y aceptación; hereda carpeta y modelo, conserva enlace al chat de origen y devuelve el ID de la ejecución real. No usar para preguntas o ejemplos sobre equipos. Reintentos del mismo pedido reutilizan el equipo y no duplican ejecuciones.","inputSchema":{"type":"object","additionalProperties":false,"properties":{
+    vec![json!({"name":"delegate","description":"OBSOLETO: usá start_work para el Lead en esta misma conversación; no abras otro chat. Inicia un equipo para implementar el plan acordado en ESTE chat después de que el usuario elija «Con un equipo» o pida explícitamente esa delegación. Antes de empezar un trabajo de implementación no trivial, si no eligió modo, preguntale una sola vez con question: «¿Querés que lo resuelva un equipo o seguimos en este chat?»; no preguntes en consultas ni cambios triviales. Transfiere objetivo, plan, investigación relevante, decisiones y aceptación; hereda carpeta y modelo, conserva enlace al chat de origen y devuelve el ID de la ejecución real. No usar para preguntas o ejemplos sobre equipos. Reintentos del mismo pedido reutilizan el equipo y no duplican ejecuciones.","inputSchema":{"type":"object","additionalProperties":false,"properties":{
         "projectRoot":{"type":"string","description":"Carpeta absoluta de este chat, incluido su worktree si corresponde. El servidor la contrasta con la sesión real."},
         "previewIdentity":{"type":"object","description":"Identidad exacta de la tarea vigente elegida por el usuario en el panel. Obligatoria si esta conversación tiene diseños; nunca inferir la última fila ni reutilizar otra tarea.","properties":{"projectRoot":{"type":"string"},"sessionId":{"type":"string"},"taskId":{"type":"string"},"designId":{"type":"string"}},"required":["projectRoot","sessionId","taskId","designId"],"additionalProperties":false},
         "title":{"type":"string","description":"Nombre breve del trabajo"},
@@ -53,7 +53,17 @@ pub fn tools() -> Vec<Value> {
         "context":{"type":"string","description":"Hallazgos de investigación, archivos, contratos y referencias necesarios. Resumen pertinente; no copiar toda la conversación ni credenciales."},
         "decisions":{"type":"array","items":{"type":"object","additionalProperties":false,"properties":{"decision":{"type":"string"},"source":{"type":"string"}},"required":["decision","source"]},"description":"Decisiones vigentes de arquitectura, diseño, presupuesto de infraestructura, alcance y objetivos, con su procedencia. Vacío si no hay decisiones conocidas."},
         "acceptanceCriteria":{"type":"array","items":{"type":"string"},"description":"Comportamientos concretos que definen una entrega aceptable"}
-    },"required":["projectRoot","title","goal","plan","context","decisions","acceptanceCriteria"]}})]
+    },"required":["projectRoot","title","goal","plan","context","decisions","acceptanceCriteria"]}}),
+        json!({"name":"start_work","description":"Inicia el trabajo del equipo en ESTA misma conversación. Usalo cuando el usuario pida implementar, corregir o verificar algo concreto; el Lead organiza especialistas, no ejecuta tareas. No lo uses para conversar ni para preguntas. Devuelve el trabajo real creado.","inputSchema":{"type":"object","additionalProperties":false,"properties":{
+            "goal":{"type":"string","description":"Resultado completo y verificable que debe entregar el equipo, con el alcance acordado en la conversación."}
+        },"required":["goal"]}}),
+        json!({"name":"adjust_plan","description":"Ajusta el trabajo en curso con una indicación concreta del usuario: alcance, prioridad, una decisión o una corrección. Usalo cuando el usuario pida cambiar algo mientras el equipo trabaja; no implementes la tarea vos. Devuelve si la indicación quedó aplicándose.","inputSchema":{"type":"object","additionalProperties":false,"properties":{
+            "guidance":{"type":"string","description":"Indicación concreta y completa del usuario, sin inventar alcance nuevo."}
+        },"required":["guidance"]}}),
+        json!({"name":"board","description":"Lee el tablero real de esta conversación: estado del run, tareas, bloqueos, coordinación, soporte activo y otros equipos que ocupan las mismas carpetas. Usalo antes de responder sobre tareas, bloqueos, conflictos o próxima acción; nunca inventes ese estado.","inputSchema":{"type":"object","additionalProperties":false,"properties":{
+            "runId":{"type":"string","description":"Ejecución a leer. Si se omite, usa la última del trabajo."}
+        }}}),
+        json!({"name":"control_run","description":"Controla el trabajo de esta conversación: retry/force_retry para reanudar tras una interrupción, pause/resume/cancel. Usalo después de leer teams_board. Si hay una sesión activa, pedí confirmación al usuario antes de force_retry.","inputSchema":{"type":"object","additionalProperties":false,"properties":{"runId":{"type":"string"},"action":{"type":"string","enum":["retry","force_retry","pause","resume","cancel","continue"]}},"required":["action"]}})]
 }
 
 fn source_from(session_id: &str, session: &Value, messages: &Value) -> Result<Source, String> {
@@ -123,6 +133,104 @@ fn prepare(store: &mut Store, request: &Request, source: &Source, memory: bool) 
     Ok((chat, false))
 }
 
+// Activation for the conversational Lead. It binds the SOURCE session and
+// records the first turn, but deliberately does not patch permissions or start
+// work: the durable actor (not yet implemented) owns that step. This keeps a
+// half-built feature from silently restricting an ordinary chat.
+fn prepare_lead(
+    store: &mut Store,
+    tx: &rusqlite::Transaction<'_>,
+    request: &Request,
+    source: &Source,
+    memory: bool,
+) -> Result<(Chat, bool, Option<lead_inbox::Receipt>), String> {
+    if team_session(store, &source.session_id) {
+        return Err("Este chat ya pertenece a un equipo; un Lead no puede delegarse dentro de otro".into());
+    }
+    if let Some(chat_id) = lead_inbox::bound_chat_tx(tx, &source.session_id)? {
+        let chat = store.chats.iter().find(|chat| chat.id == chat_id)
+            .ok_or("El vínculo del chat apunta a un equipo inexistente")?;
+        return Ok((chat.clone(), true, None));
+    }
+    let text = goal(request, source)?;
+    let mut chat = super::autonomous_chat(store, source.directory.clone(), source.model.clone(), source.variant.clone())?;
+    chat.title = request.title.trim().into();
+    chat.origin = Some(Origin {
+        session_id: source.session_id.clone(),
+        message_id: source.message_id.clone(),
+        title: source.title.clone(),
+        directory: source.directory.clone(),
+        created_at: now(),
+        error: None,
+    });
+    chat.memory = Some(memory);
+    chat.auto_approve = Some(false);
+    chat.messages.push(ChatMessage {
+        clarification_start: None,
+        images: vec![],
+        id: id(),
+        role: "user".into(),
+        text,
+        created_at: now(),
+        status: "complete".into(),
+        run_id: None,
+        session_id: None,
+    });
+    store.chats.push(chat.clone());
+    lead_inbox::bind(tx, &source.session_id, &chat.id, &source.directory, now())?;
+    let receipt = lead_inbox::enqueue(
+        tx,
+        &chat.id,
+        &format!("activate:{}:{}", source.session_id, source.message_id),
+        "team.activated",
+        &json!({
+            "sourceSessionId": source.session_id,
+            "sourceMessageId": source.message_id,
+            "title": request.title,
+            "goal": request.goal,
+        }),
+        Some(100),
+        now(),
+    )?;
+    Ok((chat, false, Some(receipt)))
+}
+
+fn lead_receipt(chat: &Chat, reused: bool, event: Option<lead_inbox::Receipt>) -> Value {
+    json!({
+        "teamChatId": chat.id,
+        "sourceSessionId": chat.origin.as_ref().map(|origin| &origin.session_id),
+        "runId": null,
+        "status": "lead_bound_pending_actor",
+        "reused": reused,
+        "event": event,
+        "message": "La conversación quedó vinculada a un equipo. El Lead todavía no tomó el control ni inició trabajo porque el actor durable está en implementación."
+    })
+}
+
+fn activate(app: &AppHandle, args: &Value) -> Result<Value, String> {
+    let task = crate::desktop::tasks::current(app).ok_or("No hay una conversación de origen enlazada")?;
+    crate::desktop::tasks::check_bound(app)?;
+    if super::bound_chat(app, &task.session)?.is_some() {
+        return Err("Esta conversación ya tiene un equipo vinculado".into());
+    }
+    let request: Request = serde_json::from_value(args.clone()).map_err(|e| format!("Activación inválida: {}", e))?;
+    let root = super::canonical(&request.project_root)?;
+    let client = super::runner::client(app, &root)?;
+    let session = client.get_resilient(&format!("/session/{}", task.session))?;
+    let messages = client.get_resilient(&format!("/session/{}/message", task.session))?;
+    let mut source = source_from(&task.session, &session, &messages)?;
+    source.directory = super::canonical(&source.directory)?;
+    if source.directory != root {
+        return Err("El equipo debe trabajar en la carpeta real del chat de origen, incluido su worktree".into());
+    }
+    let state = app.state::<super::TeamsState>();
+    let _dispatch = state.handoffs.lock().map_err(|_| "No se pudo ordenar la activación")?;
+    crate::desktop::tasks::check_bound(app)?;
+    let memory = crate::memory::session_enabled(app, &source.session_id);
+    let (chat, reused, event) = super::update_lead(app, |store, tx| prepare_lead(store, tx, &request, &source, memory))?;
+    Ok(lead_receipt(&chat, reused, event))
+}
+
 fn receipt(chat: &Chat, reused: bool) -> Value {
     let run = chat.runs.last();
     json!({"teamChatId":chat.id,"runId":run.map(|r| &r.id),"title":chat.title,
@@ -134,6 +242,9 @@ fn receipt(chat: &Chat, reused: bool) -> Value {
 fn delegate(app: &AppHandle, args: &Value) -> Result<Value, String> {
     let task = crate::desktop::tasks::current(app).ok_or("No hay una conversación de origen enlazada")?;
     crate::desktop::tasks::check_bound(app)?;
+    if super::bound_chat(app, &task.session)?.is_some() {
+        return Err("Esta conversación ya tiene un Lead vinculado; no se crea otro equipo".into());
+    }
     let request: Request = serde_json::from_value(args.clone()).map_err(|e| format!("Traspaso inválido: {}", e))?;
     let root = super::canonical(&request.project_root)?;
     let client = super::runner::client(app, &root)?;
@@ -183,8 +294,207 @@ fn delegate(app: &AppHandle, args: &Value) -> Result<Value, String> {
     Ok(receipt(&snapshot, reused))
 }
 
+fn session_root(app: &AppHandle, session: &str) -> Result<String, String> {
+    let client = crate::oc::Opencode::new(&crate::ensure_server(app)?, "");
+    let value = client.get_resilient(&format!("/session/{}", session))?;
+    value["directory"].as_str().filter(|directory| !directory.trim().is_empty())
+        .map(String::from)
+        .ok_or_else(|| "La conversación no tiene una carpeta de trabajo".to_string())
+}
+
+fn board(app: &AppHandle, args: &Value) -> Result<Value, String> {
+    let task = crate::desktop::tasks::current(app).ok_or("No hay una conversación de origen enlazada")?;
+    crate::desktop::tasks::check_bound(app)?;
+    let chat_id = super::bound_chat(app, &task.session)?
+        .ok_or("Esta conversación todavía no tiene un trabajo de equipo")?;
+    let store = super::read(app)?;
+    let chat = store.chats.iter().find(|chat| chat.id == chat_id)
+        .ok_or("El vínculo apunta a un equipo inexistente")?;
+    let requested = args["runId"].as_str().filter(|id| !id.is_empty());
+    let run = requested
+        .and_then(|id| chat.runs.iter().find(|run| run.id == id))
+        .or_else(|| chat.runs.last())
+        .ok_or("El trabajo todavía no tiene una ejecución")?;
+    let tasks: Vec<Value> = run.tasks.iter().filter(|task| task.contract.task_kind.as_deref() != Some("group"))
+        .map(|task| {
+            let attempt = task.attempts.last();
+            json!({
+                "id": task.id,
+                "title": &task.title,
+                "status": &task.status,
+                "agent": run.team.members.iter().find(|agent| agent.id == task.assigned_agent_id)
+                    .map(|agent| json!({"name": agent.name, "role": agent.role})),
+                "objective": task.objective.chars().take(500).collect::<String>(),
+                "acceptanceCriteria": &task.acceptance_criteria,
+                "error": task.error.as_ref().map(|error| error.chars().take(500).collect::<String>()),
+                "attempt": attempt.map(|attempt| json!({
+                    "status": attempt.status,
+                    "summary": attempt.summary.chars().take(500).collect::<String>(),
+                    "review": attempt.review,
+                    "running": attempt.finished_at.is_none() && (attempt.session_id.is_some() || attempt.review_session_id.is_some()),
+                    "failedCommands": attempt.commands.iter().filter(|command| command["exitCode"].as_i64().is_some_and(|code| code != 0))
+                        .map(|command| command["command"].clone()).collect::<Vec<_>>(),
+                })),
+            })
+        }).collect();
+    let unresolved: Vec<Value> = run.coordination.iter()
+        .filter(|request| !["resolved", "cancelled"].contains(&request.status.as_str()))
+        .map(|request| json!({
+            "fromTaskId": request.from_task_id,
+            "toTaskIds": request.task_ids,
+            "status": request.status,
+            "summary": request.summary.chars().take(500).collect::<String>(),
+        })).collect();
+    let activeSupport: Vec<Value> = run.support_reports.iter().filter(|report| report.finished_at.is_none())
+        .map(|report| json!({"kind": report.kind, "status": report.status, "agent": report.agent.name}))
+        .collect();
+    // Other teams that currently hold the same folders are part of the real
+    // blocker; the user-facing Lead must be able to name them, not guess.
+    let other_teams: Vec<Value> = store.chats.iter()
+        .filter(|owner| owner.id != chat.id)
+        .flat_map(|owner| owner.runs.iter().map(move |run| (owner, run)))
+        .filter(|(_, run)| super::conflicts::occupies(run) && super::conflicts::in_scope(chat, run))
+        .map(|(owner, run)| json!({
+            "chat": owner.title,
+            "run": run.id,
+            "status": run.status,
+            "tasks": run.tasks.iter().filter(|task| task.status != "completed").map(|task| task.title.clone()).take(8).collect::<Vec<_>>(),
+        })).collect();
+    Ok(json!({
+        "chat": chat.title,
+        "conversation": chat.origin.as_ref().map(|origin| &origin.title),
+        "run": {
+            "id": run.id,
+            "goal": run.goal.chars().take(1000).collect::<String>(),
+            "status": run.status,
+            "error": run.error.as_ref().map(|error| error.chars().take(800).collect::<String>()),
+            "stage": run.plan_v2.stage,
+            "revision": run.plan_v2.revision_number,
+            "pendingChange": run.plan_v2.pending_change,
+            "completed": tasks.iter().filter(|task| task["status"] == "completed").count(),
+            "total": tasks.len(),
+        },
+        "tasks": tasks,
+        "unresolvedCoordination": unresolved,
+        "activeSupport": activeSupport,
+        "otherTeamsInFolder": other_teams,
+    }))
+}
+
+fn control_run(app: &AppHandle, args: &Value) -> Result<Value, String> {
+    let task = crate::desktop::tasks::current(app).ok_or("No hay una conversación de origen enlazada")?;
+    crate::desktop::tasks::check_bound(app)?;
+    let chat_id = super::bound_chat(app, &task.session)?
+        .ok_or("Esta conversación todavía no tiene un trabajo de equipo")?;
+    let action = args["action"].as_str().map(str::trim).filter(|action| !action.is_empty())
+        .ok_or("Falta la acción de control")?;
+    if !["retry", "force_retry", "pause", "resume", "cancel", "continue"].contains(&action) {
+        return Err("Acción de control inválida".into());
+    }
+    let chat = read_chat(app, &chat_id)?;
+    let run = args["runId"].as_str().filter(|id| !id.is_empty())
+        .and_then(|id| chat.runs.iter().find(|run| run.id == id))
+        .or_else(|| chat.runs.last())
+        .ok_or("El trabajo todavía no tiene una ejecución")?;
+    super::control(app, &run.id, action)?;
+    Ok(json!({ "runId": run.id, "action": action, "status": "ok" }))
+}
+
+fn adjust_plan(app: &AppHandle, args: &Value) -> Result<Value, String> {
+    let task = crate::desktop::tasks::current(app).ok_or("No hay una conversación de origen enlazada")?;
+    crate::desktop::tasks::check_bound(app)?;
+    let chat_id = super::bound_chat(app, &task.session)?
+        .ok_or("Esta conversación todavía no tiene un trabajo de equipo")?;
+    let guidance = args["guidance"].as_str().map(str::trim).filter(|text| !text.is_empty())
+        .ok_or("La indicación necesita un texto concreto")?;
+    if guidance.len() > 8_000 { return Err("La indicación es demasiado larga".into()); }
+    let chat = read_chat(app, &chat_id)?;
+    let run = chat.runs.last().ok_or("El trabajo todavía no tiene una ejecución")?;
+    if !matches!(run.status.as_str(), "planning" | "plan_ready" | "running" | "paused" | "blocked" | "planning_blocked") {
+        return Err("El trabajo ya no está en una etapa que acepte cambios".into());
+    }
+    let apply_now = run.plan_v2.enabled && run.plan_v2.revision_number > 0;
+    let run_id = run.id.clone();
+    super::update_run(app, &run_id, |current| {
+        current.guidance.push(guidance.into());
+        if apply_now { current.plan_v2.pending_change = true; }
+        Ok(())
+    })?;
+    if apply_now {
+        let app = app.clone();
+        let run_id = run_id.clone();
+        std::thread::spawn(move || {
+            if let Err(error) = super::plan_v2::apply_guidance(&app, &run_id) {
+                log::warn!("[teams-lead] no se pudo aplicar la indicación: {}", error);
+            }
+        });
+        return Ok(json!({ "status": "applying", "message": "La indicación se está aplicando al plan; las tareas ya iniciadas conservan su trabajo." }));
+    }
+    if matches!(run.status.as_str(), "blocked" | "failed") {
+        super::control(app, &run_id, "retry")?;
+        return Ok(json!({ "status": "retrying", "message": "Guardé la indicación y reanudé el trabajo." }));
+    }
+    Ok(json!({ "status": "recorded", "message": "Guardé la indicación para las próximas tareas y la revisión del Lead." }))
+}
+
+fn start_work(app: &AppHandle, args: &Value) -> Result<Value, String> {
+    let task = crate::desktop::tasks::current(app).ok_or("No hay una conversación de origen enlazada")?;
+    crate::desktop::tasks::check_bound(app)?;
+    let goal = args["goal"].as_str().map(str::trim).filter(|goal| !goal.is_empty())
+        .ok_or("El trabajo necesita un objetivo concreto")?;
+    if goal.len() > 64_000 { return Err("El objetivo supera 64 KB".into()); }
+    // A normal conversation becomes the Lead the first time real work starts.
+    // This is the only activation path exposed to the model: no second chat.
+    let chat_id = match super::bound_chat(app, &task.session)? {
+        Some(chat_id) => chat_id,
+        None => {
+            let root = session_root(app, &task.session)?;
+            let title: String = goal.lines().next().unwrap_or("Equipo").chars().take(120).collect();
+            let request = json!({
+                "projectRoot": root,
+                "title": title,
+                "goal": goal,
+                "plan": "El equipo acordará el plan con el usuario y lo confirmará en el tablero antes de ejecutar.",
+                "context": "",
+                "decisions": [],
+                "acceptanceCriteria": ["El objetivo completo se implementa y se verifica con evidencia"]
+            });
+            let receipt = activate(app, &request)?;
+            receipt["teamChatId"].as_str().ok_or("La activación no devolvió el equipo")?.to_string()
+        }
+    };
+    if read_chat(app, &chat_id)?.runs.iter().any(|run| active(&run.status)) {
+        return Err("El equipo ya tiene un trabajo en curso en esta conversación".into());
+    }
+    let run_id = super::start_conversation_run(app, &chat_id, goal)?;
+    Ok(json!({
+        "teamChatId": chat_id,
+        "runId": run_id,
+        "status": "planning",
+        "message": "El equipo empezó a planificar en esta misma conversación. El tablero muestra el avance; el plan interno no se muestra como chat."
+    }))
+}
+
+fn read_chat(app: &AppHandle, chat_id: &str) -> Result<Chat, String> {
+    super::read(app)?.chats.into_iter()
+        .find(|chat| chat.id == chat_id)
+        .ok_or("Chat de equipo inexistente".into())
+}
+
+/// Registered as a native command. Not yet exposed to the model or UI.
+pub fn activate_lead(app: &AppHandle, args: &Value) -> Result<Value, String> {
+    activate(app, args)
+}
+
 pub fn call(app: &AppHandle, name: &str, args: &Value) -> Value {
-    let result = match name { "delegate" => delegate(app, args), _ => Err("Herramienta de equipos desconocida".into()) };
+    let result = match name {
+        "delegate" => delegate(app, args),
+        "start_work" => start_work(app, args),
+        "adjust_plan" => adjust_plan(app, args),
+        "board" => board(app, args),
+        "control_run" => control_run(app, args),
+        _ => Err("Herramienta de equipos desconocida".into()),
+    };
     match result {
         Ok(value) => json!({"content":[{"type":"text","text":value.to_string()}]}),
         Err(error) => json!({"content":[{"type":"text","text":error}],"isError":true}),
@@ -226,6 +536,110 @@ mod tests {
         store.chats[0].messages[0].session_id = Some(source.session_id.clone());
         assert!(prepare(&mut store, &request(), &source, true).is_err());
     }
+    fn lead_database() -> rusqlite::Connection {
+        let mut db = rusqlite::Connection::open_in_memory().unwrap();
+        super::super::lead_inbox::migrate(&mut db).unwrap();
+        db
+    }
+
+    #[test]
+    fn activation_binds_the_source_session_once_and_records_one_event() {
+        let mut db = lead_database();
+        let mut store = super::super::empty();
+        let request = request();
+        let source = source();
+        let chat_id;
+        {
+            let tx = db.transaction().unwrap();
+            let (chat, reused, event) = prepare_lead(&mut store, &tx, &request, &source, true).unwrap();
+            assert!(!reused);
+            assert!(event.is_some());
+            assert_eq!(chat.origin.as_ref().unwrap().session_id, "ses_source");
+            assert_eq!(chat.memory, Some(true));
+            assert_eq!(chat.auto_approve, Some(false));
+            chat_id = chat.id.clone();
+            tx.commit().unwrap();
+        }
+        assert_eq!(store.chats.len(), 1);
+        {
+            let tx = db.transaction().unwrap();
+            let (again, reused, event) = prepare_lead(&mut store, &tx, &request, &source, false).unwrap();
+            assert!(reused);
+            assert!(event.is_none(), "A retry must not enqueue another activation");
+            assert_eq!(again.id, chat_id);
+            assert_eq!(again.memory, Some(true), "A retry must not rewrite accepted settings");
+            tx.commit().unwrap();
+        }
+        assert_eq!(store.chats.len(), 1);
+        let events: i64 = db.query_row("SELECT COUNT(*) FROM team_events", [], |r| r.get(0)).unwrap();
+        assert_eq!(events, 1);
+        assert_eq!(
+            db.query_row("SELECT source_session_id FROM team_conversation_bindings", [], |r| r.get::<_, String>(0)).unwrap(),
+            "ses_source"
+        );
+    }
+
+    #[test]
+    fn activation_rolls_back_without_leaving_a_binding_or_event() {
+        let mut db = lead_database();
+        let original = super::super::empty();
+        let mut staged = original.clone();
+        {
+            let tx = db.transaction().unwrap();
+            prepare_lead(&mut staged, &tx, &request(), &source(), true).unwrap();
+            // Process loss before commit: the caller never installs `staged`
+            // and SQLite rolls the transaction back.
+        }
+        assert!(original.chats.is_empty());
+        let events: i64 = db.query_row("SELECT COUNT(*) FROM team_events", [], |r| r.get(0)).unwrap();
+        let bindings: i64 = db.query_row("SELECT COUNT(*) FROM team_conversation_bindings", [], |r| r.get(0)).unwrap();
+        assert_eq!((events, bindings), (0, 0));
+    }
+
+    #[test]
+    fn activation_refuses_nested_teams_and_conflicting_bindings() {
+        let mut db = lead_database();
+        let mut store = super::super::empty();
+        let source = source();
+        {
+            let tx = db.transaction().unwrap();
+            super::super::lead_inbox::bind(&tx, "ses_source", "other-chat", "C:/repo", 1).unwrap();
+            tx.commit().unwrap();
+        }
+        let mut staged = store.clone();
+        let tx = db.transaction().unwrap();
+        assert!(prepare_lead(&mut staged, &tx, &request(), &source, true).is_err());
+        tx.rollback().unwrap();
+        assert!(staged.chats.is_empty(), "A bind conflict must not leave a new chat");
+
+        store.chats.push(Chat {
+            origin: None,
+            messages: vec![ChatMessage {
+                clarification_start: None,
+                images: vec![],
+                id: id(),
+                role: "user".into(),
+                text: "Equipo existente".into(),
+                created_at: 1,
+                status: "complete".into(),
+                run_id: None,
+                session_id: Some("ses_source".into()),
+            }],
+            id: id(),
+            title: "Equipo existente".into(),
+            archived: false,
+            team: super::super::domain::tests::team(),
+            skills: vec![],
+            created_at: 1,
+            runs: vec![],
+            memory: None,
+            auto_approve: None,
+        });
+        let tx = db.transaction().unwrap();
+        assert!(prepare_lead(&mut store.clone(), &tx, &request(), &source, true).is_err());
+        tx.rollback().unwrap();
+    }
+
     #[test]
     fn rejects_empty_plans_or_forged_origin_without_creating_work() {
         let mut store = super::super::empty(); let mut request = request(); request.plan.clear();

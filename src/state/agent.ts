@@ -105,6 +105,7 @@ type AgentState = {
   commands: CommandInfo[]
   composerFocus: number
   draft: { text: string; nonce: number } | null
+  draftInsert: { session: string | null; text: string; nonce: number } | null
 }
 
 export const HELPER_TITLE_PREFIX = "guillecode·"
@@ -143,6 +144,7 @@ export const useAgent = create<AgentState>(() => ({
   agents: [],
   commands: [],
   composerFocus: 0,
+  draftInsert: null,
   draft: null,
 }))
 
@@ -347,8 +349,14 @@ function upsertPart(messages: ChatMessage[], part: Part): ChatMessage[] {
     return messages
   }
   const message = messages[index]
-  const partIndex = message.parts.findIndex((p) => p.id === part.id)
-  const parts = [...message.parts]
+  // The optimistic bubble uses a local part ID. When the engine echoes the real
+  // part, replace the placeholder instead of keeping both and duplicating text.
+  const incomingOptimistic = (part as { optimistic?: boolean }).optimistic === true
+  const base = incomingOptimistic
+    ? message.parts
+    : message.parts.filter((existing) => (existing as { optimistic?: boolean }).optimistic !== true)
+  const partIndex = base.findIndex((p) => p.id === part.id)
+  const parts = [...base]
   if (partIndex === -1) parts.push(part)
   else parts[partIndex] = part
   const next = [...messages]
@@ -1107,6 +1115,10 @@ export function focusComposer(draft?: string) {
   }))
 }
 
+export function insertComposerText(session: string | null, text: string) {
+  useAgent.setState({ draftInsert: { session, text, nonce: Date.now() } })
+}
+
 export function addContext(item: ContextItem) {
   const key = useAgent.getState().activeSessionId ?? draftRuntimeKey(boundProject, windowLabel())
   useAgent.setState((s) => {
@@ -1233,6 +1245,32 @@ async function createPromptSession(runtimeKey: string): Promise<string> {
   })
   return created.id
 }
+function appendQueuedUserMessage(sessionId: string, messageId: string, text: string, model: ModelRef, agentName: string) {
+  if (!messageId) return
+  useAgent.setState((state) => {
+    const current = state.views[sessionId]
+    if (current?.messages.some((message) => message.info.id === messageId)) return state
+    const info = {
+      id: messageId,
+      sessionID: sessionId,
+      role: "user",
+      time: { created: Date.now() },
+      agent: agentName,
+      model,
+    } as unknown as Message
+    const part = {
+      type: "text",
+      id: `prt_${messageId}`,
+      sessionID: sessionId,
+      messageID: messageId,
+      text,
+      synthetic: false,
+      optimistic: true,
+    } as unknown as Part
+    const view = current ?? { messages: [], loading: false, hasMore: false, error: null }
+    return { views: { ...state.views, [sessionId]: { ...view, messages: [...view.messages, { info, parts: [part] }] } } }
+  })
+}
 
 export async function sendPrompt(
   text: string,
@@ -1281,6 +1319,17 @@ export async function sendPrompt(
   }
   const trimmed = text.trim()
   const command = findCommand(trimmed, s.commands)
+  if (isTauri && id) {
+    const bound = await call<boolean>("teams_lead_bound", { session: id }).catch(() => false)
+    if (bound) {
+      if (command || contextParts.length || !trimmed) {
+        throw new Error("En una conversación con equipo, enviá un mensaje de texto sin adjuntos por ahora.")
+      }
+      const messageId = await call<string>("teams_lead_send", { session: id, text: trimmed })
+      appendQueuedUserMessage(id, messageId, trimmed, s.model, s.agentName)
+      return id
+    }
+  }
   const variant = selectedVariant(s)
   const agentName = runtime.agent ?? (isBubbleWindow() ? BUBBLE_AGENT : s.agentName)
   patchSessionRuntime(id, { agent: agentName, model: s.model, variants: s.variants, submittedAt: Date.now() })

@@ -7,7 +7,7 @@ import { archivedSessionIds, archivedSessionOwner } from "../lib/sessions"
 import { openEditor } from "../state/editors"
 import { useLayout } from "../state/layout"
 import { promptInput } from "../state/quickinput"
-import { shortAgo } from "../lib/time"
+import { ageTone, shortAgo } from "../lib/time"
 import { openContextMenu } from "../components/ContextMenu"
 import { confirmAction } from "../components/Dialog"
 import { EmptyState, Icon, IconButton } from "../components/ui"
@@ -15,9 +15,11 @@ import { useTeams } from "../state/teams"
 import { groupTeamSessions } from "../team/session-index"
 import { TeamSessionHistory } from "../team/TeamSessionHistory"
 
-function SessionRow({ session, depth, childCount, showDirectory = false }: { session: Session; depth: number; childCount: number; showDirectory?: boolean }) {
+function SessionRow({ session, depth, childCount, lead, showDirectory = false }: { session: Session; depth: number; childCount: number; lead?: string; showDirectory?: boolean }) {
   const active = useAgent((s) => s.activeSessionId === session.id)
   const mark = useSessionMark(session.id)
+  const teamBusy = useTeams((s) => s.chats.some((chat) => chat.origin?.sessionId === session.id && chat.runs.some((run) => run.finishedAt == null && ["planning", "running", "delivering", "cancelling"].includes(run.status))))
+  const displayMark = mark === "attention" ? "attention" : teamBusy ? "busy" : mark
   const flash = useAgent((s) => !!s.doneFlash[session.id])
   const sessions = useAgent((s) => s.allSessions)
   const archived = archivedSessionOwner(session, sessions)
@@ -32,6 +34,7 @@ function SessionRow({ session, depth, childCount, showDirectory = false }: { ses
 
   const open = () => {
     useLayout.getState().toggleAgent(true)
+    useTeams.setState({ activeChatId: null })
     selectSession(session.id)
   }
 
@@ -67,7 +70,7 @@ function SessionRow({ session, depth, childCount, showDirectory = false }: { ses
 
   return (
     <div
-      className={`session-row state-${mark}${active ? " active" : ""}${mark === "busy" || mark === "retry" ? " busy" : ""}`}
+      className={`session-row state-${displayMark}${active ? " active" : ""}${displayMark === "busy" || displayMark === "retry" ? " busy" : ""}`}
       style={{ paddingLeft: 10 + depth * 14 }}
       onClick={open}
       onDoubleClick={() => openEditor({ kind: "chat", sessionId: session.id })}
@@ -75,13 +78,13 @@ function SessionRow({ session, depth, childCount, showDirectory = false }: { ses
       title={session.title}
     >
       <span className="session-state">
-        {mark === "attention" ? (
+        {displayMark === "attention" ? (
           <Icon name="bell-dot" className="attention" />
-        ) : mark === "busy" ? (
+        ) : displayMark === "busy" ? (
           <Icon name="loading" spin />
-        ) : mark === "retry" ? (
+        ) : displayMark === "retry" ? (
           <Icon name="warning" />
-        ) : mark === "unseen" || flash ? (
+        ) : displayMark === "unseen" || flash ? (
           <Icon name="pass-filled" className="done" />
         ) : (
           <Icon name={archived ? "archive" : depth > 0 ? "hubot" : "comment-discussion"} />
@@ -97,10 +100,12 @@ function SessionRow({ session, depth, childCount, showDirectory = false }: { ses
               <span className="del">−{summary.deletions}</span>
             </span>
           )}
-          {mark === "attention" && <span className="session-flag attention">espera tu respuesta</span>}
-          {mark === "unseen" && <span className="session-flag done">terminó</span>}
+          {displayMark === "attention" && <span className="session-flag attention">espera tu respuesta</span>}
+          {teamBusy && mark !== "attention" && <span className="session-flag busy">equipo trabajando</span>}
+          {displayMark === "unseen" && <span className="session-flag done">terminó</span>}
+          {lead && <span className="session-children" title="Esta conversaci�n es el Lead del equipo">Lead de equipo</span>}
           {childCount > 0 && <span className="session-children">{childCount} subagentes</span>}
-          <span className="session-time">{shortAgo(session.time.updated)}</span>
+          <span className={`session-time tone-${ageTone(session.time.updated)}`}>{shortAgo(session.time.updated)}</span>
         </span>
       </span>
       <IconButton
@@ -122,6 +127,9 @@ export function AgentsView() {
   const sessions = useMemo(() => allSessions.filter(sessionInProject), [allSessions])
   const root = useProject((s) => s.root)
   const chats = useTeams(s => s.chats)
+  const leadSessions = useMemo(() => new Map(chats
+    .filter((chat) => chat.origin && chat.runs.some((run) => run.planV2?.conversationLead))
+    .map((chat) => [chat.origin!.sessionId, chat])), [chats])
   const loaded = useAgent((s) => s.sessionsLoaded)
   const [query, setQuery] = useState("")
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
@@ -158,7 +166,7 @@ export function AgentsView() {
       <div className="view-header">
         <span className="view-title">Sesiones del agente</span>
         <span className="view-actions">
-          <IconButton icon="organization" title="Historial de chats de equipo" onClick={() => useLayout.getState().showView("teams", false)} />
+          <IconButton icon="checklist" title="Trabajos" onClick={() => useLayout.getState().showView("teams", false)} />
           <IconButton
             icon="add"
             title="Nueva sesión"
@@ -197,7 +205,7 @@ export function AgentsView() {
                     <Icon name={expanded[s.id] ? "chevron-down" : "chevron-right"} />
                   </button>
                 )}
-                <SessionRow session={s} depth={0} childCount={kids.length} showDirectory={!sessionInRoot(s, root)} />
+                <SessionRow session={s} depth={0} childCount={kids.length} lead={leadSessions.get(s.id)?.title} showDirectory={!sessionInRoot(s, root)} />
               </div>
               {expanded[s.id] && kids.map((k) => <SessionRow key={k.id} session={k} depth={1} childCount={0} showDirectory={!sessionInRoot(k, root)} />)}
             </div>

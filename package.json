@@ -14,6 +14,8 @@
     "test:teams:recovery": "node tests/teams-restart.mjs",
     "benchmark:plan-v2": "node benchmarks/plan-v2/run.mjs",
     "benchmark:plan-v2:results": "node --experimental-strip-types benchmarks/plan-v2/compare-runs.mjs",
+    "eval": "node evals/run.mjs",
+    "eval:mock": "node evals/run.mjs --mock",
     "test:fleet": "node tests/fleet-smoke.mjs",
     "test:upgrade": "node tests/windows-upgrade.mjs",
     "test:upgrade:native": "node tests/windows-upgrade-native-suite.mjs",

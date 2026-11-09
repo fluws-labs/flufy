@@ -37,7 +37,7 @@ export type PlanV2Config = { enabled: boolean; reviewBeforeStart: boolean; routi
 export type VerificationStep = { kind: "command" | "observation"; command: string | null; expected: string }
 export type PlanIssue = { code: string; taskIds: string[]; message: string }
 export type PlanRevision = { id: string; runId: string; number: number; parentRevisionId: string | null; operationId: string; baseDigest: string; resultingDigest: string; createdAt: number; actor: string; reason: string; operations: Record<string, unknown>[]; validation: { valid: boolean; issues: PlanIssue[] } }
-export type PlanV2State = { pendingChange?: boolean; enabled: boolean; reviewBeforeStart: boolean; stage: string; revisionNumber: number; digest: string; sequence: number; revisions: PlanRevision[]; validation: { valid: boolean; issues: PlanIssue[] } | null; discovery: { repoRoot: string; observedFiles: { path: string; sha256: string }[]; observedScripts: { source: string; name: string; command: string }[]; truncated: boolean }[] }
+export type PlanV2State = { pendingChange?: boolean; conversationLead?: boolean; enabled: boolean; reviewBeforeStart: boolean; stage: string; revisionNumber: number; digest: string; sequence: number; revisions: PlanRevision[]; validation: { valid: boolean; issues: PlanIssue[] } | null; discovery: { repoRoot: string; observedFiles: { path: string; sha256: string }[]; observedScripts: { source: string; name: string; command: string }[]; truncated: boolean }[] }
 
 export type RouteCategory = "quick" | "deep" | "visual" | "code" | "review" | "local"
 export type ModelCandidate = { runtimeId: "opencode"; providerId: string; modelId: string; capabilityScope: string; variant: string | null }

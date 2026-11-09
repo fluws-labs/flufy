@@ -45,3 +45,13 @@ test("sesiones de Solucionador y Supervisor permanecen dentro del equipo",()=>{
   assert.deepEqual(grouped.normal.map(s=>s.id),["normal"])
   assert.equal(grouped.groups[0].sessions.length,2)
 })
+
+test("la conversación de origen del Lead sigue visible como sesión normal", () => {
+  const record = chat("lead")
+  record.origin = { sessionId: "lead-plan", messageId: "m", title: "Conversación", directory: "/repo", createdAt: 1 }
+  indexTeamSessions([record])
+  assert.equal(isTeamSession("lead-plan"), true, "permissions still treat the Lead as a team session")
+  const grouped = groupTeamSessions([session("lead-plan", "Conversación"), session("lead-worker")], [record])
+  assert.deepEqual(grouped.normal.map(s => s.id), ["lead-plan"])
+  assert.deepEqual(grouped.groups[0].sessions.map(s => s.id), ["lead-worker"])
+})

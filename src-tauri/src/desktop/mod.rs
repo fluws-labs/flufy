@@ -67,6 +67,7 @@ pub enum Channel {
     Teams,
     Memory,
     Plane,
+    Code,
 }
 
 impl Channel {
@@ -80,6 +81,7 @@ impl Channel {
             Channel::Teams => "teams",
             Channel::Memory => "memory",
             Channel::Plane => "self",
+            Channel::Code => "code",
         }
     }
 }
@@ -213,6 +215,11 @@ pub fn opencode_config(app: &AppHandle) -> Option<String> {
         return None;
     }
     let mut config = agent_config(&state);
+    if !crate::code_index::load_config(app).enabled {
+        if let Some(mcp) = config["mcp"].as_object_mut() {
+            mcp.remove("code");
+        }
+    }
     for name in ["pacing.js", "desktop-session.js"] {
         let Some(path) = app_data_file(app, name) else { continue };
         let plugin = json!(format!("file://{}", path.to_string_lossy().replace('\\', "/")));
@@ -233,7 +240,7 @@ fn agent_config(state: &DesktopState) -> Value {
             "timeout": timeout,
         })
     };
-    let mut mcp = json!({ "desktop": server("desktop", 120_000), "routines": server("routines", 120_000), "terminal": server("terminal", 660_000), "worktrees": server("worktrees", 120_000), "memory": server("memory", 120_000), "self": server("self", 120_000) });
+    let mut mcp = json!({ "desktop": server("desktop", 120_000), "routines": server("routines", 120_000), "terminal": server("terminal", 660_000), "worktrees": server("worktrees", 120_000), "memory": server("memory", 120_000), "self": server("self", 120_000), "code": server("code", 300_000) });
     mcp["teams"] = server("teams", 120_000);
     if state.browser_injected {
         mcp["browser"] = server("browser", 180_000);
@@ -276,17 +283,11 @@ pub fn gate(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-fn own_exe() -> &'static str {
-    static NAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    NAME.get_or_init(|| {
-        std::env::current_exe().ok().and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_lowercase())).unwrap_or_default()
-    })
-}
-
 #[cfg(windows)]
 pub fn blocked_reason(w: &win::WinInfo) -> Option<String> {
-    let process = w.process.to_lowercase();
-    if w.pid == std::process::id() || (!process.is_empty() && process == own_exe()) {
+    // Only the exact process that hosts this agent is off-limits: another
+    // Flufy instance (dev/test) is a normal window and must be controllable.
+    if w.pid == std::process::id() {
         return Some("es Flufy: el agente no puede manejar su propia ventana".into());
     }
     listed_reason(w)
@@ -338,8 +339,9 @@ fn instructions(channel: Channel) -> &'static str {
         Channel::Terminal => terminal::INSTRUCTIONS,
         Channel::Worktrees => worktrees::INSTRUCTIONS,
         Channel::Memory => crate::memory::instructions(),
-        Channel::Teams => "Desde un chat normal, antes de empezar un trabajo de implementación no trivial, si el usuario no definió cómo resolverlo, preguntá una sola vez con la herramienta question: header «Cómo resolverlo», pregunta «¿Querés que lo resuelva un equipo o seguimos en este chat?», opciones «Con un equipo» («El Lead organiza especialistas, ejecuta y deja evidencias para revisar») y «En este chat» («Sigo yo en esta conversación, sin equipo»). Si también falta elegir Principal o un trabajo separado, sumá esa opción a la misma pregunta; no encadenes interrogatorios. No preguntes en consultas ni cambios triviales, ni repitas la pregunta. Si elige un equipo, llamá a delegate con plan concreto, contexto pertinente, decisiones con fuente y aceptación; si elige este chat, no delegues. La elección es del usuario, no la infieras por el tamaño de la tarea.",
+        Channel::Teams => "Desde un chat normal, antes de empezar un trabajo de implementación no trivial, si el usuario no definió cómo resolverlo, preguntá una sola vez con la herramienta question: header «Cómo resolverlo», pregunta «¿Querés que lo resuelva un equipo o seguimos en este chat?», opciones «Con un equipo» («El Lead organiza especialistas, ejecuta y deja evidencias para revisar») y «En este chat» («Sigo yo en esta conversación, sin equipo»). Si también falta elegir Principal o un trabajo separado, sumá esa opción a la misma pregunta; no encadenes interrogatorios. No preguntes en consultas ni cambios triviales, ni repitas la pregunta. Si elige un equipo, llamá a teams_start_work con el objetivo completo y verificable; esa herramienta vincula ESTA misma conversación como Lead y arranca el tablero, sin abrir otro chat. No uses teams_delegate para el trabajo nuevo. Si elige este chat, resolvé con las herramientas normales sin delegar. La elección es del usuario, no la infieras por el tamaño de la tarea.",
         Channel::Plane => crate::plane::INSTRUCTIONS,
+        Channel::Code => crate::code_index::INSTRUCTIONS,
     }
 }
 
@@ -356,6 +358,7 @@ pub(crate) fn tool_list(channel: Channel) -> Vec<Value> {
         Channel::Teams => { let mut tools = crate::teams::handoff::tools(); tools.extend(crate::preview::tools()); tools },
         Channel::Memory => crate::memory::tool_list(),
         Channel::Plane => crate::plane::tool_list(),
+        Channel::Code => crate::code_index::tool_list(),
     }
 }
 
@@ -393,6 +396,7 @@ fn call_tool(app: &AppHandle, channel: Channel, name: &str, args: &Value) -> Val
         },
         Channel::Memory => crate::memory::call_tool(app, name, args),
         Channel::Plane => crate::plane::call_tool(app, name, args),
+        Channel::Code => crate::code_index::call_tool(app, name, args),
         #[cfg(windows)]
         Channel::Desktop => {
             let r = tools::call(app, name, args);
@@ -610,7 +614,7 @@ mod tests {
         assert!(text.contains("¿Querés que lo resuelva un equipo o seguimos en este chat?"));
         assert!(text.contains("Con un equipo") && text.contains("En este chat"));
         assert!(text.contains("No preguntes en consultas ni cambios triviales"));
-        assert!(text.contains("no delegues"));
+        assert!(text.contains("teams_start_work") && text.contains("sin delegar"));
         let config = agent_config(&state());
         assert_eq!(config["mcp"]["teams"]["url"], "http://127.0.0.1:4242/mcp/teams");
     }
@@ -642,6 +646,20 @@ mod tests {
         assert!(prompt.contains("# Manejar la PC del usuario"));
         assert!(!prompt.contains("name: escritorio"));
         assert!(config["mcp"]["desktop"].is_object());
+    }
+
+    #[test]
+    fn policy_contract_forbids_partial_deliveries_and_plan_degradation() {
+        for phrase in [
+            "## Alcance completo, sin atajos",
+            "no la reduzcas a una demo",
+            "Un avance parcial se informa como parcial, nunca como terminado",
+            "no reemplazar la solución acordada por un atajo silencioso",
+            "Si no podés completar todo, el resultado es un bloqueo, no una entrega",
+            "no se cierra hasta verificarlos",
+        ] {
+            assert!(AGENT_POLICY.contains(phrase), "Falta en la política: {phrase}");
+        }
     }
 
     #[test]

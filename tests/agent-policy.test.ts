@@ -48,7 +48,7 @@ test("inyecta una sola política sin depender de memoria ni modificar instruccio
     assert.match(output.system[2], /Elegir cómo resolver el trabajo/)
     assert.match(output.system[2], /Con un equipo/)
     assert.match(output.system[2], /En este chat/)
-    assert.match(output.system[2], /teams_delegate/)
+    assert.match(output.system[2], /teams_start_work/)
     assertLocalExecution(output.system[2])
 
     const next = { system: ["Otro modelo"] }

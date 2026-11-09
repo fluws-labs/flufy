@@ -1,0 +1,14 @@
+[
+  "read",
+  "glob",
+  "grep",
+  "webfetch",
+  "websearch",
+  "question",
+  "teams_get_context",
+  "teams_commit_decision",
+  "teams_start_work",
+  "teams_adjust_plan",
+  "teams_board",
+  "teams_control_run"
+]
