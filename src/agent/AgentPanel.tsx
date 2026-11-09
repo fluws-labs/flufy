@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react"
+import { useEffect, useMemo, useState } from "react"
 import {
   compactSession,
   contextUsage,
@@ -6,9 +6,11 @@ import {
   focusComposer,
   newSession,
   queuedUserIds,
+  rememberPreviewTask,
   selectSession,
   sessionInProject,
   setSessionArchived,
+  startPreviewTask,
   useAgent,
 } from "../state/agent"
 import { notify } from "../state/toasts"
@@ -33,6 +35,10 @@ import { newTeamChat, useTeams } from "../state/teams"
 import { TeamChat } from "./TeamChat"
 import { groupTeamSessions } from "../team/session-index"
 import { TeamSessionHistory } from "../team/TeamSessionHistory"
+import { PreviewChoiceCard, PreviewFloatingEditor } from "./PreviewHost"
+import { PreviewLibrary } from "./PreviewLibrary"
+import { previewIdentityFor, usePreviewTaskId } from "./preview-identity"
+import { previewIdentityKey } from "../preview"
 
 const SUGGESTIONS = [
   { icon: "telescope", title: "Entender el proyecto", text: "Explicame la arquitectura de este proyecto y dónde está cada cosa." },
@@ -41,7 +47,7 @@ const SUGGESTIONS = [
   { icon: "git-pull-request", title: "Revisar mis cambios", text: "/review" },
 ]
 
-export function SessionPane({ sessionId, variant }: { sessionId: string | null; variant: "panel" | "editor" }) {
+export function SessionPane({ sessionId, variant, onPreviewOpen }: { sessionId: string | null; variant: "panel" | "editor"; onPreviewOpen?: () => void }) {
   const session = useAgent((s) => s.allSessions.find((x) => x.id === sessionId) ?? null)
   const status = useAgent((s) => (sessionId ? (s.statuses[sessionId]?.type ?? "idle") : "idle"))
   const retry = useAgent((s) => (sessionId ? s.statuses[sessionId] : undefined))
@@ -53,6 +59,8 @@ export function SessionPane({ sessionId, variant }: { sessionId: string | null; 
   const view = useAgent((s) => (sessionId ? s.views[sessionId] : undefined))
   const sessions = useMemo(() => allSessions.filter(sessionInProject), [allSessions])
   const root = useProject((s) => s.root)
+  const taskId = usePreviewTaskId(sessionId)
+  const previewIdentity = taskId ? previewIdentityFor(root, sessionId, taskId) : null
   const busy = status === "busy" || status === "retry"
   const archived = archivedSessionOwner(session, sessions)
   const chats = useTeams(s => s.chats)
@@ -143,10 +151,21 @@ export function SessionPane({ sessionId, variant }: { sessionId: string | null; 
         </div>
       )}
       <div className="session-dock">
+        {root && sessionId && !archived && <div className="preview-actions" aria-label="Tarea de previsualización">
+          <span className="preview-note">Los ajustes continúan la tarea actual.</span>
+          <button type="button" className="btn btn-xs" disabled={busy} onClick={() => startPreviewTask(root, sessionId)}>Nueva tarea en este chat</button>
+        </div>}
         {retry?.type === "retry" && (
           <div className="retry-banner">
             <Icon name="sync" spin /> Reintentando ({retry.attempt}): {providerErrorMessage({ data: { message: retry.message } })}
           </div>
+        )}
+        {previewIdentity && onPreviewOpen && (
+          <PreviewChoiceCard
+            key={previewIdentityKey(previewIdentity)}
+            identity={previewIdentity}
+            onChosen={(choice) => { if (choice === "create") onPreviewOpen() }}
+          />
         )}
         {mine.questions.map((q) => (
           <QuestionCard key={q.id} request={q} />
@@ -193,16 +212,26 @@ export function SessionPane({ sessionId, variant }: { sessionId: string | null; 
   )
 }
 
-export function AgentPanel() {
+export function AgentPanel({ previewOpen = false, onPreviewOpen = () => {}, onPreviewClose = () => {} }: { previewOpen?: boolean; onPreviewOpen?: () => void; onPreviewClose?: () => void }) {
+  const [libraryProject, setLibraryProject] = useState<string | null>(null)
+  const [previewRequest, setPreviewRequest] = useState(0)
   const teamChatId = useTeams((s) => s.activeChatId)
   const activeId = useAgent((s) => s.activeSessionId)
   const connected = useAgent((s) => s.connected)
   const busyCount = useAgent((s) => Object.values(s.statuses).filter((x) => x.type === "busy").length)
   const focusChat = useLayout((s) => s.focusChat)
+  const root = useProject((s) => s.root)
+  const conversationId = teamChatId ? null : activeId
+  const taskId = usePreviewTaskId(conversationId)
+  const previewIdentity = taskId ? previewIdentityFor(root, conversationId, taskId) : null
 
   useEffect(() => {
     if (activeId) void ensureSessionView(activeId)
   }, [activeId])
+
+  useEffect(() => {
+    if (teamChatId && previewOpen) onPreviewClose()
+  }, [teamChatId, previewOpen, onPreviewClose])
 
   return (
     <aside className="agent-panel">
@@ -227,6 +256,7 @@ export function AgentPanel() {
               onClick={() => void bubbleDraft()}
             />
           ))}
+          {root && <button type="button" className="btn btn-xs" title="Ver los diseños guardados del proyecto" onClick={() => setLibraryProject(root)}><Icon name="library" /> Diseños</button>}
           <IconButton icon="add" title="Nuevo chat (Ctrl+Alt+N)" onClick={(e) => openMenuAt(e.currentTarget, [
             { label: "Chat normal", icon: "comment-discussion", run: () => { useTeams.setState({ activeChatId: null }); newSession() } },
             { label: "Modo equipo", icon: "organization", run: () => void newTeamChat() },
@@ -237,6 +267,14 @@ export function AgentPanel() {
             active={focusChat}
             onClick={() => useLayout.getState().toggleFocusChat()}
           />
+          {!teamChatId && previewIdentity && (
+            <IconButton
+              icon="browser"
+              title={previewOpen ? "Ocultar previsualización editable" : "Abrir previsualización editable"}
+              active={previewOpen}
+              onClick={() => (previewOpen ? onPreviewClose() : onPreviewOpen())}
+            />
+          )}
           <IconButton icon="close" title="Ocultar panel del agente (Ctrl+Alt+B)" onClick={() => useLayout.getState().toggleAgent(false)} />
         </div>
       </div>
@@ -245,7 +283,21 @@ export function AgentPanel() {
           <Icon name="debug-disconnect" /> Conectando con Fluws…
         </div>
       )}
-      {teamChatId ? <TeamChat key={teamChatId} chatId={teamChatId} /> : <SessionPane sessionId={activeId} variant="panel" />}
+      <div className={`agent-body${previewOpen && previewIdentity ? " with-preview" : ""}`}>
+        <div className="agent-chat-col">
+          {teamChatId ? <TeamChat key={teamChatId} chatId={teamChatId} /> : <SessionPane sessionId={activeId} variant="panel" onPreviewOpen={onPreviewOpen} />}
+        </div>
+        {previewOpen && previewIdentity && (
+          <PreviewFloatingEditor key={previewIdentityKey(previewIdentity)} identity={previewIdentity} onClose={onPreviewClose} onBrowseDesigns={() => setLibraryProject(root)} openRequest={previewRequest} />
+        )}
+      </div>
+      {root && libraryProject === root && <PreviewLibrary key={root} projectRoot={root} onClose={() => setLibraryProject(null)} onOpen={design => {
+        rememberPreviewTask(root, design.identity.sessionId, design.identity.taskId)
+        selectSession(design.identity.sessionId)
+        setLibraryProject(null)
+        setPreviewRequest(value => value + 1)
+        onPreviewOpen()
+      }} />}
     </aside>
   )
 }

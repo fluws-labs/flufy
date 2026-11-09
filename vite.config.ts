@@ -29,6 +29,8 @@ export default defineConfig({
   server: {
     port: 5173,
     strictPort: true,
+    // Tauri watches Rust; Vite must not watch DLLs locked by the native linker.
+    watch: { ignored: ['**/src-tauri/**'] },
     proxy: {
       '/oc': {
         target,

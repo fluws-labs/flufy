@@ -166,6 +166,82 @@ pub fn baseline(repos: &[String], dir: &Path) -> Result<Vec<Value>, String> {
     }).collect()
 }
 
+/// Binds an after-capture to the frozen approved revision before it is stored.
+/// The binding is declared by the capture target; the image is measured and
+/// hashed here. Nothing is inferred from the width or from a newer approval.
+pub fn attribute(
+    observation: &Observation,
+    target: &CaptureTarget,
+    reference: &crate::preview::Reference,
+    evidence_dir: &str,
+) -> Result<Value, String> {
+    use sha2::Digest as _;
+    let binding = target
+        .preview
+        .as_ref()
+        .ok_or("CAPTURE_ATTRIBUTION: el flujo no declara identidad, revisión y viewport")?;
+    if binding.identity != reference.identity {
+        return Err("CAPTURE_ATTRIBUTION: la captura pertenece a otro proyecto, conversación, tarea o diseño".into());
+    }
+    if binding.revision_id != reference.revision.id {
+        return Err("CAPTURE_ATTRIBUTION: la captura pertenece a otra revisión que la transferida".into());
+    }
+    if !["desktop", "mobile"].contains(&binding.viewport.as_str()) {
+        return Err("CAPTURE_ATTRIBUTION: viewport explícito inválido".into());
+    }
+    if observation.status != "captured" {
+        return Err("CAPTURE_ATTRIBUTION: no hay una captura verificada que atribuir".into());
+    }
+    let width = observation.details["width"].as_u64().ok_or("CAPTURE_ATTRIBUTION: la captura no declara dimensiones")?;
+    let height = observation.details["height"].as_u64().ok_or("CAPTURE_ATTRIBUTION: la captura no declara dimensiones")?;
+    if width != binding.width as u64
+        || height != binding.height as u64
+        || target.width != binding.width
+        || target.height != binding.height
+    {
+        return Err("CAPTURE_ATTRIBUTION: las dimensiones no coinciden con el viewport declarado".into());
+    }
+    let url = observation.details["url"].as_str().ok_or("CAPTURE_ATTRIBUTION: la captura no declara su origen")?;
+    let parsed = tauri::Url::parse(url).map_err(|_| "CAPTURE_ATTRIBUTION: origen inválido")?;
+    if parsed.origin().ascii_serialization() != binding.origin {
+        return Err("CAPTURE_ATTRIBUTION: la captura no proviene del origen declarado".into());
+    }
+    let relative = observation.artifact_path.as_deref().ok_or("CAPTURE_ATTRIBUTION: falta el artefacto capturado")?;
+    let bytes = std::fs::read(safe_path(evidence_dir, relative, true)?).map_err(|_| "CAPTURE_ATTRIBUTION: el artefacto verificado ya no existe")?;
+    let (actual_width, actual_height) = png_size(&bytes)?;
+    if actual_width != binding.width || actual_height != binding.height {
+        return Err("CAPTURE_ATTRIBUTION: la imagen real no coincide con el viewport declarado".into());
+    }
+    let sha256 = format!("{:x}", sha2::Sha256::digest(&bytes));
+    if observation.sha256.as_deref() != Some(sha256.as_str()) {
+        return Err("CAPTURE_ATTRIBUTION: el artefacto cambió desde la captura".into());
+    }
+    Ok(json!({
+        "identity": binding.identity,
+        "revisionId": binding.revision_id,
+        "viewport": binding.viewport,
+        "width": binding.width,
+        "height": binding.height,
+        "origin": binding.origin,
+        "artifact": relative,
+        "sha256": sha256,
+        "verifiedAt": now(),
+        "status": "verified",
+    }))
+}
+
+fn png_size(bytes: &[u8]) -> Result<(u32, u32), String> {
+    if bytes.len() < 24 || bytes[..8] != [137, 80, 78, 71, 13, 10, 26, 10] || &bytes[12..16] != b"IHDR" {
+        return Err("CAPTURE_ATTRIBUTION: el artefacto no es un PNG válido".into());
+    }
+    let width = u32::from_be_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]);
+    let height = u32::from_be_bytes([bytes[20], bytes[21], bytes[22], bytes[23]]);
+    if width == 0 || height == 0 {
+        return Err("CAPTURE_ATTRIBUTION: el artefacto no declara dimensiones".into());
+    }
+    Ok((width, height))
+}
+
 pub fn changes(run: &Run) -> Result<String, String> {
     let mut chunks = vec![];
     for b in &run.baseline {
@@ -404,6 +480,60 @@ mod tests {
     fn traversal_is_rejected() {
         assert!(safe_path(".", "../secrets", false).is_err());
         assert!(safe_path(".", "C:\\secret", false).is_err());
+    }
+    fn png(width: u32, height: u32) -> Vec<u8> {
+        let mut bytes = vec![137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82];
+        bytes.extend_from_slice(&width.to_be_bytes());
+        bytes.extend_from_slice(&height.to_be_bytes());
+        bytes.extend_from_slice(&[8, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        bytes
+    }
+    fn reference() -> crate::preview::Reference {
+        crate::preview::Reference {
+            identity: crate::preview::Identity { project_root: "D:/p".into(), session_id: "s".into(), task_id: "t".into(), design_id: "d".into() },
+            revision: crate::preview::Revision { id: "r1".into(), parent_id: None, created_at: 0, document: json!({"root":{"id":"root","type":"container"}}), html: "<html></html>".into(), css: String::new(), assets: vec![], notes: String::new() },
+        }
+    }
+    #[test]
+    fn captures_are_attributed_only_by_explicit_binding_and_measured_artifact() {
+        use sha2::Digest as _;
+        let dir = std::env::temp_dir().join(format!("teams-capture-{}", id()));
+        std::fs::create_dir_all(dir.join("despues")).unwrap();
+        let bytes = png(1280, 800);
+        std::fs::write(dir.join("despues/cap.png"), &bytes).unwrap();
+        let reference = reference();
+        let binding = crate::preview::CaptureBinding {
+            identity: reference.identity.clone(), revision_id: "r1".into(), viewport: "desktop".into(),
+            width: 1280, height: 800, origin: "http://127.0.0.1:5173".into(),
+        };
+        let target = CaptureTarget {
+            id: "t".into(), name: "App".into(), url: "http://127.0.0.1:5173/".into(),
+            width: 1280, height: 800, wait_for_selector: None, mask_selectors: vec![], actions: vec![],
+            required: true, preview: Some(binding),
+        };
+        let observation = Observation {
+            id: "o".into(), target_id: "t".into(), phase: "after".into(), captured_at: 1,
+            status: "captured".into(), artifact_path: Some("despues/cap.png".into()),
+            report_path: "capturas/o.json".into(), sha256: Some(format!("{:x}", sha2::Sha256::digest(&bytes))),
+            details: json!({"width":1280,"height":800,"url":"http://127.0.0.1:5173/" }),
+        };
+        let attribution = attribute(&observation, &target, &reference, &dir.to_string_lossy()).unwrap();
+        assert_eq!(attribution["revisionId"], "r1");
+        assert_eq!(attribution["viewport"], "desktop");
+        assert_eq!(attribution["status"], "verified");
+        let mut unbound = target.clone(); unbound.preview = None;
+        assert!(attribute(&observation, &unbound, &reference, &dir.to_string_lossy()).unwrap_err().contains("CAPTURE_ATTRIBUTION"));
+        let mut other_revision = target.clone(); other_revision.preview.as_mut().unwrap().revision_id = "r2".into();
+        assert!(attribute(&observation, &other_revision, &reference, &dir.to_string_lossy()).unwrap_err().contains("otra revisión"));
+        let mut wrong_width = target.clone(); wrong_width.width = 390;
+        assert!(attribute(&observation, &wrong_width, &reference, &dir.to_string_lossy()).unwrap_err().contains("dimensiones"));
+        let mut foreign_origin = observation.clone(); foreign_origin.details["url"] = json!("http://localhost:5173/");
+        assert!(attribute(&foreign_origin, &target, &reference, &dir.to_string_lossy()).unwrap_err().contains("origen"));
+        let mut tampered = observation.clone(); tampered.sha256 = Some("0".repeat(64));
+        assert!(attribute(&tampered, &target, &reference, &dir.to_string_lossy()).unwrap_err().contains("cambió"));
+        let mut wrong_viewport = target.clone(); wrong_viewport.preview.as_mut().unwrap().viewport = "tablet".into();
+        assert!(attribute(&observation, &wrong_viewport, &reference, &dir.to_string_lossy()).unwrap_err().contains("viewport"));
+        std::fs::remove_dir_all(dir).unwrap();
     }
     #[test]
     fn baseline_preserves_dirty_index_and_distinguishes_team_diff() {

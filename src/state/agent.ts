@@ -26,6 +26,8 @@ import { draftRuntimeKey, patchSessionRuntime, sessionRuntime } from "./session-
 import { openEditor } from "./editors"
 import { desktopContextText, prepareDesktopContext } from "../lib/desktop-context"
 import { desktopCaptureMarker, INTERNAL_SCREENSHOT_FILENAME } from "../lib/internal-context"
+import { previewTaskContext, previewTaskKey, resolvePreviewTaskId } from "../preview/task-identity"
+import { previewAdjustmentContext, type PreviewAdjustment } from "../preview/editor-context"
 
 export type ChatMessage = { info: Message; parts: Part[] }
 
@@ -83,6 +85,7 @@ type AgentState = {
   statuses: Record<string, SessionStatus>
   doneFlash: Record<string, number>
   views: Record<string, SessionView>
+  previewTasks: Record<string, string>
   permissions: PermissionRequest[]
   questions: QuestionRequest[]
   todos: Record<string, Todo[]>
@@ -121,6 +124,7 @@ export const useAgent = create<AgentState>(() => ({
   statuses: {},
   doneFlash: {},
   views: {},
+  previewTasks: loadJson("agent.previewTasks", {}),
   permissions: [],
   questions: [],
   todos: {},
@@ -213,6 +217,7 @@ useAgent.subscribe((s, prev) => {
   if (s.memoryEnabled !== prev.memoryEnabled) saveJson("agent.memoryEnabled", s.memoryEnabled)
   if (s.agentName !== prev.agentName) saveJson("agent.name", s.agentName)
   if (s.includeActiveFile !== prev.includeActiveFile) saveJson("agent.includeActiveFile", s.includeActiveFile)
+  if (s.previewTasks !== prev.previewTasks) saveJson("agent.previewTasks", s.previewTasks)
   if (s.activeSessionId !== prev.activeSessionId) saveJson(projectKey(boundProject, "agent.activeSession"), s.activeSessionId)
   if (s.openSessionIds !== prev.openSessionIds) saveJson(projectKey(boundProject, "agent.openSessions"), s.openSessionIds)
 })
@@ -1169,44 +1174,84 @@ export function contextToParts(root: string | null, items: ContextItem[], active
   return parts
 }
 
+// Preview decisions need the definitive conversation identity before the first
+// prompt is admitted. Keep session creation and preference transfer in one place
+// so starting a preview cannot create a second, unrelated conversation.
+const creatingPromptSessions = new Map<string, Promise<string>>()
+
+export function rememberPreviewTask(project: string, sessionId: string, taskId: string): void {
+  const key = previewTaskKey(project, sessionId)
+  if (useAgent.getState().previewTasks[key] === taskId) return
+  useAgent.setState(s => ({ previewTasks: { ...s.previewTasks, [key]: taskId } }))
+}
+
+/** Only this explicit user action starts another task inside an existing chat. */
+export function startPreviewTask(project: string, sessionId: string): string {
+  const taskId = crypto.randomUUID()
+  rememberPreviewTask(project, sessionId, taskId)
+  return taskId
+}
+
+export async function ensurePromptSession(root: string | null, sessionId: string | null): Promise<string> {
+  if (sessionId) return sessionId
+  const runtimeKey = draftRuntimeKey(root, windowLabel())
+  const pending = creatingPromptSessions.get(runtimeKey)
+  if (pending) return pending
+  const operation = createPromptSession(runtimeKey)
+  creatingPromptSessions.set(runtimeKey, operation)
+  try { return await operation }
+  finally { if (creatingPromptSessions.get(runtimeKey) === operation) creatingPromptSessions.delete(runtimeKey) }
+}
+
+async function createPromptSession(runtimeKey: string): Promise<string> {
+  const s = useAgent.getState()
+  const res = await client.session.create({ body: {} })
+  const created = res.data as Session | undefined
+  if (!created) throw new Error("no se pudo crear la sesión")
+  rememberSessionDirectory(created.id, created.directory)
+  if (s.memoryEnabled[DRAFT_TAB] === false) {
+    await call("memory_set_session", { session: created.id, enabled: false }).catch(() => undefined)
+    useAgent.setState((st) => ({ memoryEnabled: { ...st.memoryEnabled, [created.id]: false } }))
+  }
+  const draftApproval = useApprovals.getState().sessions[DRAFT_TAB]
+  if (draftApproval !== undefined) setApprovalForSession(created.id, draftApproval)
+  const draft = sessionRuntime(runtimeKey)
+  patchSessionRuntime(created.id, {
+    draft: draft.draft, context: draft.context, agent: draft.agent,
+    model: draft.model, variants: draft.variants, browserWindow: draft.browserWindow,
+  })
+  useAgent.setState((st) => {
+    const open = st.openSessionIds.map((x) => (x === DRAFT_TAB ? created.id : x))
+    if (!open.includes(created.id)) open.push(created.id)
+    return {
+      sessions: sortSessions([created, ...st.sessions.filter((x) => x.id !== created.id)]),
+      allSessions: sortSessions([created, ...st.allSessions.filter((x) => x.id !== created.id)]),
+      activeSessionId: created.id,
+      openSessionIds: open,
+      views: { ...st.views, [created.id]: { messages: [], loading: false, hasMore: false, error: null } },
+    }
+  })
+  return created.id
+}
+
 export async function sendPrompt(
   text: string,
   root: string | null,
   activeFile: string | null,
   sessionId: string | null,
+  previewAdjustment?: PreviewAdjustment,
 ): Promise<string | null> {
+  if (previewAdjustment && (!root || !sessionId || previewTaskKey(root, sessionId) !== previewTaskKey(previewAdjustment.identity.project, previewAdjustment.identity.conversationId))) {
+    throw new Error("El editor de diseño no pertenece a esta conversación y proyecto.")
+  }
   const base = useAgent.getState()
   const runtimeKey = sessionId ?? draftRuntimeKey(root, windowLabel())
   const runtime = sessionRuntime(runtimeKey)
   const s = { ...base, model: runtime.model ?? base.model, variants: runtime.variants ?? base.variants,
     agentName: runtime.agent ?? base.agentName, context: runtime.context ?? (base.activeSessionId === sessionId ? base.context : []) }
-  let id = sessionId
   if (!s.modelsLoaded || s.modelsError) throw new Error("No se pudieron verificar las cuentas de IA. Recargá los modelos desde Cuentas de IA.")
   if (!modelAvailable(s.models, s.model)) throw new Error("Conectá ChatGPT u OpenCode desde Cuentas de IA y elegí un modelo disponible.")
-  if (!id) {
-    const res = await client.session.create({ body: {} })
-    const created = res.data as Session | undefined
-    if (!created) throw new Error("no se pudo crear la sesión")
-    id = created.id
-    rememberSessionDirectory(created.id, created.directory)
-    if (s.memoryEnabled[DRAFT_TAB] === false) {
-      await call("memory_set_session", { session: created.id, enabled: false }).catch(() => undefined)
-      useAgent.setState((st) => ({ memoryEnabled: { ...st.memoryEnabled, [created.id]: false } }))
-    }
-    const draftApproval = useApprovals.getState().sessions[DRAFT_TAB]
-    if (draftApproval !== undefined) setApprovalForSession(created.id, draftApproval)
-    useAgent.setState((st) => {
-      const open = st.openSessionIds.map((x) => (x === DRAFT_TAB ? created.id : x))
-      if (!open.includes(created.id)) open.push(created.id)
-      return {
-        sessions: sortSessions([created, ...st.sessions.filter((x) => x.id !== created.id)]),
-        allSessions: sortSessions([created, ...st.allSessions.filter((x) => x.id !== created.id)]),
-        activeSessionId: created.id,
-        openSessionIds: open,
-        views: { ...st.views, [created.id]: { messages: [], loading: false, hasMore: false, error: null } },
-      }
-    })
-  }
+  const id = await ensurePromptSession(root, sessionId)
   if (!sessionId && isTauri && id) {
     const pendingBrowser = sessionRuntime(runtimeKey).browserChoice
     if (pendingBrowser) {
@@ -1222,6 +1267,18 @@ export async function sendPrompt(
     }
   }
   const contextParts = contextToParts(root, s.context, s.includeActiveFile ? activeFile : null)
+  if (root) {
+    const current = useAgent.getState()
+    const view = current.views[id]
+    const taskId = resolvePreviewTaskId(view?.messages ?? [], root, id,
+      current.previewTasks[previewTaskKey(root, id)], !!view && !view.hasMore) ?? startPreviewTask(root, id)
+    rememberPreviewTask(root, id, taskId)
+    if (previewAdjustment) {
+      if (taskId !== previewAdjustment.identity.taskId) throw new Error("La tarea visual cambió. Reabrí el editor de la tarea vigente antes de enviar ajustes.")
+      contextParts.push({ type: "text", synthetic: true, text: previewAdjustmentContext(previewAdjustment) })
+    }
+    contextParts.push({ type: "text", synthetic: true, text: previewTaskContext({ projectRoot: root, sessionId: id, taskId, designId: "design" }) })
+  }
   const trimmed = text.trim()
   const command = findCommand(trimmed, s.commands)
   const variant = selectedVariant(s)

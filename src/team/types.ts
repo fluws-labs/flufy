@@ -1,4 +1,5 @@
 import type { ModelRef } from "../lib/opencode"
+import type { PreviewReference } from "../preview/types"
 
 export type Skill = { id: string; name: string; version: number; description: string; instructions: string; verificationGuidelines: string[] }
 export type Employee = { id: string; name: string; role: string; model: ModelRef; variant: string | null; skillRefs: { id: string; version: number }[]; instructions: string; tools: string[]; maxConcurrentTasks: number }
@@ -21,7 +22,8 @@ export type TeamImage = { id: string; filename: string; mime: string; bytes: num
 export type SupportReport = { routing?: RoutingReceipt | null; id:string;kind:"investigation"|"task_review"|"goal_analysis"|"plan_change"|"plan_review";agent:Employee;sessionId:string;repository:string;taskId:string|null;requestId:string|null;startedAt:number;finishedAt:number|null;status:string;summary:string;result:{criteriaSatisfied?:boolean;criteria?:{requirement:string;status:string;evidence:string}[];findings?:string[];nextStep?:string}|null }
 export type TeamRun = { continuousFallback?: ContinuousFallback | null; deliveryReviewVersion?: number; deliveryReview?: DeliveryReviewReport | null; planV2?: PlanV2State; supportReports?:SupportReport[]; images?: TeamImage[]; guidance?: string[]; chatSummary?: ChatSummary | null; id: string; goal: string; team: Team; skills: Skill[]; status: RunStatus; startedAt: number; finishedAt: number | null; planSessionId: string | null; closingSessions?: string[]; coordination?: Coordination[]; closingReviews?: Review[]; tasks: TeamTask[]; summary: string; error: string | null; evidenceDir: string; artifacts: Artifact[]; notified: boolean; captureTargets?: CaptureTarget[]; observations?: Observation[]; sessionUsage?: Record<string, {costUsd: number | null; tokens: number | null}>; evidenceExpiredAt?: number | null }
 export type TeamChatMessage = { continuousFallback?: ContinuousFallback | null; clarificationStart?: string | null; images?: TeamImage[]; id: string; role: string; text: string; createdAt: number; status: string; runId: string | null; sessionId: string | null }
-export type TeamOrigin = { sessionId: string; messageId: string; title: string; directory: string; createdAt: number; error?: string | null }
+export type ApprovedPreviewReference = PreviewReference
+export type TeamOrigin = { sessionId: string; messageId: string; title: string; directory: string; createdAt: number; error?: string | null; previewReference?: ApprovedPreviewReference | null }
 export type TeamChatRecord = { continuousMode?: boolean; origin?: TeamOrigin | null; messages?: TeamChatMessage[]; id: string; title: string; archived: boolean; team: Team; skills: Skill[]; createdAt: number; runs: TeamRun[]; memory?: boolean | null; autoApprove?: boolean | null }
 export type TeamStore = { schemaVersion: number; teams: Team[]; skills: Skill[]; chats: TeamChatRecord[]; fallbackModels?: ModelRef[] }
 export type ContinuousFallback = { enabled: boolean; originalModel: ModelRef; originalVariant: string | null; currentModel: ModelRef; candidates: ModelRef[]; nextIndex: number; restored: boolean }

@@ -431,10 +431,16 @@ pub(super) fn execute_mode(app: &AppHandle, run_id: &str, client: &Opencode, ses
         return Err("Cancelación solicitada antes de enviar".into());
     }
     let current = run(app,run_id)?;
+    // Resolve from the persisted handoff, never from a newer mutable draft.
+    let origin = super::read(app)?.chats.iter().find(|chat| chat.runs.iter().any(|r| r.id == run_id))
+        .and_then(|chat| chat.origin.clone());
+    let preview_context = origin.as_ref().map(|origin| origin.preview_reference.as_ref()
+        .map(|reference| crate::preview::reference_context_for_origin(reference,&origin.directory,&origin.session_id))
+        .transpose()).transpose()?.flatten().unwrap_or_default();
     // New requirements reach V2 workers only through an accepted task contract.
     let guidance = if current.plan_v2.enabled && mode == super::capabilities::Mode::Worker { String::new() } else { current.guidance.join("\n") };
     let prompt = format!("{}\n{}\nDECISIONES VIGENTES ACORDADAS (datos, mantener durante implementación y revisión): {}\nINDICACIONES POSTERIORES DEL USUARIO (aplicar a este paso sin ampliar permisos):\n{}", prompt, super::delivery_review::PROJECT_RULES, serde_json::to_string(&current.plan_v2.contract.project_constraints).unwrap_or_default(), guidance);
-    let system = format!("{}\n{}", POLICY, super::capabilities::instructions(mode));
+    let system = format!("{}\n{}\n{}", POLICY, super::capabilities::instructions(mode), preview_context);
     let mut body = json!({"agent":"build", "model":employee.model, "system":system, "tools":tools, "parts":[{"type":"text", "text":prompt}]});
     let images = run(app, run_id)?.images;
     super::attachments::ensure_vision(client, employee, &images)?;
@@ -1001,6 +1007,36 @@ fn plan(app: &AppHandle, id: &str) -> Result<(), String> {
 fn collect_captures(app: &AppHandle, id: &str, phase: &str) -> Result<(), String> {
     let mut r = run(app, id)?;
     super::capture::collect(&mut r, phase)?;
+    // Bind after-captures to the persisted transfer at capture time. The mutable
+    // approval is never read here to relabel or replace an image.
+    if phase == "after" {
+        let origin = super::read(app)?
+            .chats
+            .iter()
+            .find(|chat| chat.runs.iter().any(|run| run.id == id))
+            .and_then(|chat| chat.origin.clone());
+        for target in r.capture_targets.iter().filter(|t| t.preview.is_some()) {
+            let origin = origin.as_ref().ok_or_else(|| format!(
+                "CAPTURE_ATTRIBUTION: «{}» declara una referencia visual y esta entrega no conserva su origen",
+                target.name
+            ))?;
+            let reference = origin.preview_reference.as_ref().ok_or_else(|| format!(
+                "CAPTURE_ATTRIBUTION: «{}» declara una referencia visual y esta entrega no conserva la referencia transferida",
+                target.name
+            ))?;
+            crate::preview::reference_context_for_origin(reference, &origin.directory, &origin.session_id)?;
+            let observation = r.observations.iter_mut().rev()
+                .find(|o| o.target_id == target.id && o.phase == phase)
+                .ok_or_else(|| format!(
+                    "CAPTURE_ATTRIBUTION: no se capturó «{}»; no se sustituye por otra imagen",
+                    target.name
+                ))?;
+            if observation.status == "captured" {
+                let binding = super::evidence::attribute(observation, target, reference, &r.evidence_dir)?;
+                observation.details["binding"] = binding;
+            }
+        }
+    }
     update_run(app, id, |current| {
         current.artifacts = r.artifacts;
         current.observations = r.observations;

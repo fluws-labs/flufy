@@ -91,6 +91,10 @@ pub struct CaptureTarget {
     pub actions: Vec<CaptureAction>,
     #[serde(default)]
     pub required: bool,
+    /// Explicit visual attribution of the captured result. When present, the
+    /// result is only accepted as the implementation of this frozen revision.
+    #[serde(default)]
+    pub preview: Option<crate::preview::CaptureBinding>,
 }
 fn capture_width() -> u32 {
     1280

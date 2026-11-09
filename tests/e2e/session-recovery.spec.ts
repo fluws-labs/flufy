@@ -277,7 +277,7 @@ for (const result of ["failure", "missing"] as const) {
     await expect(page.getByText("No se pudo compactar y continuar", { exact: true })).toBeVisible()
     expect(state.summaries).toBe(1)
     expect(state.prompts).toHaveLength(0)
-    await expect(page.locator(".msg-user")).toContainText("Continuá con el trabajo pendiente")
+    await expect(page.locator(".msg-user").first()).toContainText("Continuá con el trabajo pendiente")
     await expect(page.locator(".msg-error").getByRole("button", { name: "Compactar y continuar" })).toBeEnabled()
   })
 }
