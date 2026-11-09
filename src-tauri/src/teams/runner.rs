@@ -2053,8 +2053,9 @@ fn recovery_sessions(r: &Run) -> Vec<(&str, &str)> {
 }
 
 /// A blocked run whose runner died must not keep its folders reserved forever.
-/// Wait for genuinely recent sessions, but once every surviving session is idle
-/// or stale, stop them, reconcile their evidence, and release the run.
+/// Wait for genuinely recent sessions. When a run has surviving sessions, mark
+/// its attempts as recoverable instead of aborting them: the restart contract
+/// requires reusing the same attempt/session when the user continues.
 pub fn recover_stale(app: &AppHandle) -> Result<usize, String> {
     let runs: Vec<Run> = super::read(app)?.chats.into_iter()
         .flat_map(|chat| chat.runs)
@@ -2077,7 +2078,7 @@ pub fn recover_stale(app: &AppHandle) -> Result<usize, String> {
             if updated == 0 || now().saturating_sub(updated) < 10 * 60 * 1000 { live = true; break; }
         }
         if live { continue; }
-        reconcile(app, &r, true)?;
+        reconcile(app, &r, false)?;
         super::lead_actor::run_recovered(app, &r.id)?;
         recovered += 1;
     }
