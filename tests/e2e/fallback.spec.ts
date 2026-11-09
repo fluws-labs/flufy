@@ -239,6 +239,7 @@ test.describe("fallback · IPC simulado", () => {
     const draft = "QA-FALLBACK borrador que no debe enviarse"
     await page.getByLabel("Mensaje para el equipo").fill(draft)
     const toggle = page.getByRole("switch", { name: /Modo continuo/ })
+    await expect(page.locator('.team-composer-options > .composer-pill + [role="switch"]')).toHaveCount(1)
     await expect(toggle).toHaveAttribute("aria-checked", "false")
     await toggle.click()
     await expect(manager(page)).toContainText("Todavía no hay modelos fallback")

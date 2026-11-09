@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react"
 import { teamCall, useTeams } from "../state/teams"
-import { openFallbackModels, setContinuousMode } from "../state/fallback"
+import { openFallbackModels } from "../state/fallback"
 import { pendingRequests, selectSession, useAgent } from "../state/agent"
 import { useApprovals } from "../state/approvals"
 import { modelKey, rememberSessionDirectory } from "../lib/opencode"
@@ -46,8 +46,6 @@ export function TeamChat({ chatId }: { chatId: string }) {
   const view = (viewChoice?.runId === viewRun?.id ? viewChoice?.view : null) ?? "Chat"
   const setView = (view: string | null) => setViewChoice({ runId: viewRun?.id, view })
   const [expanded, setExpanded] = useState(false)
-  const [changingContinuous, setChangingContinuous] = useState(false)
-  const continuousBusy = useRef(false)
   const [browser, setBrowser] = useState<{ page?: string; title: string } | null>(null)
   const selectedRunId = useTeams(s => s.selectedRunIds[chatId] ?? null)
   const setSelectedRunId = (id: string | null) => useTeams.setState(s => ({ selectedRunIds: { ...s.selectedRunIds, [chatId]: id } }))
@@ -119,12 +117,6 @@ export function TeamChat({ chatId }: { chatId: string }) {
     <header className="team-chat-header">
       <div className="team-section-title">
         <strong><Icon name="organization" /> {chat.title}</strong>
-        <button type="button" className="btn btn-xs" role="switch" aria-checked={chat.continuousMode === true} disabled={changingContinuous || chat.archived} onClick={async () => {
-          if (continuousBusy.current) return
-          continuousBusy.current = true; setChangingContinuous(true)
-          try { await setContinuousMode(chatId, !chat.continuousMode) }
-          finally { continuousBusy.current = false; setChangingContinuous(false) }
-        }}>Modo continuo {chat.continuousMode ? "activado" : "desactivado"}</button>
         <details className="team-chat-menu">
           <summary className="btn btn-xs" aria-label="Más opciones del equipo">⋯</summary>
           <div className="team-chat-menu-panel">
