@@ -31,12 +31,15 @@ export async function setContinuousMode(chatId: string, enabled: boolean) {
 
 // Configuration never resumes a pending send: the user explicitly sends again.
 export async function validateContinuousSend(chatId: string): Promise<boolean> {
+  const chat = useTeams.getState().chats.find(chat => chat.id === chatId)
+  if (!chat || chat.archived) return false
+  if (!chat.continuousMode) return true
   await refreshTeams()
   const state = useTeams.getState()
   if (state.error) { notify.error("Modo continuo", state.error); return false }
-  const chat = state.chats.find(chat => chat.id === chatId)
-  if (!chat || chat.archived) return false
-  if (!chat.continuousMode) return true
+  const current = state.chats.find(chat => chat.id === chatId)
+  if (!current || current.archived) return false
+  if (!current.continuousMode) return true
   if (state.fallbackModels?.length) return true
   if (await openFallbackModels()) notify.info("Modelos Fallback guardados", "Tu borrador se conserva. Volvé a presionar Enviar cuando quieras continuar.")
   return false
