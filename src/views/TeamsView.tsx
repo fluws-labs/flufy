@@ -13,7 +13,7 @@ import { formatDateTime } from "../lib/time"
 export function TeamsView() {
   const { teams, chats, loaded, error, activeChatId } = useTeams()
   const root = useProject((s) => s.root)
-  const [templates, setTemplates] = useState(false)
+  const [templates, setTemplates] = useState(true)
   useEffect(() => startTeams(), [])
   const mine = teams.filter((team) => root && samePath(team.projectRoot, root))
   const returnToChat = (chat: (typeof chats)[number]) => {
@@ -34,6 +34,7 @@ export function TeamsView() {
     <div className="view-header">
       <span className="view-title">Trabajos</span>
       <div className="view-actions">
+        <button type="button" className="btn btn-sm" onClick={() => openTeam()}><Icon name="add" /> Crear equipo</button>
         <IconButton icon="settings-gear" title="Plantillas de equipo" active={templates} onClick={() => setTemplates((value) => !value)} />
       </div>
     </div>
@@ -49,7 +50,7 @@ export function TeamsView() {
           { label: "Duplicar", icon: "copy", run: () => void duplicateTeam(team) },
           { label: "Eliminar plantilla", icon: "trash", danger: true, run: () => void deleteTeam(team) },
         ])}>
-          <button className="team-link" onClick={() => openTeam(team.id)}><Icon name="organization" /> <strong>{team.name}</strong></button>
+          <button className="team-link" onClick={() => void newTeamChat(team.id)}><Icon name="organization" /> <strong>{team.name}</strong></button>
           <p>{team.members.length} integrantes · {team.members.map((member) => member.role).join(", ")}</p>
           <div className="team-actions"><button className="btn btn-xs" onClick={() => void newTeamChat(team.id)}>Abrir chat</button><button className="btn btn-xs" onClick={() => openTeam(team.id)}>Configurar</button></div>
         </article>)}

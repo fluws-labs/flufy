@@ -179,14 +179,14 @@ export function SessionPane({ sessionId, variant, onPreviewOpen }: { sessionId: 
             <div className="agent-recent">
               <div className="agent-recent-title">Sesiones recientes</div>
               {recent.map((s) => (
-                <button key={s.id} type="button" className="agent-recent-item" onClick={() => selectSession(s.id)}>
+                <button key={s.id} type="button" className="agent-recent-item" aria-label={s.title || "Sin título"} onClick={() => selectSession(s.id)}>
                   <Icon name="comment-discussion" />
                   <span className="agent-recent-name">{s.title || "Sin título"}</span>
                   <span className={`agent-recent-time tone-${ageTone(s.time.updated)}`}>{shortAgo(s.time.updated)}</span>
                 </button>
               ))}
               {history.groups.map(group => <TeamSessionHistory key={group.id} group={group}>
-                {group.sessions.map(s => <button key={s.id} type="button" className="agent-recent-item" onClick={() => selectSession(s.id)}>
+                {group.sessions.map(s => <button key={s.id} type="button" className="agent-recent-item" aria-label={s.title} onClick={() => selectSession(s.id)}>
                   <Icon name="hubot" /><span className="agent-recent-name">{s.title}</span>
                   <span className={`agent-recent-time tone-${ageTone(s.time.updated)}`}>{shortAgo(s.time.updated)}</span>
                 </button>)}
