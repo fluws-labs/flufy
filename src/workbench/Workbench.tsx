@@ -11,6 +11,7 @@ import { initUnseen } from "../state/unseen"
 import { startUsagePolling } from "../state/usage"
 import { startRoutines } from "../state/routines"
 import { startTeams } from "../state/teams"
+import { startResources } from "../state/resources"
 import { TeamsView } from "../views/TeamsView"
 import { startOutputCapture } from "../state/output"
 import { ensureShells, startAgentTerminals } from "../state/terminals"
@@ -78,6 +79,7 @@ function boot() {
     startUsagePolling()
     startRoutines()
     startTeams()
+    startResources()
     if (!root) return
     bindRoot(root)
     initFeatures()

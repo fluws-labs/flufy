@@ -1,0 +1,8 @@
+{
+  "files": [
+    {
+      "path": "src/math.js",
+      "edits": [{ "oldText": "return Math.min(min, Math.max(max, value))", "newText": "return Math.min(max, Math.max(min, value))" }]
+    }
+  ]
+}

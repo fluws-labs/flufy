@@ -1,0 +1,8 @@
+{
+  "files": [
+    {
+      "path": "src/math.js",
+      "edits": [{ "oldText": "return a - b", "newText": "return a + b" }]
+    }
+  ]
+}

@@ -18,9 +18,30 @@ export type LoginMethod = keyof typeof METHODS
 export type LoginFlow = { method: LoginMethod; url: string; code: string | null }
 export type AuthEntry = { id: string; kind: string }
 
-type AccountsState = { starting: LoginMethod | null; flow: LoginFlow | null; waitingFor: number; authEntries: AuthEntry[] | null; savingKey: boolean; savingZen: boolean }
+type AccountsState = { starting: LoginMethod | null; flow: LoginFlow | null; waitingFor: number; authEntries: AuthEntry[] | null; savingKey: boolean; savingZen: boolean; savingProvider: string | null }
 
-export const useAccounts = create<AccountsState>(() => ({ starting: null, flow: null, waitingFor: 0, authEntries: null, savingKey: false, savingZen: false }))
+export const useAccounts = create<AccountsState>(() => ({ starting: null, flow: null, waitingFor: 0, authEntries: null, savingKey: false, savingZen: false, savingProvider: null }))
+
+export async function connectApiProvider(id: string, name: string, key: string): Promise<boolean> {
+  const value = key.trim()
+  if (!value || /\s/.test(value)) {
+    notify.error("Revisá la clave", `Pegá la API key de ${name}, sin espacios.`)
+    return false
+  }
+  useAccounts.setState({ savingProvider: id })
+  try {
+    await api("PUT", `/auth/${encodeURIComponent(id)}`, { type: "api", key: value })
+    await loadAuthEntries()
+    await reloadProviders()
+    notify.success(`${name} conectado`, "Sus modelos ya aparecen en el selector del chat.")
+    return true
+  } catch (e) {
+    notify.error(`No se pudo conectar ${name}`, readableProviderError(e))
+    return false
+  } finally {
+    useAccounts.setState({ savingProvider: null })
+  }
+}
 
 export async function connectZen(key: string): Promise<boolean> {
   const value = key.trim()

@@ -1,0 +1,43 @@
+[
+  {
+    "id": "fix-add",
+    "title": "Corregir la suma",
+    "prompt": "En este repositorio hay un bug: la función add de src/math.js no suma. Ejecutá los tests, encontrá la causa y corregila. No modifiques los tests.",
+    "grade": "node --test test/add.test.js",
+    "timeoutSeconds": 300,
+    "tags": ["bugfix", "javascript"]
+  },
+  {
+    "id": "fix-sum",
+    "title": "Suma y promedio de listas vacías",
+    "prompt": "En este repositorio, sum y average fallan con listas vacías. Ejecutá los tests, corregí src/math.js para que sum([]) y average([]) devuelvan 0 sin romper el resto. No modifiques los tests.",
+    "grade": "node --test test/sum.test.js",
+    "timeoutSeconds": 300,
+    "tags": ["bugfix", "edge-cases", "javascript"]
+  },
+  {
+    "id": "fix-clamp",
+    "title": "Corregir clamp",
+    "prompt": "La función clamp de src/math.js devuelve valores incorrectos. Ejecutá los tests, encontrá el error y corregilo. No modifiques los tests.",
+    "grade": "node --test test/clamp.test.js",
+    "timeoutSeconds": 300,
+    "tags": ["bugfix", "javascript"]
+  },
+  {
+    "id": "fix-slugify",
+    "title": "Slugify con acentos y separadores",
+    "prompt": "slugify de src/text.js no maneja acentos, espacios repetidos ni separadores. Ejecutá los tests y corregila para que genere slugs estables. No modifiques los tests.",
+    "grade": "node --test test/slugify.test.js",
+    "timeoutSeconds": 300,
+    "tags": ["bugfix", "text", "javascript"]
+  },
+  {
+    "id": "add-palindrome",
+    "title": "Agregar isPalindrome",
+    "prompt": "Agregá y exportá una función isPalindrome en src/text.js. Debe devolver true si la cadena se lee igual al derecho y al revés, ignorando mayúsculas, espacios, puntuación y acentos. No modifiques los tests existentes.",
+    "grade": "node --test test/palindrome.test.js",
+    "timeoutSeconds": 300,
+    "copy": [{ "from": "graders/palindrome.test.js", "to": "test/palindrome.test.js" }],
+    "tags": ["feature", "text", "javascript"]
+  }
+]

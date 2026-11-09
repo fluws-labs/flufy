@@ -781,6 +781,9 @@
 .session-time {
   margin-left: auto;
 }
+.session-time.tone-fresh { color: var(--success); }
+.session-time.tone-today { color: var(--warn); }
+.session-time.tone-old { color: var(--fg-faint); }
 
 .segmented {
   display: flex;

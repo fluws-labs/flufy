@@ -43,6 +43,7 @@ import { CHATGPT } from "../state/accounts"
 import { useGit } from "../state/git"
 import { contextSettings, isAppRunning, pickWorkspace, runApp, stopApp, useFeatures, workspaceTitle } from "../state/features"
 import { useTerminals } from "../state/terminals"
+import { useResources } from "../state/resources"
 import { useDocs, docKey } from "../editor/documents"
 import { useEditors, openEditor } from "../state/editors"
 import { recentlyActive, useDesktopStatus } from "../lib/desktop"
@@ -65,7 +66,7 @@ const VIEWS: Array<{ id: ViewId; icon: string; title: string; keys: string }> = 
   { id: "search", icon: "search", title: "Buscar", keys: "Ctrl+Shift+F" },
   { id: "scm", icon: "source-control", title: "Control de código", keys: "Ctrl+Shift+G" },
   { id: "agents", icon: "comment-discussion", title: "Sesiones del agente", keys: "Ctrl+Shift+A" },
-  { id: "teams", icon: "organization", title: "Equipos IA", keys: "" },
+  { id: "teams", icon: "checklist", title: "Equipos IA", keys: "" },
   { id: "prs", icon: "git-pull-request", title: "Pull requests", keys: "" },
   { id: "routines", icon: "calendar", title: "Rutinas", keys: "" },
   { id: "memory", icon: "library", title: "Memoria", keys: "" },
@@ -199,6 +200,29 @@ function StatusItem({ icon, label, title, onClick, tone, spin, expanded }: { ico
       {icon && <Icon name={icon} spin={spin} />}
       {label && <span>{label}</span>}
     </button>
+  )
+}
+
+function ResourceStatusItem() {
+  const status = useResources((s) => s.status)
+  if (!status || !status.updatedAt) return null
+  const pressure = status.pressure
+  const label = `${Math.round(status.availableMemoryMb / 1024)}G libre · ${Math.round(status.cpuPercent)}%`
+  const detail = [
+    `RAM libre: ${(status.availableMemoryMb / 1024).toFixed(1)} de ${(status.totalMemoryMb / 1024).toFixed(1)} GB`,
+    `Commit libre: ${(status.commitAvailableMb / 1024).toFixed(1)} de ${(status.commitLimitMb / 1024).toFixed(1)} GB`,
+    `CPU: ${Math.round(status.cpuPercent)}%`,
+    `${status.processCount} procesos`,
+    status.otherFlufyInstances > 0 ? `${status.otherFlufyInstances} instancia(s) más de Flufy` : "",
+  ].filter(Boolean).join(" · ")
+  return (
+    <StatusItem
+      icon="pulse"
+      label={label}
+      title={`${detail} (clic para ver recursos)`}
+      tone={pressure === "critical" ? "attention" : pressure === "tight" ? "busy" : undefined}
+      onClick={() => openEditor({ kind: "resources" })}
+    />
   )
 }
 
@@ -610,6 +634,7 @@ export function StatusBar() {
           onClick={() => useLayout.getState().toggleAgent()}
           tone={busyCount > 0 ? "busy" : undefined}
         />
+        <ResourceStatusItem />
         <DesktopStatusItem />
         <QuotaStatus />
         <FallbackModels />

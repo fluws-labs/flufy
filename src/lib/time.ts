@@ -21,6 +21,16 @@ export function timeAgo(epochMs: number): string {
   return y === 1 ? "hace un año" : `hace ${y} años`
 }
 
+export type AgeTone = "fresh" | "today" | "old"
+
+export function ageTone(epochMs: number, now = Date.now()): AgeTone {
+  if (!Number.isFinite(epochMs) || epochMs <= 0) return "old"
+  const age = now - epochMs
+  if (age < HOUR * 1000) return "fresh"
+  if (age < DAY * 1000) return "today"
+  return "old"
+}
+
 export function shortAgo(epochMs: number): string {
   const s = Math.max(0, Math.floor((Date.now() - epochMs) / 1000))
   if (s < MINUTE) return "ahora"

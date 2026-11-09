@@ -147,6 +147,9 @@ impl ValidationReceipt {
 #[serde(default, rename_all = "camelCase")]
 pub struct PlanV2State {
     pub enabled: bool,
+    /// The chat that activated this run is the Lead itself; plan/coordination/
+    /// closeout reuse its original session instead of creating another Lead.
+    pub conversation_lead: bool,
     pub review_before_start: bool,
     pub stage: String,
     pub discovery: Vec<DiscoveryReport>,

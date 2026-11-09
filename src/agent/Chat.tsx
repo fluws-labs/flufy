@@ -12,6 +12,7 @@ import {
   ensureSessionView,
   focusComposer,
   forkSession,
+  insertComposerText,
   loadOlderMessages,
   queuedUserIds,
   retryMessage,
@@ -41,6 +42,45 @@ function visibleUserText(m: ChatMessage): string {
     .filter((p): p is Extract<Part, { type: "text" }> => p.type === "text" && !p.synthetic && !isDesktopContextText(p.text))
     .map((p) => p.text)
     .join("\n\n")
+}
+
+type QuoteTarget = { session: string; text: string; x: number; y: number; range: Range }
+
+function closestElement(node: Node | null): Element | null {
+  if (!node) return null
+  return node.nodeType === Node.ELEMENT_NODE ? (node as Element) : node.parentElement
+}
+
+function quoteTargetAtSelection(): Omit<QuoteTarget, "session"> | null {
+  const selection = window.getSelection()
+  if (!selection || selection.isCollapsed || selection.rangeCount === 0) return null
+  const text = selection.toString()
+  if (!text.trim()) return null
+  const range = selection.getRangeAt(0)
+  const start = closestElement(range.startContainer)
+  const end = closestElement(range.endContainer)
+  const md = start?.closest(".md")
+  if (!md || md !== end?.closest(".md") || !md.closest(".msg-assistant")) return null
+  const rects = range.getClientRects()
+  const last = rects[rects.length - 1] ?? range.getBoundingClientRect()
+  if (!last || (!last.width && !last.height)) return null
+  const x = Math.min(Math.max(last.left + last.width / 2, 44), window.innerWidth - 44)
+  return { text, x, y: Math.max(40, last.top), range: range.cloneRange() }
+}
+
+let quoteFlash: number | null = null
+
+function flashQuoteSource(range: Range) {
+  try {
+    CSS.highlights.set("quote-source", new Highlight(range.cloneRange()))
+    if (quoteFlash) window.clearTimeout(quoteFlash)
+    quoteFlash = window.setTimeout(() => {
+      CSS.highlights.delete("quote-source")
+      quoteFlash = null
+    }, 1200)
+  } catch {
+    /* el WebView no soporta la API de resaltado */
+  }
 }
 
 function Reasoning({ text, active }: { text: string; active: boolean }) {
@@ -288,9 +328,18 @@ function userMenu(session: Session, message: ChatMessage, e: React.MouseEvent) {
   ])
 }
 
+const INTERNAL_MARKER = "[FLUFY_EQUIPO_INTERNO]"
+
 export function Chat({ session, busy }: { session: Session; busy: boolean }) {
   const view = useAgent((s) => s.views[session.id])
-  const messages = useMemo(() => view?.messages ?? [], [view])
+  const messages = useMemo(() => {
+    const raw = view?.messages ?? []
+    const hidden = new Set(raw
+      .filter((message) => message.info.role === "user" && message.parts.some((part) => part.type === "text" && part.text.trimStart().startsWith(INTERNAL_MARKER)))
+      .map((message) => message.info.id))
+    const parent = (message: ChatMessage) => (message.info as { parentID?: string }).parentID
+    return raw.filter((message) => !hidden.has(message.info.id) && !(parent(message) && hidden.has(parent(message)!)))
+  }, [view])
   const teamSession = session.title.startsWith("Equipo · ") || messages.some(m => m.info.role === "user" && m.parts.some(p => p.type === "text" && p.text.startsWith("[GUILLECODE_TEAM_RUN]")))
   const failedID = latestFailedAssistant(messages)?.info.id
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -298,9 +347,8 @@ export function Chat({ session, busy }: { session: Session; busy: boolean }) {
   const stick = useRef(true)
   const restore = useRef<number | null>(null)
   const topRef = useRef<HTMLDivElement>(null)
-  const pinSentinel = useRef<HTMLDivElement | null>(null)
-  const [stuck, setStuck] = useState(false)
   const [retrying, setRetrying] = useState<string | null>(null)
+  const [quote, setQuote] = useState<QuoteTarget | null>(null)
   const revert = (session as Session & { revert?: { messageID: string } }).revert
 
   const recover = (message: ChatMessage, action: (id: string, failed: ChatMessage) => Promise<void>, problem: string) => {
@@ -316,33 +364,6 @@ export function Chat({ session, busy }: { session: Session; busy: boolean }) {
   const revertIndex = revert ? messages.findIndex((m) => m.info.id === revert.messageID) : -1
   const runningId = useMemo(() => runningAssistantId(messages, busy), [messages, busy])
   const queued = useMemo(() => queuedUserIds(messages, busy), [messages, busy])
-
-  const lastUser = useMemo(() => {
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const m = messages[i]
-      if (m.info.role === "user" && !isContextMessage(m)) return m
-    }
-    return null
-  }, [messages])
-  const lastUserId = lastUser?.info.id ?? null
-
-  useEffect(() => {
-    const sentinel = pinSentinel.current
-    const root = scrollRef.current
-    if (!sentinel || !root) {
-      setStuck(false)
-      return
-    }
-    const io = new IntersectionObserver(
-      ([entry]) => {
-        if (!entry?.rootBounds) return
-        setStuck(entry.boundingClientRect.top <= entry.rootBounds.top)
-      },
-      { root, threshold: 0 },
-    )
-    io.observe(sentinel)
-    return () => io.disconnect()
-  }, [lastUserId, view?.loading])
 
   useEffect(() => {
     stick.current = true
@@ -373,6 +394,7 @@ export function Chat({ session, busy }: { session: Session; busy: boolean }) {
     ro.observe(content)
     const onScroll = () => {
       stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80
+      setQuote(null)
     }
     el.addEventListener("scroll", onScroll, { passive: true })
     return () => {
@@ -408,21 +430,20 @@ export function Chat({ session, busy }: { session: Session; busy: boolean }) {
   }
 
   const lastIndex = messages.length - 1
+  const pickQuote = () => {
+    const target = quoteTargetAtSelection()
+    setQuote(target ? { ...target, session: session.id } : null)
+  }
   return (
-    <div className="chat-scroll" ref={scrollRef}>
-      {lastUser && stuck && (
-        <div className="pin-overlay" aria-hidden>
-          <div className="msg msg-user" onContextMenu={(e) => userMenu(session, lastUser, e)}>
-            <div className="msg-user-bubble">
-              <div className="msg-parts">
-                {lastUser.parts.map((p) => (
-                  <PartView key={p.id} part={p} live={false} />
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+    <div
+      className="chat-scroll"
+      ref={scrollRef}
+      onMouseDown={(e) => {
+        if (!(e.target as HTMLElement).closest(".chat-quote-btn")) setQuote(null)
+      }}
+      onMouseUp={() => requestAnimationFrame(pickQuote)}
+      onKeyUp={pickQuote}
+    >
       <div className="chat-messages" ref={contentRef}>
         {view.error && (
           <div className="msg-error" role="alert">
@@ -448,7 +469,6 @@ export function Chat({ session, busy }: { session: Session; busy: boolean }) {
           const live = runningId ? m.info.id === runningId : i === lastIndex && busy
           return (
             <Fragment key={m.info.id}>
-              {isUser && m.info.id === lastUserId && <div ref={pinSentinel} className="pin-sentinel" />}
               {revertIndex === i && (
                 <div className="revert-banner">
                   <Icon name="discard" />
@@ -459,7 +479,7 @@ export function Chat({ session, busy }: { session: Session; busy: boolean }) {
                 </div>
               )}
               <div
-                className={`msg msg-${m.info.role}${reverted ? " reverted" : ""}${isQueued ? " queued" : ""}${isUser && m.info.id === lastUserId && stuck ? " pin-hidden" : ""}`}
+                className={`msg msg-${m.info.role}${reverted ? " reverted" : ""}${isQueued ? " queued" : ""}`}
                 onContextMenu={isUser ? (e) => userMenu(session, m, e) : undefined}
               >
                 {isUser ? (
@@ -523,6 +543,28 @@ export function Chat({ session, busy }: { session: Session; busy: boolean }) {
           </div>
         )}
       </div>
+      {quote && quote.session === session.id && (
+        <button
+          type="button"
+          className="chat-quote-btn"
+          style={{ left: quote.x, top: quote.y }}
+          title="Citar este texto en tu respuesta"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => {
+            const body = quote.text
+              .replace(/\r\n/g, "\n")
+              .split("\n")
+              .map((line) => `> ${line}`.trimEnd())
+              .join("\n")
+            insertComposerText(session.id, `${body}\n\n`)
+            flashQuoteSource(quote.range)
+            window.getSelection()?.removeAllRanges()
+            setQuote(null)
+          }}
+        >
+          <Icon name="quote" /> Citar
+        </button>
+      )}
     </div>
   )
 }

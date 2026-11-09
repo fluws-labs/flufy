@@ -188,7 +188,30 @@ fn serve_static(app: &AppHandle, req: Request, path: &str) {
     let _ = req.respond(resp);
 }
 
+fn lead_blocked_route(route: &str, bound: bool) -> Option<&'static str> {
+    if !bound { return None; }
+    let route = route.split('?').next().unwrap_or(route);
+    let session = route.strip_prefix("/session/")?.split('/').next()?;
+    if session.is_empty() { return None; }
+    match route.rsplit('/').next() {
+        Some("command" | "abort") => Some(
+            "Esta conversación está vinculada a un Lead. Los comandos y la detención directa todavía no están disponibles desde este cliente.",
+        ),
+        _ => None,
+    }
+}
+
 fn proxy(app: &AppHandle, mut req: Request, target_path: &str) {
+    // A session bound to a conversational Lead must reach the durable actor,
+    // never a second direct prompt from another client. There is no actor yet,
+    // so refusing is safer than silently opening a parallel turn.
+    let route = target_path.split('?').next().unwrap_or(target_path);
+    if let Some(session) = route.strip_prefix("/session/").and_then(|rest| rest.split('/').next()) {
+        let bound = crate::teams::bound_chat(app, session).ok().flatten().is_some();
+        if let Some(error) = lead_blocked_route(route, bound) {
+            return respond_json(req, 409, json!({ "error": error }));
+        }
+    }
     if crate::updates::installing(app) && req.method().as_str() != "GET" {
         return respond_json(req, 503, json!({ "error": "Flufy se está actualizando. Reintentá cuando vuelva a abrirse." }));
     }
@@ -206,6 +229,22 @@ fn proxy(app: &AppHandle, mut req: Request, target_path: &str) {
         let name = h.field.as_str().as_str().to_ascii_lowercase();
         if name == "content-type" || name == "accept" || name == "x-opencode-directory" {
             upstream = upstream.set(&name, h.value.as_str());
+        }
+    }
+    if method == "POST" && route.ends_with("/prompt_async") {
+        if let Some(session) = route.strip_prefix("/session/").and_then(|rest| rest.split('/').next()) {
+            if !session.is_empty() && crate::teams::bound_chat(app, session).ok().flatten().is_some() {
+                let text = serde_json::from_slice::<serde_json::Value>(&body).ok()
+                    .and_then(|prompt| prompt["parts"].as_array().map(|parts| parts.iter()
+                        .filter(|part| part["type"] == "text")
+                        .filter_map(|part| part["text"].as_str())
+                        .collect::<Vec<_>>().join("\n")))
+                    .unwrap_or_default();
+                return match crate::teams::send_lead_message(app, session, &text) {
+                    Ok(_) => respond_json(req, 202, json!({ "accepted": true, "gateway": "durable-lead" })),
+                    Err(error) => respond_json(req, 400, json!({ "error": error })),
+                };
+            }
         }
     }
     let result = if body.is_empty() && method != "POST" && method != "PATCH" && method != "PUT" {
@@ -810,4 +849,20 @@ pub fn remote_qr(text: String) -> Result<String, String> {
         .dark_color(svg::Color("#0a0d13"))
         .light_color(svg::Color("#ffffff"))
         .build())
+}
+
+#[cfg(test)]
+mod lead_route_tests {
+    use super::lead_blocked_route;
+    #[test]
+    fn bound_sessions_reject_direct_prompt_commands_but_allow_observation() {
+        for route in ["/session/ses_1/command", "/session/ses_1/abort"] {
+            assert!(lead_blocked_route(route, true).is_some(), "{route}");
+        }
+        for route in ["/session/ses_1/prompt_async", "/session/ses_1/prompt_async?directory=C:/repo", "/session/ses_1/message", "/session/ses_1", "/session/status", "/session"] {
+            assert!(lead_blocked_route(route, true).is_none(), "{route}");
+        }
+        assert!(lead_blocked_route("/session/ses_1/prompt_async", false).is_none());
+        assert!(lead_blocked_route("/session//prompt_async", true).is_none());
+    }
 }

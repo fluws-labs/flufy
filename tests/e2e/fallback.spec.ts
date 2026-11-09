@@ -146,6 +146,12 @@ async function setup(page: Page) {
 
 async function openChat(page: Page) {
   await expect(page.getByTitle("Equipos IA", { exact: true })).toBeVisible()
+  const restored = page.getByRole("button", { name: `Equipo · ${chatTitle}` })
+  if (await restored.first().isVisible()) {
+    await restored.first().click()
+    await expect(page.getByLabel("Mensaje para el equipo")).toBeVisible()
+    return
+  }
   if (!await page.getByRole("heading", { name: "Historial de Team Chats" }).isVisible()) {
     await page.getByTitle("Equipos IA", { exact: true }).click()
   }

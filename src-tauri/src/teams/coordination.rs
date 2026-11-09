@@ -262,11 +262,12 @@ fn check_once(app: &AppHandle, run_id: &str, request_id: &str) -> Result<(), Str
     let session = if reuse {
         request.sessions.last().unwrap().clone()
     } else {
-        runner::create_session(
+        runner::lead_session(
+            app,
+            &r,
             &client,
             &employee,
             &format!("{} · coordinación {}", r.team.name, task.title),
-            true,
         )?
     };
     crate::memory::set_session(app, &session, super::memory_for_run(app, run_id));

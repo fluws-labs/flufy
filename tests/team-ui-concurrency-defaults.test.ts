@@ -46,7 +46,7 @@ function form(file: string, exported: string, team?: Record<string, unknown>) {
   }
   visit(tree)
   const input = nodes.find(node => node.type === "input" && node.props.type === "number")
-  const button = nodes.find(node => node.type === "button" && node.props.children === (exported === "TeamEditorForm" ? "Guardar equipo" : "Guardar ruteo para próximos objetivos"))
+  const button = nodes.find(node => node.type === "button" && node.props.children === (exported === "TeamEditorForm" ? "Guardar plantilla" : "Guardar ruteo para próximos objetivos"))
   assert.ok(input)
   assert.ok(button)
   return { calls, input: input.props, save: async () => { button.props.onClick(); await new Promise(resolve => setImmediate(resolve)) } }

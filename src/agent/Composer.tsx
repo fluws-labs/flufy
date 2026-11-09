@@ -237,6 +237,27 @@ export function Composer({
     })
   }, [draft, setText])
 
+  const draftInsert = useAgent((s) => s.draftInsert)
+  useEffect(() => {
+    if (!draftInsert) return
+    if (draftInsert.session !== sessionId) {
+      useAgent.setState({ draftInsert: null })
+      return
+    }
+    useAgent.setState({ draftInsert: null })
+    const previous = sessionRuntime(draftKey).draft ?? ""
+    const lead = previous.length === 0 ? "" : previous.endsWith("\n\n") ? "" : previous.endsWith("\n") ? "\n" : "\n\n"
+    const next = `${previous}${lead}${draftInsert.text}`
+    setText(next)
+    requestAnimationFrame(() => {
+      const el = ref.current
+      if (!el) return
+      el.focus()
+      el.setSelectionRange(next.length, next.length)
+    })
+  }, [draftInsert, draftKey, sessionId, setText])
+
+
   useEffect(() => {
     const el = ref.current
     if (!el) return

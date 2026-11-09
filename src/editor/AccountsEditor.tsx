@@ -5,10 +5,12 @@ import { Toggle } from "../components/fields"
 import { Icon } from "../components/ui"
 import { formatTokens } from "../lib/format"
 import { modelKey } from "../lib/opencode"
+import { API_KEY_PROVIDERS } from "../lib/providers"
 import {
   CHATGPT,
   ZEN,
   cancelLogin,
+  connectApiProvider,
   connectOpencode,
   connectZen,
   loadAuthEntries,
@@ -41,7 +43,12 @@ type ProviderRow = {
   inUse: boolean
 }
 
-const PROVIDER_LABELS: Record<string, string> = { [ZEN]: "OpenCode Zen" }
+const PROVIDER_LABELS: Record<string, string> = {
+  [ZEN]: "OpenCode Zen",
+  anthropic: "Anthropic",
+  google: "Google Gemini",
+  openrouter: "OpenRouter",
+}
 
 function describeProviders(providers: ConnectedProvider[], entries: AuthEntry[] | null, models: ProviderModel[], current: string): ProviderRow[] {
   const ids = [...new Set([...providers.map((p) => p.id), ...(entries ?? []).map((e) => e.id)])]
@@ -194,9 +201,11 @@ export function AccountsEditor({ onboarding = false, onContinue }: { onboarding?
   const zenFreeOnly = useAgent((s) => s.zenFreeOnly)
   const savingKey = useAccounts((s) => s.savingKey)
   const savingZen = useAccounts((s) => s.savingZen)
+  const savingProvider = useAccounts((s) => s.savingProvider)
   const entries = useAccounts((s) => s.authEntries)
   const [key, setKey] = useState("")
   const [zenKey, setZenKey] = useState("")
+  const [providerKeys, setProviderKeys] = useState<Record<string, string>>({})
   const go = providers.find((p) => p.id === "opencode-go")
   const zenOn = !!entries?.some((e) => e.id === ZEN)
   const canContinue = modelsLoaded && !modelsError && models.length > 0 && waitingFor === 0
@@ -281,7 +290,7 @@ export function AccountsEditor({ onboarding = false, onContinue }: { onboarding?
         </div>
       </header>
       <section className="doc-section remote-section">
-        <p className="remote-text">Usá solamente ChatGPT, solamente OpenCode o ambos. Conectar una sola cuenta alcanza; podés agregar la otra cuando quieras.</p>
+        <p className="remote-text">Usá ChatGPT, OpenCode o una API key de Anthropic, Google u OpenRouter. Con una cuenta alcanza; podés sumar las demás cuando quieras.</p>
         <p className="remote-text">OpenCode viene incluido como motor interno de Flufy. Si elegís ChatGPT, no necesitás una cuenta ni una clave de OpenCode.</p>
         {waiting && <p className="remote-text"><Icon name="loading" spin /> Consultando tus cuentas…</p>}
         {showError && <div className="view-error">No se pudieron verificar tus cuentas: {modelsError ?? "el motor no respondió"}. Usá «Recargar modelos» para reintentar.</div>}
@@ -368,6 +377,52 @@ export function AccountsEditor({ onboarding = false, onContinue }: { onboarding?
             <Toggle checked={zenFreeOnly} onChange={(value) => setZenFreeOnly(value)} label={zenFreeOnly ? "Solo modelos gratuitos de Zen" : "Todos los modelos de Zen"} />
           )}
           <span>Se guarda en el motor local, sin crear una consulta de pago. El acceso real depende de la clave y del saldo de Zen.</span>
+        </div>
+        <div className="remote-steps">
+          <strong><Icon name="key" /> Anthropic, Google y OpenRouter</strong>
+          <span>Conectá una API key por proveedor. Sus modelos se suman al selector del chat y podés elegir uno distinto por agente o por equipo.</span>
+          {API_KEY_PROVIDERS.map((provider) => {
+            const connected = !!entries?.some((entry) => entry.id === provider.id) || providers.some((p) => p.id === provider.id)
+            const value = providerKeys[provider.id] ?? ""
+            const saving = savingProvider === provider.id
+            return (
+              <form
+                key={provider.id}
+                className="accounts-key-form"
+                onSubmit={(event) => {
+                  event.preventDefault()
+                  void connectApiProvider(provider.id, provider.name, value).then((saved) => {
+                    if (saved) setProviderKeys((prev) => ({ ...prev, [provider.id]: "" }))
+                  })
+                }}
+              >
+                <label htmlFor={`key-${provider.id}`}>
+                  {provider.name} {connected && <span className="routine-pill ok">Conectado</span>}
+                </label>
+                <span className="accounts-hint">{provider.hint}</span>
+                <div className="remote-command">
+                  <input
+                    id={`key-${provider.id}`}
+                    className="input"
+                    type="password"
+                    autoComplete="off"
+                    spellCheck={false}
+                    value={value}
+                    placeholder={connected ? "Pegá una nueva clave para reemplazarla" : "Pegá tu API key"}
+                    disabled={saving}
+                    onChange={(event) => setProviderKeys((prev) => ({ ...prev, [provider.id]: event.target.value }))}
+                  />
+                  <button type="submit" className="btn btn-sm btn-primary" disabled={!value.trim() || saving || !!starting || !!flow}>
+                    <Icon name={saving ? "loading" : "plug"} spin={saving} /> {saving ? "Guardando…" : connected ? "Reemplazar" : "Conectar"}
+                  </button>
+                  <button type="button" className="btn btn-sm" onClick={() => void openUrl(provider.url)}>
+                    <Icon name="link-external" /> Obtener clave
+                  </button>
+                </div>
+              </form>
+            )
+          })}
+          <span>Se guardan en el opencode de esta PC, igual que las demás cuentas. El motor comprueba el acceso al usar el modelo.</span>
         </div>
         {models.length > 0 && <div className="remote-steps">
           <strong><Icon name="sparkle" /> Modelo del agente</strong>
