@@ -906,7 +906,7 @@ fn plan(app: &AppHandle, id: &str) -> Result<(), String> {
     } else {
         let prompt = if r.plan_session_id.is_some() {
             let history = client.get_resilient(&format!("/session/{}/message", session))?;
-            if !super::fallback::settled_tools(&history) {
+            if r.continuous_fallback.is_some() && !super::fallback::settled_tools(&history) {
                 return Err("La planificación conserva herramientas con efectos inciertos; no se reenvió el pedido".into());
             }
             format!("Continuá ESTA planificación desde su historia y resultados guardados; no repitas operaciones completadas. Revisá las indicaciones vigentes y completá solo lo pendiente.\n{}", prompt)
@@ -1192,7 +1192,7 @@ fn worker(app: &AppHandle, run_id: &str, task_id: &str) -> Result<(), String> {
     } else { prompt };
     let messages = if recovering {
         let history = client.get_resilient(&format!("/session/{}/message", session))?;
-        if !super::fallback::settled_tools(&history) {
+        if r.continuous_fallback.is_some() && !super::fallback::settled_tools(&history) {
             return Err("La sesión recuperada tiene herramientas con efectos inciertos. Revisá su actividad y reconciliá el resultado antes de continuar; no se reenvió el pedido".into());
         }
         if reusable_worker_result(&t, &history) {
@@ -1419,7 +1419,7 @@ pub fn reconcile(app: &AppHandle, r: &Run, abort: bool) -> Result<(), String> {
             Err(error) => return Err(error),
         }
         let history = client.get_resilient(&format!("/session/{}/message", session))?;
-        if !abort && !super::fallback::settled_tools(&history) {
+        if !abort && r.continuous_fallback.is_some() && !super::fallback::settled_tools(&history) {
             return Err("La sesión conserva herramientas con efectos inciertos; reconciliá su resultado antes de continuar. No se reenvió ningún pedido".into());
         }
         let busy = state[session]["type"]
