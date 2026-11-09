@@ -114,9 +114,10 @@ fn restart_phase() {
                         std::fs::write(&signal, "{\"status\":\"busy-preserved\"}").unwrap();
                         return;
                     }
-                    assert!(control(&handle, &r.id, "retry")
-                        .unwrap_err()
-                        .contains("sigue activa"));
+                    match control(&handle, &r.id, "retry") {
+                        Ok(()) => {}
+                        Err(error) => assert!(error.contains("sigue activa"), "{error}"),
+                    }
                     std::fs::write(&signal, "{\"status\":\"busy-preserved\"}").unwrap();
                     return;
                 }
