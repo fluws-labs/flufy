@@ -1,0 +1,9 @@
+Modelos fallback continuos
+- Si el modelo principal alcanza su límite de uso, el equipo continúa con los modelos alternativos en el orden que elijas.
+- Configurá la lista desde Cuotas o desde el chat; el modo continuo se activa explícitamente y conserva el modelo y la variante original.
+- La recuperación sobrevive reinicios: conserva sesiones, intentos y efectos ya aplicados, sin repetir trabajo.
+- Al completar, el selector vuelve al modelo inicial o respeta tu elección manual.
+
+Otros
+- El envío normal del equipo ya no refresca el estado antes de cada mensaje.
+- Se conservan las previsualizaciones y la identidad de tarea al delegar al equipo.
