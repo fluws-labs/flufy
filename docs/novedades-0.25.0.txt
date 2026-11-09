@@ -1,0 +1,18 @@
+Lead conversacional y equipos
+- El chat normal puede convertirse en el Lead de un equipo, con inbox durable, recuperación tras reinicio, errores visibles y opción de desvincular.
+- Se restauró el arranque manual de Modo equipo, su composer y sus controles.
+- El Lead ya no queda trabado al activar un equipo.
+
+Índice de código local
+- Búsqueda léxica de símbolos, imports y fragmentos, con code_search, code_symbols, code_context y code_apply_patch.
+- Sin embeddings ni fastembed: el build vuelve a ser liviano.
+
+Recursos de la PC
+- Monitor de RAM, commit, CPU y procesos.
+- Límite dinámico de agentes, avisos en la interfaz y editor de recursos.
+- Detecta otras instancias de Flufy y pausa el índice bajo presión.
+
+Otros
+- Proveedores Anthropic, Google y OpenRouter con API key.
+- Citas de respuestas, colores por antigüedad y mejoras de accesibilidad.
+- Compatibilidad con el editor visual y las previsualizaciones de 0.24.0.
