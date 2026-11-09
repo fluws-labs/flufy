@@ -14,12 +14,16 @@ pub struct Origin {
     pub created_at: i64,
     #[serde(default)]
     pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview_reference: Option<crate::preview::Reference>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Request {
     project_root: String,
+    #[serde(default)]
+    preview_identity: Option<crate::preview::Identity>,
     title: String,
     goal: String,
     plan: String,
@@ -36,11 +40,13 @@ struct Source {
     user_request: String,
     model: ModelRef,
     variant: Option<String>,
+    preview_reference: Option<crate::preview::Reference>,
 }
 
 pub fn tools() -> Vec<Value> {
     vec![json!({"name":"delegate","description":"Inicia un equipo para implementar el plan acordado en ESTE chat después de que el usuario elija «Con un equipo» o pida explícitamente esa delegación. Antes de empezar un trabajo de implementación no trivial, si no eligió modo, preguntale una sola vez con question: «¿Querés que lo resuelva un equipo o seguimos en este chat?»; no preguntes en consultas ni cambios triviales. Transfiere objetivo, plan, investigación relevante, decisiones y aceptación; hereda carpeta y modelo, conserva enlace al chat de origen y devuelve el ID de la ejecución real. No usar para preguntas o ejemplos sobre equipos. Reintentos del mismo pedido reutilizan el equipo y no duplican ejecuciones.","inputSchema":{"type":"object","additionalProperties":false,"properties":{
         "projectRoot":{"type":"string","description":"Carpeta absoluta de este chat, incluido su worktree si corresponde. El servidor la contrasta con la sesión real."},
+        "previewIdentity":{"type":"object","description":"Identidad exacta de la tarea vigente elegida por el usuario en el panel. Obligatoria si esta conversación tiene diseños; nunca inferir la última fila ni reutilizar otra tarea.","properties":{"projectRoot":{"type":"string"},"sessionId":{"type":"string"},"taskId":{"type":"string"},"designId":{"type":"string"}},"required":["projectRoot","sessionId","taskId","designId"],"additionalProperties":false},
         "title":{"type":"string","description":"Nombre breve del trabajo"},
         "goal":{"type":"string","description":"Resultado que el usuario quiere conseguir"},
         "plan":{"type":"string","description":"Plan concreto acordado, con alcance y pasos de implementación. No basta decir implementá lo conversado."},
@@ -69,7 +75,7 @@ fn source_from(session_id: &str, session: &Value, messages: &Value) -> Result<So
     Ok(Source { session_id:session_id.into(), message_id:message_id.into(),
         title:session["title"].as_str().unwrap_or("Chat de origen").into(),
         directory:session["directory"].as_str().filter(|s| !s.is_empty()).ok_or("El chat no tiene una carpeta de origen")?.into(),
-        user_request, model, variant:user["info"]["variant"].as_str().filter(|s| !s.is_empty()).map(String::from) })
+        user_request, model, variant:user["info"]["variant"].as_str().filter(|s| !s.is_empty()).map(String::from), preview_reference:None })
 }
 
 fn goal(request: &Request, source: &Source) -> Result<String, String> {
@@ -79,7 +85,8 @@ fn goal(request: &Request, source: &Source) -> Result<String, String> {
         || request.decisions.len() > 30 || request.decisions.iter().any(|d| d.decision.trim().is_empty() || d.source.trim().is_empty()) {
         return Err("La delegación necesita título, objetivo, plan concreto, aceptación y decisiones con fuente".into());
     }
-    let payload = json!({"goal":request.goal,"implementationPlan":request.plan,"researchContext":request.context,
+    if let Some(reference) = &source.preview_reference { crate::preview::reference_context(reference)?; }
+    let payload = json!({"goal":request.goal,"implementationPlan":request.plan,"researchContext":request.context,"approvedPreview":source.preview_reference,
         "projectConstraints":request.decisions,"acceptanceCriteria":request.acceptance_criteria,
         "source":{"sessionId":source.session_id,"messageId":source.message_id,"title":source.title,
             "userRequest":source.user_request.chars().take(4000).collect::<String>()}});
@@ -106,7 +113,7 @@ fn prepare(store: &mut Store, request: &Request, source: &Source, memory: bool) 
     let mut chat = super::autonomous_chat(store, source.directory.clone(), source.model.clone(), source.variant.clone())?;
     chat.title = request.title.trim().into();
     chat.origin = Some(Origin { session_id:source.session_id.clone(), message_id:source.message_id.clone(),
-        title:source.title.clone(), directory:source.directory.clone(), created_at:now(), error:None });
+        title:source.title.clone(), directory:source.directory.clone(), created_at:now(), error:None, preview_reference:source.preview_reference.clone() });
     chat.memory = Some(memory);
     // Ordinary chat auto-approval is not a grant to a new autonomous team.
     chat.auto_approve = Some(false);
@@ -138,6 +145,27 @@ fn delegate(app: &AppHandle, args: &Value) -> Result<Value, String> {
     let state = app.state::<super::TeamsState>();
     let _dispatch = state.handoffs.lock().map_err(|_| "No se pudo ordenar el traspaso")?;
     crate::desktop::tasks::check_bound(app)?;
+    // A retry resumes the stored snapshot, even if the source has a newer draft.
+    // Do not resolve mutable designs again or replace a missing legacy snapshot.
+    let existing = super::read(app)?.chats.into_iter().find(|chat| chat.origin.as_ref().is_some_and(|origin|
+        origin.session_id == source.session_id && origin.message_id == source.message_id));
+    source.preview_reference = if let Some(chat) = existing {
+        let origin = chat.origin.as_ref().ok_or("PREVIEW_REFERENCE_MISSING: falta el origen persistido")?;
+        if let Some(requested) = &request.preview_identity {
+            if let Some(frozen) = &origin.preview_reference {
+                if super::canonical(&requested.project_root)? != frozen.identity.project_root || requested.session_id != frozen.identity.session_id
+                    || requested.task_id != frozen.identity.task_id || requested.design_id != frozen.identity.design_id {
+                    return Err("PREVIEW_SCOPE: la tarea solicitada difiere de la referencia congelada de esta ejecución".into());
+                }
+            } else {
+                return Err("PREVIEW_REFERENCE_MISSING: este traspaso no conserva una referencia; no se sustituye al reanudar".into());
+            }
+        }
+        if let Some(reference) = &origin.preview_reference { crate::preview::reference_context_for_origin(reference,&source.directory,&source.session_id)?; }
+        origin.preview_reference.clone()
+    } else {
+        crate::preview::session_reference(app, &root, &source.session_id, request.preview_identity.clone())?
+    };
     let (chat, reused) = update(app, |store| prepare(store, &request, &source, crate::memory::session_enabled(app, &source.session_id)))?;
     if !chat.runs.is_empty() { return Ok(receipt(&chat, true)); }
     if chat.archived { return Err("El equipo de este pedido está archivado; restauralo para continuar".into()); }

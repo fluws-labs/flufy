@@ -243,7 +243,7 @@ fn agent_config(state: &DesktopState) -> Value {
     // conserva además el prompt específico y no puede editar su propio plano.
     let mut config = json!({
         "mcp": mcp,
-        "permission": { "desktop_*": "allow", "browser_*": "allow" },
+        "permission": { "desktop_*": "allow", "browser_*": "allow", "teams_preview_*": "allow" },
         "agent": {
             "escritorio": {
                 "mode": "primary",
@@ -353,7 +353,7 @@ pub(crate) fn tool_list(channel: Channel) -> Vec<Value> {
         Channel::Routines => routines::definitions(),
         Channel::Terminal => terminal::definitions(),
         Channel::Worktrees => worktrees::definitions(),
-        Channel::Teams => crate::teams::handoff::tools(),
+        Channel::Teams => { let mut tools = crate::teams::handoff::tools(); tools.extend(crate::preview::tools()); tools },
         Channel::Memory => crate::memory::tool_list(),
         Channel::Plane => crate::plane::tool_list(),
     }
@@ -382,7 +382,15 @@ fn call_tool(app: &AppHandle, channel: Channel, name: &str, args: &Value) -> Val
         Channel::Routines => routines::call(app, name, args),
         Channel::Terminal => terminal::call(app, name, args),
         Channel::Worktrees => worktrees::call(app, name, args),
-        Channel::Teams => crate::teams::handoff::call(app, name, args),
+        Channel::Teams => {
+            let name = name.strip_prefix("teams_").unwrap_or(name);
+            if name.starts_with("preview_") {
+                match crate::preview::call(app, name, args) {
+                    Ok(value) => json!({"content":[{"type":"text","text":value.to_string()}]}),
+                    Err(error) => json!({"content":[{"type":"text","text":error}],"isError":true}),
+                }
+            } else { crate::teams::handoff::call(app, name, args) }
+        },
         Channel::Memory => crate::memory::call_tool(app, name, args),
         Channel::Plane => crate::plane::call_tool(app, name, args),
         #[cfg(windows)]
@@ -605,6 +613,18 @@ mod tests {
         assert!(text.contains("no delegues"));
         let config = agent_config(&state());
         assert_eq!(config["mcp"]["teams"]["url"], "http://127.0.0.1:4242/mcp/teams");
+    }
+
+    #[test]
+    fn preview_tools_are_listed_without_prefix_in_teams_channel() {
+        let listed = tool_list(Channel::Teams);
+        let names: Vec<&str> = listed.iter().filter_map(|t| t["name"].as_str()).collect();
+        assert_eq!(names, vec!["delegate", "preview_get", "preview_identity", "preview_apply"]);
+        assert_eq!(Channel::Teams.name(), "teams");
+        let config = agent_config(&state());
+        assert_eq!(config["permission"]["teams_preview_*"], "allow");
+        assert!(config["mcp"]["teams"]["url"].as_str().unwrap().ends_with("/mcp/teams"));
+        assert!(!names.contains(&"preview_choose") && !names.contains(&"preview_approve"));
     }
 
     #[test]

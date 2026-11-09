@@ -101,7 +101,7 @@ export function PermissionCard({ request }: { request: PermissionRequest }) {
   )
 }
 
-export function QuestionCard({ request }: { request: QuestionRequest }) {
+export function QuestionCard({ request, onAnswer, onSkip, title = "El agente te pregunta" }: { request: QuestionRequest; onAnswer?: (answers: string[][]) => void; onSkip?: () => void; title?: string }) {
   const [answers, setAnswers] = useState<string[][]>(() => request.questions.map(() => []))
   const [custom, setCustom] = useState<string[]>(() => request.questions.map(() => ""))
   const [open, setOpen] = useState(true)
@@ -123,7 +123,7 @@ export function QuestionCard({ request }: { request: QuestionRequest }) {
       <div className="interaction-head">
         <Icon name="question" className="interaction-icon" />
         <div className="interaction-titles">
-          <div className="interaction-title">El agente te pregunta</div>
+          <div className="interaction-title">{title}</div>
           <div className="interaction-sub">
             {open ? `${count} pregunta${count === 1 ? "" : "s"} sin responder` : preview}
           </div>
@@ -174,10 +174,10 @@ export function QuestionCard({ request }: { request: QuestionRequest }) {
             </div>
           ))}
           <div className="interaction-actions">
-            <button type="button" className="btn btn-sm btn-primary" disabled={!ready} onClick={() => void replyQuestion(request, final)}>
+            <button type="button" className="btn btn-sm btn-primary" disabled={!ready} onClick={() => onAnswer ? onAnswer(final) : void replyQuestion(request, final)}>
               <Icon name="send" /> Responder
             </button>
-            <button type="button" className="btn btn-sm" onClick={() => void rejectQuestion(request)}>
+            <button type="button" className="btn btn-sm" onClick={() => onSkip ? onSkip() : void rejectQuestion(request)}>
               Saltear
             </button>
           </div>

@@ -1,6 +1,7 @@
 import { useState } from "react"
 import { call, errorMessage } from "../lib/tauri"
 import { Icon } from "../components/ui"
+import { useTeams } from "../state/teams"
 import type { DeliveryFlow, TeamRun } from "./types"
 import "./delivery-review.css"
 
@@ -12,8 +13,13 @@ export function DeliveryReview({ run, chatId, onOpenPage, onSession, onPrepare }
   const [opening, setOpening] = useState<string | null>(null)
   const [preparing, setPreparing] = useState<string | null>(null)
   const [problem, setProblem] = useState<{ title: string; text: string } | null>(null)
+  const chat = useTeams((s) => s.chats.find((c) => c.id === chatId))
+  const approvedRevisionId = chat?.origin?.previewReference?.revision?.id
   const report = run.deliveryReview
-  if (!report) return <p className="team-note">Esta entrega no tiene una guía de revisión registrada. Las comprobaciones disponibles están en las evidencias.</p>
+  const referenceNote = approvedRevisionId
+    ? <p className="team-note">Referencia visual aprobada: <code>{approvedRevisionId}</code>. El diseño aprobado y el resultado implementado, con revisión, viewport y estado, se comparan en «Diseño aprobado / implementación». La referencia queda congelada para tu revisión manual.</p>
+    : null
+  if (!report) return <section className="team-card" aria-label="Referencia visual aprobada">{referenceNote ?? <p className="team-note">Esta entrega no tiene una guía de revisión registrada. Las comprobaciones disponibles están en las evidencias.</p>}</section>
   const source = (flow: DeliveryFlow) => {
     const task = run.tasks.find(t => t.id === flow.taskId)
     return { task, attempt: task?.attempts.find(a => a.id === flow.attemptId) }
@@ -32,6 +38,7 @@ export function DeliveryReview({ run, chatId, onOpenPage, onSession, onPrepare }
   }
   return <section className="delivery-review" aria-label="Guía de revisión de la entrega">
     <header className="delivery-review-heading"><Icon name="checklist" /><div><h3>Qué cambió y qué revisar</h3><p>{report.summary}</p></div></header>
+    {referenceNote}
     {!report.uiRequired && <p className="team-note">{report.reason}</p>}
     <div className="delivery-review-flows">{report.flows.map((flow, index) => {
       const { task, attempt } = source(flow)

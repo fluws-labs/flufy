@@ -23,6 +23,7 @@ pub mod memory;
 pub mod oc;
 pub mod plane;
 pub mod proc;
+pub mod preview;
 pub mod process_tree;
 pub mod push;
 pub mod remote;
@@ -358,6 +359,18 @@ pub fn run() {
             routines::routines_set_enabled,
             routines::routines_run_now,
             teams::teams_state,
+            preview::preview_get,
+            preview::preview_list,
+            preview::preview_choose,
+            preview::preview_apply,
+            preview::preview_approve,
+            preview::preview_identity,
+            preview::preview_reference,
+            preview::preview_transfer,
+            preview::preview_capture_register,
+            preview::preview_capture_get,
+            preview::preview_capture_list,
+            preview::preview_capture_image,
             teams::team_activity,
             teams::teams_save,
             teams::teams_delete,

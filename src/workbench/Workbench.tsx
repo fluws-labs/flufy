@@ -146,6 +146,7 @@ export function Workbench() {
   const modelsLoaded = useAgent((s) => s.modelsLoaded)
   const modelCount = useAgent((s) => s.models.length)
   const [setup, setSetup] = useState(false)
+  const [previewOpen, setPreviewOpen] = useState(false)
   const [previousModelCount, setPreviousModelCount] = useState<number | null>(null)
   if (modelsLoaded && previousModelCount !== modelCount) {
     setPreviousModelCount(modelCount)
@@ -261,8 +262,8 @@ export function Workbench() {
                 onDoubleClick={() => useLayout.getState().applyPreset(agentWidth > window.innerWidth * 0.5 ? "balanced" : "agent")}
               />
             )}
-            <div className="agent-slot" style={focusChat || !root ? { flex: 1 } : { width: agentWidth }}>
-              <AgentPanel />
+            <div className="agent-slot" style={focusChat || !root ? { flex: 1 } : { width: previewOpen ? Math.max(agentWidth, 720) : agentWidth }}>
+              <AgentPanel previewOpen={previewOpen} onPreviewOpen={() => setPreviewOpen(true)} onPreviewClose={() => setPreviewOpen(false)} />
             </div>
           </>
         )}
