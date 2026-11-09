@@ -1,8 +1,16 @@
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { call, errorMessage } from "../lib/tauri"
 import { readableTeamError } from "../lib/provider-error"
 import type { Observation, TeamRun } from "./types"
 import { formatDateTime } from "../lib/time"
+import { useTeams } from "../state/teams"
+import {
+  PreviewComparison,
+  captureAttribution,
+  isPreviewReference,
+  type PreviewImplementation,
+  type PreviewReference,
+} from "../preview"
 
 function useCapture(runId: string, observation: Observation | undefined): { url?: string; error?: string } {
   const key = `${runId}:${observation?.id}:${observation?.artifactPath}:${observation?.status}`
@@ -58,21 +66,74 @@ function Pair({ run, baseline, before, after }: { run: TeamRun; baseline: TeamRu
   </div>
 }
 
-export function EvidenceComparison({ run, history }: { run: TeamRun; history: TeamRun[] }) {
+function useImplementations(run: TeamRun, reference: PreviewReference | null): PreviewImplementation[] {
+  const observations = useMemo(() => (run.observations ?? []).filter((o) => o.phase === "after"), [run])
+  const key = `${run.id}:${reference?.revision.id ?? ""}:${observations.map((o) => `${o.id}:${o.artifactPath}:${o.status}`).join("|")}`
+  const [result, setResult] = useState<{ key: string; items: PreviewImplementation[] }>({ key: "", items: [] })
+  useEffect(() => {
+    let disposed = false
+    setResult({ key, items: [] })
+    if (!reference || observations.length === 0) return
+    // Only captures that record their own identity, revision and viewport are
+    // shown. Observations without attribution stay out instead of being labeled
+    // with the reference we expect.
+    const attributed = observations.flatMap((observation) => {
+      const attribution = captureAttribution(observation.details)
+      return attribution ? [{ observation, attribution }] : []
+    })
+    if (attributed.length === 0) return
+    void Promise.all(attributed.map(async ({ observation, attribution }): Promise<PreviewImplementation> => {
+      const base: PreviewImplementation = {
+        identity: attribution.identity, revisionId: attribution.revisionId, viewport: attribution.viewport,
+        width: observation.details.width ?? 0, height: observation.details.height ?? 0, status: "missing",
+        source: observation.details.source ?? "Evidencia del equipo", capturedAt: observation.capturedAt,
+        reason: observation.details.reason ?? "No hay una captura verificada de la implementación.",
+      }
+      if (observation.status !== "captured" || !observation.artifactPath) return base
+      try {
+        const image = await call<{ mime: string; data: string }>("team_evidence_image", { runId: run.id, path: observation.artifactPath })
+        return { ...base, status: "captured", imageUrl: `data:${image.mime};base64,${image.data}` }
+      } catch (e) {
+        return { ...base, status: "failed", reason: readableTeamError(errorMessage(e)) }
+      }
+    })).then((next) => { if (!disposed) setResult({ key, items: next }) })
+    return () => { disposed = true }
+  }, [run.id, reference, key, observations])
+  return result.key === key ? result.items : []
+}
+
+function PreviewReferenceComparison({ run, chatId }: { run: TeamRun; chatId: string }) {
+  const chat = useTeams((s) => s.chats.find((c) => c.id === chatId))
+  const found = chat?.origin?.previewReference
+  const reference = isPreviewReference(found) ? found : null
+  const implementations = useImplementations(run, reference)
+  return <section className="team-card" aria-label="Diseño aprobado e implementación">
+    <h3>Diseño aprobado / implementación</h3>
+    {!reference
+        ? <p className="team-note">No hay una referencia de diseño aprobada transferida a esta entrega. El comparador no la reemplaza por un borrador ni por otra captura.</p>
+        : <PreviewComparison reference={reference} implementations={implementations} />}
+  </section>
+}
+
+export function EvidenceComparison({ run, history, chatId }: { run: TeamRun; history: TeamRun[]; chatId: string }) {
   const targets = run.captureTargets ?? []
   const [selected, setSelected] = useState(targets[0]?.id ?? "")
   const [baselineId, setBaselineId] = useState(run.id)
   const baseline = history.find((r) => r.id === baselineId) ?? run
   const target = targets.find((t) => t.id === selected) ?? targets[0]
-  if (!target) return null
+  const comparison = <PreviewReferenceComparison run={run} chatId={chatId} />
+  if (!target) return comparison
   const before = baseline.observations?.filter((o) => o.targetId === target.id && o.phase === (baseline.id === run.id ? "before" : "after")).at(-1)
   const after = run.observations?.filter((o) => o.targetId === target.id && o.phase === "after").at(-1)
   const previous = history.filter((r) => r.startedAt < run.startedAt && r.observations?.some((o) => o.phase === "after"))
-  return <section className="team-card" aria-label="Comparador de evidencias">
-    <h3>Antes / Después</h3>
-    <label>Flujo capturado<select aria-label="Flujo capturado" value={target.id} onChange={(e) => setSelected(e.target.value)}>{targets.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</select></label>
-    <label>Comparar contra<select aria-label="Comparar contra" value={baseline.id} onChange={(e) => setBaselineId(e.target.value)}><option value={run.id}>Estado anterior a esta ejecución</option>{previous.map((r, i) => <option key={r.id} value={r.id}>Entrega anterior {i + 1} · {formatDateTime(r.startedAt)}</option>)}</select></label>
-    <p className="team-note selectable">{target.url}</p>
-    <Pair key={`${baseline.id}-${run.id}-${target.id}-${before?.id}-${after?.id}`} run={run} baseline={baseline} before={before} after={after} />
-  </section>
+  return <>
+    <section className="team-card" aria-label="Comparador de evidencias">
+      <h3>Antes / Después</h3>
+      <label>Flujo capturado<select aria-label="Flujo capturado" value={target.id} onChange={(e) => setSelected(e.target.value)}>{targets.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</select></label>
+      <label>Comparar contra<select aria-label="Comparar contra" value={baseline.id} onChange={(e) => setBaselineId(e.target.value)}><option value={run.id}>Estado anterior a esta ejecución</option>{previous.map((r, i) => <option key={r.id} value={r.id}>Entrega anterior {i + 1} · {formatDateTime(r.startedAt)}</option>)}</select></label>
+      <p className="team-note selectable">{target.url}</p>
+      <Pair key={`${baseline.id}-${run.id}-${target.id}-${before?.id}-${after?.id}`} run={run} baseline={baseline} before={before} after={after} />
+    </section>
+    {comparison}
+  </>
 }

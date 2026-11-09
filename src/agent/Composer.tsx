@@ -302,9 +302,12 @@ export function Composer({
       setSending(true)
       try {
         if (busy && now) await abortSession(sessionId)
-        await sendPrompt(value, root, activeFile, sessionId)
+        const sentSessionId = await sendPrompt(value, root, activeFile, sessionId)
         // Keep whatever was typed while the message was in flight.
         if ((sessionRuntime(draftKey).draft ?? "").trim() === value) patchSessionRuntime(draftKey, { draft: "", submittedAt: Date.now() })
+        if (sentSessionId && sentSessionId !== draftKey && (sessionRuntime(sentSessionId).draft ?? "").trim() === value) {
+          patchSessionRuntime(sentSessionId, { draft: "", submittedAt: Date.now() })
+        }
         setPopover(null)
       } catch (e) {
         notify.error("No se pudo enviar", e instanceof Error ? e.message : String(e))

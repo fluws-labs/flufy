@@ -75,7 +75,7 @@ export function DeliveryResults({ run, history, chatId, onOpenPage, onSession, o
       </> : <p className="team-note">{run.status === "failed" || run.status === "cancelled" ? "La ejecución se detuvo. Los cambios ya aplicados se conservan y podés pedirle al Lead que retome lo pendiente." : "La decisión aparece cuando el equipo termina la entrega."}</p>}
     </section>
 
-    <EvidenceComparison run={run} history={history} />
+    <EvidenceComparison run={run} history={history} chatId={chatId} />
     <GoalAnalysis run={run} />
     <details className="delivery-section delivery-technical">
       <summary>Evidencia técnica</summary>
