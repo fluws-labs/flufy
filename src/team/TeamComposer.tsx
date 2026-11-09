@@ -1,6 +1,7 @@
 import { useEffect, useImperativeHandle, useRef, useState, type Ref } from "react"
 import { Icon } from "../components/ui"
 import { teamCall } from "../state/teams"
+import { validateContinuousSend } from "../state/fallback"
 import { openImage } from "../state/lightbox"
 import { CHATGPT } from "../state/accounts"
 import { openEditor } from "../state/editors"
@@ -65,6 +66,7 @@ export function TeamComposer({ ref, chat, label, pending, onSent, onBrowser }: {
     submitting.current = true
     setSending(true)
     try {
+      if (!await validateContinuousSend(chatId)) return
       const id = await teamCall<string>("team_chat_send", { chatId, text: message, images: attached })
       if (id) { setText(previous => previous.trim() === message ? "" : previous); setImages(previous => previous.filter(image => !attached.includes(image))); setError(""); onSent() }
     } finally { submitting.current = false; setSending(false) }

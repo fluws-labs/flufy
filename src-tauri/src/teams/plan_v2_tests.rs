@@ -365,6 +365,7 @@ fn sqlite_keeps_complete_revisions_and_rolls_back_a_failed_commit() {
     let (changed, receipt) = simulate_patch(&original, &request, "user").unwrap();
     let mut store = super::empty();
     store.chats.push(Chat {
+        continuous_mode: false,
         origin: None,
         messages: vec![],
         id: "chat".into(),

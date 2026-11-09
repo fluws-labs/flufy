@@ -1,4 +1,6 @@
 import { useLayout, type ViewId } from "../state/layout"
+import { FallbackModels } from "../components/FallbackModels"
+import { openFallbackModels } from "../state/fallback"
 import {
   useProject,
   openProject,
@@ -352,6 +354,7 @@ function QuotaPopover({ anchor, onClose, sections, actions }: {
     <div ref={ref} className="quota-popover" role="dialog" aria-label="Cuotas de proveedores" style={{ left: position?.left ?? 0, top: position?.top ?? 0, visibility: position ? "visible" : "hidden" }}>
       <div className="quota-popover-head">
         <div className="quota-popover-eyebrow">CUOTA UTILIZADA</div>
+        <button type="button" className="btn btn-xs" onClick={() => { onClose(); void openFallbackModels() }}>Modelos Fallback</button>
       </div>
       {sections.map((section) => (
         <section className="quota-popover-section" key={section.id}>
@@ -609,6 +612,7 @@ export function StatusBar() {
         />
         <DesktopStatusItem />
         <QuotaStatus />
+        <FallbackModels />
         {zoom !== 1 && (
           <StatusItem
             icon="zoom-in"

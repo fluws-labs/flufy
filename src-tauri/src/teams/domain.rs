@@ -12,7 +12,7 @@ pub struct Skill {
     pub verification_guidelines: Vec<String>,
 }
 
-#[derive(Clone, Serialize, Deserialize, Debug)]
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
 pub struct ModelRef {
     #[serde(rename = "providerID")]
     pub provider_id: String,
@@ -220,6 +220,8 @@ pub struct Artifact {
 #[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct Run {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub continuous_fallback: Option<super::fallback::ContinuousFallback>,
     #[serde(default)]
     pub delivery_review_version: u32,
     #[serde(default)]
@@ -368,6 +370,8 @@ pub fn task_conflict(a: &Task, b: &Task) -> bool {
 #[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct Chat {
+    #[serde(default)]
+    pub continuous_mode: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<super::handoff::Origin>,
     #[serde(default)]
@@ -389,6 +393,8 @@ pub struct Chat {
 #[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct ChatMessage {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub continuous_fallback: Option<super::fallback::ContinuousFallback>,
     // The first user message of an unresolved preflight conversation. Optional
     // so existing histories load unchanged and survive application restarts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -424,6 +430,8 @@ pub struct ImageInput {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Store {
+    #[serde(default)]
+    pub fallback_models: Vec<ModelRef>,
     pub schema_version: u32,
     pub teams: Vec<Team>,
     pub skills: Vec<Skill>,

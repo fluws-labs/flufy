@@ -190,6 +190,7 @@ mod tests {
     #[test]
     fn catalog_upgrade_keeps_custom_versions_and_chat_snapshots() {
         let mut store = Store {
+            fallback_models: vec![],
             schema_version: 2,
             teams: vec![super::super::domain::tests::team()],
             skills: legacy_catalog(),
@@ -206,6 +207,7 @@ mod tests {
         store.skills.push(custom);
         let snapshot = store.teams[0].clone();
         store.chats.push(Chat {
+            continuous_mode: false,
             origin: None,
             messages: vec![],
             id: "chat".into(),
@@ -256,7 +258,7 @@ mod tests {
             .expect("exact shipped v2 frontend skill");
         assert_eq!(old.version, 2);
         assert!(previous_bundled(&old), "fingerprint must match the exact shipped v2 skill");
-        let mut store = Store { schema_version: 2, teams: vec![], skills: legacy_catalog(), chats: vec![] };
+        let mut store = Store { fallback_models: vec![], schema_version: 2, teams: vec![], skills: legacy_catalog(), chats: vec![] };
         store.skills.push(old.clone());
         upgrade(&mut store);
         assert!(store.skills.iter().any(|s| s.id == "frontend" && s.version == 3));
@@ -326,7 +328,7 @@ mod tests {
         let mut team = super::super::domain::tests::team();
         team.members[0].skill_refs = vec![SkillRef { id: customized.id.clone(), version: 1 }];
         let original_team = serde_json::to_value(&team).unwrap();
-        let mut store = Store { schema_version: 3, teams: vec![team], skills, chats: vec![] };
+        let mut store = Store { fallback_models: vec![], schema_version: 3, teams: vec![team], skills, chats: vec![] };
         let original_skills = serde_json::to_value(&store.skills).unwrap();
         upgrade(&mut store);
         upgrade(&mut store);

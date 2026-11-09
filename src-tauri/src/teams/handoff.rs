@@ -110,7 +110,7 @@ fn prepare(store: &mut Store, request: &Request, source: &Source, memory: bool) 
     chat.memory = Some(memory);
     // Ordinary chat auto-approval is not a grant to a new autonomous team.
     chat.auto_approve = Some(false);
-    chat.messages.push(ChatMessage { clarification_start:None, images:vec![], id:id(), role:"user".into(),
+    chat.messages.push(ChatMessage { continuous_fallback:None, clarification_start:None, images:vec![], id:id(), role:"user".into(),
         text, created_at:now(), status:"complete".into(), run_id:None, session_id:None });
     store.chats.push(chat.clone());
     Ok((chat, false))

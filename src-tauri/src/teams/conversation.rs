@@ -257,6 +257,7 @@ pub(super) fn send(
     let images = super::attachments::save(&app, &inputs)?;
     let reply_id = id();
     update(&app, |s| {
+        let models = s.fallback_models.clone();
         let c = s
             .chats
             .iter_mut()
@@ -268,12 +269,14 @@ pub(super) fn send(
         if c.messages.iter().any(|m| m.status == "pending") {
             return Err("El Lead está respondiendo tu mensaje anterior".into());
         }
-        let run_id = c.runs.last().map(|r| r.id.clone());
+        let run_id = turn_run(c).map(String::from);
+        let continuous_fallback = super::fallback::snapshot_for_message(c, &models, run_id.as_deref())?;
         for (role, content, status, message_id) in [
             ("user", text.clone(), "complete", id()),
             ("assistant", String::new(), "pending", reply_id.clone()),
         ] {
             c.messages.push(ChatMessage {
+                continuous_fallback: continuous_fallback.clone(),
                 clarification_start: None,
                 images: if role == "user" {
                     images.clone()
@@ -347,7 +350,7 @@ fn saved_status_reply(chat: &mut Chat, text: &str) -> String {
         answer.push_str("\n\nEl Lead sigue atendiendo tu mensaje anterior. Esta consulta usa el registro guardado y no interrumpe su sesión. Si no aparece una causa registrada, abrí su actividad para ver el último paso observado.");
     }
     for (role, content, message_id) in [("user", text.to_string(), id()), ("assistant", answer, reply_id.clone())] {
-        chat.messages.push(ChatMessage { clarification_start: None, id: message_id, role: role.into(), text: content, created_at: now(), status: "complete".into(), run_id: chat.runs.last().map(|r| r.id.clone()), session_id: None, images: vec![] });
+        chat.messages.push(ChatMessage { continuous_fallback: None, clarification_start: None, id: message_id, role: role.into(), text: content, created_at: now(), status: "complete".into(), run_id: chat.runs.last().map(|r| r.id.clone()), session_id: None, images: vec![] });
     }
     reply_id
 }
@@ -375,9 +378,14 @@ enum ConversationAnswer {
     Reply(String),
 }
 
-fn clarification_start(chat: &Chat, reply_id: &str) -> Option<String> {
+fn turn_run(chat: &Chat) -> Option<&str> {
+    chat.runs.last().filter(|r| !["completed","awaiting_manual_qa","qa_approved","cancelled"].contains(&r.status.as_str()))
+        .map(|r| r.id.as_str())
+}
+
+pub(super) fn clarification_start(chat: &Chat, reply_id: &str) -> Option<String> {
     let end = chat.messages.iter().position(|m| m.id == reply_id)?;
-    let run_id = chat.runs.last().map(|r| r.id.as_str());
+    let run_id = turn_run(chat);
     chat.messages[..end].iter().rev()
         .filter(|m| m.role == "assistant" && m.status == "complete" && m.run_id.as_deref() == run_id)
         .find_map(|m| m.clarification_start.clone())
@@ -513,14 +521,23 @@ fn respond(
     }
     // The chat-level Lead configuration drives conversation turns. Runs keep
     // their own immutable snapshot for the work they already dispatched.
-    let employee = chat
+    let mut employee = chat
         .team
         .members
         .iter()
         .find(|a| a.id == chat.team.lead_agent_id)
         .cloned()
         .ok_or("Falta el Lead del equipo")?;
+    if let Some(state) = chat.messages.iter().find(|m| m.id == reply_id).and_then(|m| m.continuous_fallback.as_ref()) {
+        employee.model = state.current_model.clone();
+        employee.variant = if state.next_index == 0 { state.original_variant.clone() } else { None };
+    }
     let client = runner::client(app, &chat.team.project_root)?;
+    while super::fallback::exhausted(&employee.model) && chat.messages.iter().find(|m| m.id == reply_id)
+        .and_then(|m| m.continuous_fallback.as_ref()).is_some_and(|s| s.enabled && !s.restored) {
+        employee.model = super::fallback::transition_message(app, chat_id, reply_id, &employee.model)?;
+        employee.variant = None;
+    }
     super::attachments::ensure_vision(&client, &employee, &images)?;
     let session = runner::create_conversation_session(&client, &employee)?;
     crate::memory::set_session(app, &session, chat.memory.unwrap_or(true));
@@ -597,6 +614,34 @@ fn respond(
                     let states = client.get_resilient("/session/status")?;
                     if !states.is_object() { return Err("No se pudo comprobar el estado del Lead; su sesión se conserva en Actividad.".into()); }
                     if !states[&session].is_null() && states[&session]["type"] != "idle" { continue; }
+                    if super::fallback::confirmed_limit(&last["info"]["error"])
+                        && super::fallback::safe_to_continue(&history, &previous, last)
+                        && read(app)?.chats.iter().find(|c| c.id == chat_id)
+                            .and_then(|c| c.messages.iter().find(|m| m.id == reply_id))
+                            .and_then(|m| m.continuous_fallback.as_ref()).is_some_and(|s| s.enabled && !s.restored) {
+                        let failed = serde_json::from_value(body["model"].clone()).map_err(|e| e.to_string())?;
+                        let next = super::fallback::transition_message(app, chat_id, reply_id, &failed)?;
+                        let mut replacement = employee.clone();
+                        replacement.model = next.clone();
+                        replacement.variant = None;
+                        runner::check_model(&client, &replacement)?;
+                        super::attachments::ensure_vision(&client, &replacement, &images)?;
+                        body["model"] = json!(next);
+                        body.as_object_mut().unwrap().remove("variant");
+                        body["parts"] = super::fallback::continuation_parts();
+                        previous = runner::assistant_ids(&history);
+                        idle_since = None;
+                        if !read(app)?.chats.iter().find(|c| c.id == chat_id)
+                            .and_then(|c| c.messages.iter().find(|m| m.id == reply_id)).is_some_and(|m| m.status == "pending") {
+                            return Err("Pedido detenido; no se reenvió el mensaje".into());
+                        }
+                        acknowledgement_lost = match client.post(&format!("/session/{}/prompt_async", session), body.clone()) {
+                            Ok(_) => false,
+                            Err(error) if crate::oc::transient_read_error(&error) => true,
+                            Err(error) => return Err(error),
+                        };
+                        continue;
+                    }
                     if runner::retry_before_tools(&history, &previous, last, retries) {
                         retries += 1;
                         std::thread::sleep(Duration::from_secs(2 * retries as u64));

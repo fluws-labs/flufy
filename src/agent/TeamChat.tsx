@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react"
 import { teamCall, useTeams } from "../state/teams"
+import { openFallbackModels, setContinuousMode } from "../state/fallback"
 import { pendingRequests, selectSession, useAgent } from "../state/agent"
 import { useApprovals } from "../state/approvals"
 import { modelKey, rememberSessionDirectory } from "../lib/opencode"
@@ -7,7 +8,7 @@ import { openEditor } from "../state/editors"
 import { confirmAction } from "../components/Dialog"
 import { Icon } from "../components/ui"
 import { Markdown } from "./Markdown"
-import { runStatusLabel, runActive } from "../team/types"
+import { chatFallback, runStatusLabel, runActive } from "../team/types"
 import { formatDateTime } from "../lib/time"
 import { isAccountLimitError, readableTeamError } from "../lib/provider-error"
 import { runProblem } from "../team/problem"
@@ -45,6 +46,8 @@ export function TeamChat({ chatId }: { chatId: string }) {
   const view = (viewChoice?.runId === viewRun?.id ? viewChoice?.view : null) ?? "Chat"
   const setView = (view: string | null) => setViewChoice({ runId: viewRun?.id, view })
   const [expanded, setExpanded] = useState(false)
+  const [changingContinuous, setChangingContinuous] = useState(false)
+  const continuousBusy = useRef(false)
   const [browser, setBrowser] = useState<{ page?: string; title: string } | null>(null)
   const selectedRunId = useTeams(s => s.selectedRunIds[chatId] ?? null)
   const setSelectedRunId = (id: string | null) => useTeams.setState(s => ({ selectedRunIds: { ...s.selectedRunIds, [chatId]: id } }))
@@ -62,6 +65,9 @@ export function TeamChat({ chatId }: { chatId: string }) {
   if (!chat) return <div className="team-note">Cargando conversación de equipo…</div>
   const run = chat.runs.find((r) => r.id === selectedRunId) ?? chat.runs.at(-1)
   const roster = run?.team ?? chat.team
+  const fallbackSource = chatFallback(chat, selectedRunId)
+  const fallback = fallbackSource?.state
+  const fallbackModel = fallback ? models.find(model => modelKey(model) === modelKey(fallback.currentModel))?.name ?? fallback.currentModel.modelID : ""
   const runError = run?.error ?? ""
   const folderFailure = messages.at(-1)?.status === "error" ? messages.at(-1)!.text : runError
   const budgetBlocked = /presupuesto|límite de tokens|duración máxima/i.test(runError)
@@ -113,6 +119,12 @@ export function TeamChat({ chatId }: { chatId: string }) {
     <header className="team-chat-header">
       <div className="team-section-title">
         <strong><Icon name="organization" /> {chat.title}</strong>
+        <button type="button" className="btn btn-xs" role="switch" aria-checked={chat.continuousMode === true} disabled={changingContinuous || chat.archived} onClick={async () => {
+          if (continuousBusy.current) return
+          continuousBusy.current = true; setChangingContinuous(true)
+          try { await setContinuousMode(chatId, !chat.continuousMode) }
+          finally { continuousBusy.current = false; setChangingContinuous(false) }
+        }}>Modo continuo {chat.continuousMode ? "activado" : "desactivado"}</button>
         <details className="team-chat-menu">
           <summary className="btn btn-xs" aria-label="Más opciones del equipo">⋯</summary>
           <div className="team-chat-menu-panel">
@@ -126,6 +138,12 @@ export function TeamChat({ chatId }: { chatId: string }) {
       <p>{roster.members.length > 1 ? `${roster.members.length} integrantes · ` : ""}{headerStatus}{ownerLabel && (needsUserHelp ? <button type="button" className="team-attention-badge team-attention-jump team-attention-summary" aria-live="polite" onClick={() => { setView("Chat"); requestAnimationFrame(() => problems.current?.scrollIntoView({ block: "start" })) }}> · {ownerLabel}</button> : <span className="team-waiting-badge" aria-live="polite"> · {ownerLabel}</span>)}</p>
       {chat.origin && <div className="team-origin"><Icon name="git-pull-request" /><span>Desde el chat «{chat.origin.title}»</span>{chat.origin.error ? <span className="team-error">No se pudo iniciar: {readableTeamError(chat.origin.error)}</span> : <button type="button" className="btn btn-xs" onClick={() => { const origin = chat.origin!; rememberSessionDirectory(origin.sessionId, origin.directory); useTeams.setState({ activeChatId: null }); selectSession(origin.sessionId) }}><Icon name="arrow-left" /> Volver al chat de origen</button>}</div>}
     </header>
+
+    {fallback?.enabled && <div className="team-fallback-status" role="status">
+      <span>{fallback.restored ? `Modelo inicial restaurado: ${models.find(model => modelKey(model) === modelKey(fallback.originalModel))?.name ?? fallback.originalModel.modelID}` : `Modo continuo · ${modelKey(fallback.currentModel) === modelKey(fallback.originalModel) ? "Modelo inicial" : "Modelo alternativo"}: ${fallbackModel}`}</span>
+      {!fallback.restored && fallback.nextIndex >= fallback.candidates.length && ["blocked", "planning_blocked", "error"].includes(fallbackSource!.status) && <strong>Lista de modelos fallback agotada. El trabajo se conserva; revisá las cuotas antes de reintentar.</strong>}
+      <button type="button" className="btn btn-xs" onClick={() => void openFallbackModels()}>Modelos Fallback</button>
+    </div>}
 
     {view !== "Configuración" && /carpeta.*ocupada|equipo o una sesión pendiente|otro equipo.*carpetas/i.test(folderFailure) && <TeamFolderConflicts chatId={chatId} failure={folderFailure} />}
     <nav className="team-chat-nav" aria-label="Vistas del equipo">{["Chat", "Ahora", "Tablero", "Entrega"].map((v) => <button key={v} className={view === v ? "active" : ""} onClick={() => setView(v)}>{v}</button>)}</nav>

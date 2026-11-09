@@ -156,7 +156,7 @@ pub(super) fn test_client(app: &AppHandle, repo: &str) -> Result<Opencode, Strin
     client(app, repo)
 }
 
-fn check_model(client: &Opencode, employee: &Employee) -> Result<(), String> {
+pub(super) fn check_model(client: &Opencode, employee: &Employee) -> Result<(), String> {
     let providers = client.get_resilient("/config/providers")?;
     check_model_catalog(&providers, employee)
 }
@@ -416,6 +416,15 @@ pub(super) fn format_response(app: &AppHandle, run_id: &str, client: &Opencode, 
 
 pub(super) fn execute_mode(app: &AppHandle, run_id: &str, client: &Opencode, session: &str, employee: &Employee, prompt: &str, mode: super::capabilities::Mode) -> Result<Value, String> {
     enforce_limits(&run(app, run_id)?)?;
+    let mut effective = super::fallback::employee(&run(app, run_id)?, employee);
+    if run(app, run_id)?.continuous_fallback.as_ref().is_some_and(|s| s.enabled && !s.restored) {
+        while super::fallback::exhausted(&effective.model) {
+            effective.model = super::fallback::transition(app, run_id, &effective.model)?;
+            effective.variant = None;
+        }
+        check_model(client, &effective)?;
+    }
+    let employee = &effective;
     let ids = client.get_resilient("/experimental/tool/ids")?;
     let tools = super::capabilities::tool_map(&ids, employee, mode)?;
     if run(app, run_id)?.status == "cancelling" {
@@ -552,6 +561,34 @@ pub(super) fn execute_mode(app: &AppHandle, run_id: &str, client: &Opencode, ses
         let last = new_assistant(&messages, &previous);
         if let Some(last) = last {
             if last["info"]["error"].is_object() {
+                if run(app, run_id)?.continuous_fallback.as_ref().is_some_and(|s| s.enabled && !s.restored)
+                    && super::fallback::confirmed_limit(&last["info"]["error"])
+                    && super::fallback::safe_to_continue(&messages, &previous, last) {
+                    let failed: ModelRef = serde_json::from_value(body["model"].clone()).map_err(|e| e.to_string())?;
+                    let next = super::fallback::transition(app, run_id, &failed)?;
+                    let mut replacement = employee.clone();
+                    replacement.model = next.clone();
+                    replacement.variant = None;
+                    check_model(client, &replacement)?;
+                    super::attachments::ensure_vision(client, &replacement, &images)?;
+                    let state = run(app, run_id)?;
+                    enforce_limits(&state)?;
+                    if !["planning", "running", "delivering"].contains(&state.status.as_str()) { return Err("La ejecución está detenida; no se reenvió el pedido".into()); }
+                    body["model"] = json!(next);
+                    body.as_object_mut().unwrap().remove("variant");
+                    // Continue the same session, never replay the original operations.
+                    body["parts"] = super::fallback::continuation_parts();
+                    previous = assistant_ids(&messages);
+                    idle_since = None;
+                    send_error = match client.post(&format!("/session/{}/prompt_async", session), body.clone()) {
+                        Ok(_) => None,
+                        Err(error) if crate::oc::transient_read_error(&error) => Some(error),
+                        Err(error) => return Err(error),
+                    };
+                    super::activity::note(app, run_id, session, &replacement, &activity_context,
+                        "status", "info", "Cuota confirmada: la sesión continúa con el siguiente modelo fallback");
+                    continue;
+                }
                 if retry_before_tools(&messages, &previous, last, retries) {
                     retries += 1;
                     std::thread::sleep(Duration::from_secs(2 * retries as u64));
@@ -813,10 +850,8 @@ fn plan(app: &AppHandle, id: &str) -> Result<(), String> {
     }
     let a = lead(&r)?;
     let client = client(app, &r.team.allowed_repositories[0])?;
-    let session = if r.recovered_plan.is_some() {
-        r.plan_session_id
-            .clone()
-            .ok_or("Plan recuperado sin sesión")?
+    let session = if let Some(session) = &r.plan_session_id {
+        session.clone()
     } else {
         create_session(&client, &a, &format!("{} · plan", r.team.name), true)?
     };
@@ -846,6 +881,13 @@ fn plan(app: &AppHandle, id: &str) -> Result<(), String> {
     let messages = if let Some(text) = &r.recovered_plan {
         json!([{"info":{"role":"assistant"},"parts":[{"type":"text","text":text}]}])
     } else {
+        let prompt = if r.plan_session_id.is_some() {
+            let history = client.get_resilient(&format!("/session/{}/message", session))?;
+            if !super::fallback::settled_tools(&history) {
+                return Err("La planificación conserva herramientas con efectos inciertos; no se reenvió el pedido".into());
+            }
+            format!("Continuá ESTA planificación desde su historia y resultados guardados; no repitas operaciones completadas. Revisá las indicaciones vigentes y completá solo lo pendiente.\n{}", prompt)
+        } else { prompt };
         execute(app, id, &client, &session, &a, &prompt, true)?
     };
     let mut text = final_text(&messages);
@@ -1097,6 +1139,9 @@ fn worker(app: &AppHandle, run_id: &str, task_id: &str) -> Result<(), String> {
     } else { prompt };
     let messages = if recovering {
         let history = client.get_resilient(&format!("/session/{}/message", session))?;
+        if !super::fallback::settled_tools(&history) {
+            return Err("La sesión recuperada tiene herramientas con efectos inciertos. Revisá su actividad y reconciliá el resultado antes de continuar; no se reenvió el pedido".into());
+        }
         if reusable_worker_result(&t, &history) {
             history
         } else {
@@ -1315,7 +1360,10 @@ pub fn reconcile(app: &AppHandle, r: &Run, abort: bool) -> Result<(), String> {
         }
         // Prove the session still exists, even if status omitted idle sessions.
         client.get_resilient(&format!("/session/{}", session))?;
-        client.get_resilient(&format!("/session/{}/message", session))?;
+        let history = client.get_resilient(&format!("/session/{}/message", session))?;
+        if !abort && !super::fallback::settled_tools(&history) {
+            return Err("La sesión conserva herramientas con efectos inciertos; reconciliá su resultado antes de continuar. No se reenvió ningún pedido".into());
+        }
         let busy = state[session]["type"]
             .as_str()
             .map(|s| s != "idle")
