@@ -25,6 +25,7 @@ async function setup(page: Page, unknown = false) {
   }
   await page.addInitScript(() => {
     localStorage.clear()
+    localStorage.setItem("guillecode:studio.mode", JSON.stringify("code"))
     let id = 0
     Object.assign(window, { __TAURI_INTERNALS__: {
       metadata: { currentWindow: { label: "main" }, currentWebview: { label: "main" } },

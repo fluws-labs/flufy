@@ -56,6 +56,7 @@ const store = {
 
 async function setup(page: Page) {
   await page.addInitScript(({ root, store }) => {
+    localStorage.setItem("guillecode:studio.mode", JSON.stringify("code"))
     localStorage.setItem("guillecode:agent.openSessions@c:/qa/demo", JSON.stringify(["s1"]))
     localStorage.setItem("guillecode:agent.activeSession@c:/qa/demo", JSON.stringify("s1"))
     let id = 0
@@ -92,10 +93,11 @@ test("un chat normal muestra el traspaso y permite abrir el equipo o volver al o
   await expect(page.getByText("Pasó el plan a un equipo")).toBeVisible()
   await expect(page.getByText("El equipo tomó el plan", { exact: false })).toBeVisible()
   await page.getByRole("button", { name: "Abrir equipo", exact: true }).click()
-  await expect(page.locator(".team-chat-header")).toContainText("Filtro de consultas")
-  await expect(page.locator(".team-origin")).toContainText("Desde el chat «Investigación»")
+  await expect(page.locator(".team-space")).toContainText("Filtro de consultas")
   await page.screenshot({ path: test.info().outputPath("chat-delega-equipo.png") })
-  await page.getByRole("button", { name: "Volver al chat de origen", exact: true }).click()
-  await expect(page.locator(".agent-tab", { hasText: "Investigación" })).toBeVisible()
+  await page.getByRole("button", { name: "Código", exact: true }).click()
+  const origin = page.getByRole("button", { name: /Investigación/ }).first()
+  await expect(origin).toBeVisible()
+  await origin.click()
   await expect(page.locator(".team-chat-header")).toHaveCount(0)
 })

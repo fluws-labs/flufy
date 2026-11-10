@@ -11,6 +11,7 @@ async function setup(page: Page, image = true) {
   const history: { info: Record<string, unknown>; parts: Part[] }[] = []
   const transport = { reads: 0, readGate: null as Promise<void> | null }
   await page.addInitScript(({ image }) => {
+    localStorage.setItem("guillecode:studio.mode", JSON.stringify("code"))
     let id = 0
     let pinned = false
     let browserAssigned = false
