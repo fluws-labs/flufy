@@ -1,0 +1,10 @@
+Equipos más livianos
+- Los pedidos al Lead, las continuaciones de los trabajadores y las investigaciones envían solo el estado necesario en lugar de la conversación completa, así que el mismo trabajo cuesta muchos menos tokens.
+- Cuando el motor compacta una sesión larga, ese resumen ya no se confunde con el resultado de la tarea ni corta el trabajo antes de tiempo.
+
+Lead conversacional
+- El chat del equipo recibe el contexto del mensaje (identidad de la tarea, preferencias y texto seleccionado) sin mostrarlo como adjunto y sin rechazar el envío.
+
+Plan Vivo
+- Rechaza entregables duplicados y dependencias que apuntan a tareas canceladas antes de repetir trabajo.
+- Evita que un turno ocupado bloquee el plan sin crear tareas de reemplazo.
