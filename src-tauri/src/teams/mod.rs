@@ -1,6 +1,8 @@
 mod activity;
 mod lead_actor;
+mod lead_guard;
 mod lead_inbox;
+mod lead_policy;
 mod delivery_review;
 pub mod handoff;
 mod capture;
