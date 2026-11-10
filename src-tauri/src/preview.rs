@@ -270,7 +270,7 @@ fn render(document: &Value) -> Result<(String,String), String> {
 
 fn choose(state: &mut Design, choice: &str) -> Result<(), String> {
     if !["create","skip"].contains(&choice) { return Err("PREVIEW_CHOICE: usar create o skip".into()); }
-    if state.choice != "pending" && state.choice != choice { return Err("PREVIEW_CHOICE: esta tarea ya tiene una elección".into()); }
+    if state.choice != "pending" && state.choice != choice && (!state.revisions.is_empty() || state.current_revision_id.is_some()) { return Err("PREVIEW_CHOICE: esta tarea ya tiene un diseño; conservá su elección".into()); }
     state.choice = choice.into();
     if state.current_revision_id.is_none() { state.status = if choice == "skip" { "skipped" } else { "draft" }.into(); }
     Ok(())
@@ -657,6 +657,23 @@ mod tests {
         stale.as_object_mut().unwrap().remove("screens");
         assert!(render(&stale).is_err());
         std::fs::remove_file(p).unwrap();
+    }
+    #[test]
+    fn preview_checkbox_can_change_only_before_a_design_exists() {
+        let mut s=empty(identity());
+        choose(&mut s,"skip").unwrap();
+        choose(&mut s,"create").unwrap();
+        assert_eq!(s.status,"draft");
+        choose(&mut s,"skip").unwrap();
+        assert_eq!(s.status,"skipped");
+        choose(&mut s,"create").unwrap();
+        apply(&mut s,doc("Diseño guardado"),String::new()).unwrap();
+        approve(&mut s,"Aprobado").unwrap();
+        let approved=s.approved_revision_id.clone();
+        assert!(choose(&mut s,"skip").is_err());
+        assert_eq!(s.choice,"create");
+        assert_eq!(s.approved_revision_id,approved);
+        assert_eq!(s.revisions.len(),1);
     }
     #[test]
     fn preview_persists_choice_revisions_approval_and_isolates_all_scopes() {

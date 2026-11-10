@@ -9,6 +9,7 @@ import {
   removeContext,
   selectedVariant,
   sendPrompt,
+  startPreviewTask,
   setAgentName,
   setMemory,
   setModel,
@@ -20,6 +21,7 @@ import {
   type ContextUsage,
 } from "../state/agent"
 import { setApprovalForSession, useApprovals } from "../state/approvals"
+import { isTeamSession } from "../team/session-index"
 import { openEditor, useEditors } from "../state/editors"
 import { CHATGPT } from "../state/accounts"
 import { useProject } from "../state/project"
@@ -116,15 +118,18 @@ export function Composer({
   busy,
   compact,
   usage,
+  onPreviewOpen,
 }: {
   sessionId: string | null
   busy: boolean
   compact?: boolean
   usage?: ContextUsage | null
+  onPreviewOpen?: () => void
 }) {
   const root = useProject((s) => s.root)
   const runtimeKey = sessionId ?? draftRuntimeKey(root, windowLabel())
   const runtime = useSessionRuntime(runtimeKey)
+  const previewEnabled = runtime.previewEnabled === true
   const globalContext = useAgent((s) => s.context)
   const context = runtime.context ?? globalContext
   const includeActiveFile = useAgent((s) => s.includeActiveFile)
@@ -597,7 +602,7 @@ export function Composer({
           <button type="button" className="composer-icon" title="Adjuntar imagen" onClick={() => fileInput.current?.click()}>
             <Icon name="attach" />
           </button>
-          <button
+          {!isTeamSession(approveKey) && <button
             type="button"
             className={`composer-pill approval-pill${approveOn ? " on" : ""}`}
             title={approveOn ? "Aprobación automática ACTIVADA en esta conversación: el agente no te pide permiso. Clic para que vuelva a pedirlo." : "El agente te pide permiso en esta conversación. Clic para que apruebe solo (no te interrumpe)."}
@@ -605,7 +610,7 @@ export function Composer({
           >
             <Icon name={approveOn ? "pass-filled" : "shield"} />
             <span>{approveOn ? "Aprueba solo" : "Pide permiso"}</span>
-          </button>
+          </button>}
           <button
             type="button"
             className={`composer-pill memory-pill${memoryOn ? " on" : ""}`}
@@ -671,6 +676,14 @@ export function Composer({
           )}
         </div>
       </div>
+      {root && <div className="composer-preferences">
+        <label className={`composer-preview-toggle${previewEnabled ? " enabled" : ""}`} title="Si está marcado, el agente prepara una previsualización antes de implementar. No vuelve a preguntarte.">
+          <input type="checkbox" checked={previewEnabled} onChange={e => patchSessionRuntime(draftKey, { previewEnabled: e.target.checked })} />
+          <span>Previsualización</span>
+        </label>
+        {previewEnabled && onPreviewOpen && sessionId && <button type="button" className="composer-preference-action" onClick={onPreviewOpen}>Ver diseño <Icon name="arrow-up-right" /></button>}
+        {sessionId && <button type="button" className="composer-preference-action composer-new-task" disabled={busy || sending} title="Empezar una tarea distinta, conservando la conversación y los diseños anteriores" onClick={() => startPreviewTask(root, sessionId)}>Nueva tarea <Icon name="add" /></button>}
+      </div>}
     </div>
   )
 }

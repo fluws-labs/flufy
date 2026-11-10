@@ -221,13 +221,14 @@ pub fn is_team_session(app: &AppHandle, session: &str) -> bool {
         s.chats.iter().any(|c| owns_session(c, session)))).unwrap_or(false)
 }
 
-/// Explicit per-chat auto-approve for team sessions. Global auto-approve never
-/// widens a team's scoped permissions; only the chat's own switch can.
+/// Auto-approve for team sessions. Team chats default to full access inside
+/// their scoped tool permissions; the chat's own switch can turn it off. The
+/// global preference is not used here, so a team can't widen its scopes.
 pub fn auto_approve_session(app: &AppHandle, session: &str) -> Option<bool> {
     let state = app.try_state::<TeamsState>()?;
     let store = state.store.lock().ok()?;
     let chat = store.chats.iter().find(|c| owns_session(c, session))?;
-    Some(chat.auto_approve.unwrap_or(false))
+    Some(chat.auto_approve.unwrap_or(true))
 }
 
 pub fn memory_for_run(app: &AppHandle, run_id: &str) -> bool {

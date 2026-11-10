@@ -36,7 +36,7 @@ identity: { projectRoot, sessionId, taskId, designId }
 | `preview_approve` | `{ identity, baseRevisionId, notes }` | `Design` |
 | `preview_identity` | `{ identity }` | `Value` (provenance/aproximaciones de CSS/SCSS locales) |
 
-- `choice`: `"create" | "skip"` (una sola vez por tarea; `choose` rechaza cambiar una elección ya tomada).
+- `choice`: `"create" | "skip"` (el checkbox del compositor se aplica al enviar; puede cambiar mientras no haya revisiones. Una vez guardado un diseño, `choose` conserva la elección y su referencia).
 - `baseRevisionId`: `string | null`. El servidor lo compara de forma atómica con `current_revision_id`; `null` solo vale para el primer borrador / la elección inicial. Un valor desactualizado produce `PREVIEW_CONFLICT` sin alterar el estado.
 - `document`: JSON con forma nativa `{ version:1, root:Node, theme, ... }`; `Node` usa `{ id, type, text?, layout?, styles?, mobileStyles?, children }` con `type ∈ container|text|button|image` y mapas de propiedades CSS. `preview_apply` lo renderiza a `html`/`css` y crea una revisión **append-only**. El backend lee solo `root` (y `mobileStyles`) al renderizar; los campos extra se conservan en `Revision.document` pero no alteran el artefacto.
 - `notes`: resumen/observaciones (≤ 8000). No hay campo `operations`, `author` ni `revisionId` en los comandos.

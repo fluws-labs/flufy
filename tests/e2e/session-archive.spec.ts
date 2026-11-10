@@ -16,6 +16,7 @@ async function setup(page: Page, open = ["s1", "c1", "s2"]) {
     globalRequests: [] as { directory: string | null; header?: string }[],
   }
   await page.addInitScript(({ root, open }) => {
+    localStorage.setItem("guillecode:studio.mode", JSON.stringify("code"))
     const key = root.toLowerCase()
     if (!sessionStorage.getItem("qa-archive-booted")) {
       localStorage.setItem(`guillecode:agent.openSessions@${key}`, JSON.stringify(open))
@@ -101,7 +102,7 @@ test("archiva con sus subagentes, persiste al recargar y restaura conservando el
   await page.getByTitle("Nuevo chat (Ctrl+Alt+N)").click()
   await page.getByText("Chat normal", { exact: true }).click()
   await expect(page.locator(".agent-recent")).not.toContainText("Conversación vieja")
-  await page.locator(".command-center").click()
+  await page.getByRole("button", { name: "Buscar archivos y comandos (Ctrl+P)", exact: true }).click()
   await page.locator(".quick-input input").fill("#")
   await expect(page.locator(".quick-input")).toContainText("Conversación actual")
   await expect(page.locator(".quick-input")).not.toContainText("Conversación vieja")

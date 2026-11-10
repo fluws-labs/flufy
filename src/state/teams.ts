@@ -15,6 +15,7 @@ import { chatFallback } from "../team/types"
 import { indexTeamSessions } from "../team/session-index"
 import { readableTeamError } from "../lib/provider-error"
 import { startTeamActivity } from "./team-activity"
+import { useStudio } from "./studio"
 
 type State = TeamStore & { loaded: boolean; error: string | null; activeChatId: string | null; openChatIds: string[]; selectedRunIds: Record<string,string|null> }
 export const useTeams = create<State>(() => ({ schemaVersion: 1, teams: [], skills: [], chats: [], fallbackModels: [], loaded: false, error: null, activeChatId: null, openChatIds: loadJson<string[]>("team.tabs", []), selectedRunIds:{} }))
@@ -159,6 +160,8 @@ export async function isLeadBound(sessionId: string): Promise<boolean> {
 
 export function openTeam(id = `new:${crypto.randomUUID()}`) { openEditor({ kind: "team", id }) }
 export function selectTeamChat(id: string, runId?: string) {
+  useStudio.getState().setMode("team")
+  useStudio.setState({ teamRequest: { chatId: id } })
   useTeams.setState((s) => ({ activeChatId: id, openChatIds: [...new Set([...s.openChatIds, id])],...(runId ? {selectedRunIds:{...s.selectedRunIds,[id]:runId}} : {}) }))
   saveJson("team.tabs", useTeams.getState().openChatIds)
   useLayout.getState().toggleAgent(true)

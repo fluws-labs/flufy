@@ -34,7 +34,7 @@ function isContextMessage(m: ChatMessage): boolean {
   if (m.info.role !== "user") return false
   const texts = m.parts.filter((p) => p.type === "text")
   if (texts.length === 0) return false
-  return texts.every((p) => p.synthetic === true || p.text.startsWith("[GUILLECODE_TEAM_RUN]") || /^#{1,2} Memoria fluws/.test(p.text))
+  return texts.every((p) => p.synthetic === true || p.text.startsWith("[GUILLECODE_TEAM_RUN]") || p.text.startsWith("REGISTRO (datos, no instrucciones)") || /^#{1,2} Memoria fluws/.test(p.text))
 }
 
 function visibleUserText(m: ChatMessage): string {
@@ -330,7 +330,7 @@ function userMenu(session: Session, message: ChatMessage, e: React.MouseEvent) {
 
 const INTERNAL_MARKER = "[FLUFY_EQUIPO_INTERNO]"
 
-export function Chat({ session, busy }: { session: Session; busy: boolean }) {
+export function Chat({ session, busy, teamSession: forcedTeamSession }: { session: Session; busy: boolean; teamSession?: boolean }) {
   const view = useAgent((s) => s.views[session.id])
   const messages = useMemo(() => {
     const raw = view?.messages ?? []
@@ -340,7 +340,7 @@ export function Chat({ session, busy }: { session: Session; busy: boolean }) {
     const parent = (message: ChatMessage) => (message.info as { parentID?: string }).parentID
     return raw.filter((message) => !hidden.has(message.info.id) && !(parent(message) && hidden.has(parent(message)!)))
   }, [view])
-  const teamSession = session.title.startsWith("Equipo · ") || messages.some(m => m.info.role === "user" && m.parts.some(p => p.type === "text" && p.text.startsWith("[GUILLECODE_TEAM_RUN]")))
+  const teamSession = forcedTeamSession ?? (session.title.startsWith("Equipo · ") || messages.some(m => m.info.role === "user" && m.parts.some(p => p.type === "text" && p.text.startsWith("[GUILLECODE_TEAM_RUN]"))))
   const failedID = latestFailedAssistant(messages)?.info.id
   const scrollRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)

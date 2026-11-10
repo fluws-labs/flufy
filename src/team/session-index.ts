@@ -30,6 +30,25 @@ export function indexTeamSessions(chats: TeamChatRecord[]) {
 
 export const isTeamSession = (id: string) => sessions.has(id)
 
+export function memberSession(chat: TeamChatRecord, memberId: string, run = chat.runs.at(-1)): { id: string; directory: string } | null {
+  if (!run) return null
+  for (let taskIndex = run.tasks.length - 1; taskIndex >= 0; taskIndex -= 1) {
+    const task = run.tasks[taskIndex]
+    if (task.assignedAgentId !== memberId) continue
+    const attempt = task.attempts.findLast(item => item.sessionId)
+    if (attempt?.sessionId) return { id: attempt.sessionId, directory: task.repository || chat.team.projectRoot }
+  }
+  const report = (run.supportReports ?? []).findLast(item => item.agent.id === memberId)
+  if (report) return { id: report.sessionId, directory: report.repository || chat.team.projectRoot }
+  if (memberId !== run.team.leadAgentId) return null
+  const message = (chat.messages ?? []).findLast(item => item.sessionId)
+  if (message?.sessionId) return { id: message.sessionId, directory: chat.team.projectRoot }
+  const reviewSessionId = run.tasks.flatMap(task => task.attempts).findLast(attempt => attempt.reviewSessionId)?.reviewSessionId
+  if (reviewSessionId) return { id: reviewSessionId, directory: chat.team.projectRoot }
+  if (run.planSessionId) return { id: run.planSessionId, directory: chat.team.projectRoot }
+  return null
+}
+
 export type TeamSessionGroup = { id: string; title: string; chat?: TeamChatRecord; sessions: Session[] }
 
 // Registry IDs survive renames. Walk ancestors so nested engine sessions stay

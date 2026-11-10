@@ -2,6 +2,7 @@ import { create } from "zustand"
 import { basename, normalizePath, samePath } from "../lib/paths"
 import { loadJson, projectKey, saveJson } from "../lib/persist"
 import { useLayout } from "./layout"
+import { useStudio } from "./studio"
 
 export type EditorInput =
   | { kind: "file"; path: string }
@@ -184,6 +185,7 @@ export type OpenOptions = {
 }
 
 export function openEditor(input: EditorInput, opts: OpenOptions = {}): string {
+  if (opts.focus !== false) useStudio.getState().setMode("code")
   const id = tabId(input)
   const state = useEditors.getState()
   const existing = findTab(id)

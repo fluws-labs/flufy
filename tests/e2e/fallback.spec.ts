@@ -95,6 +95,7 @@ async function setup(page: Page) {
     const { command, args } = route.request().postDataJSON() as Call
     calls.push({ command, args })
     let result: unknown = null
+    if (command === "memory_overview") result = { scope: projectRoot, slug: "qa-fallback", preferences: "", overview: "", tasks: [], notes: [] }
     if (["recent_projects", "routines_list", "auth_entries", "live_busy_sessions", "fs_read_dir", "fs_list_files", "term_shells", "windows_list", "git_subrepos", "team_activity"].includes(command)) result = []
     if (command === "teams_state") result = store
     if (command === "team_fallback_models_set") {
@@ -149,6 +150,7 @@ async function openChat(page: Page) {
   const restored = page.getByRole("button", { name: `Equipo · ${chatTitle}` })
   if (await restored.first().isVisible()) {
     await restored.first().click()
+    await showTeamPanel(page)
     await expect(page.getByLabel("Mensaje para el equipo")).toBeVisible()
     return
   }
@@ -156,7 +158,16 @@ async function openChat(page: Page) {
     await page.getByTitle("Equipos IA", { exact: true }).click()
   }
   await page.locator(".team-sidebar-card").getByRole("button", { name: chatTitle, exact: true }).click()
+  await showTeamPanel(page)
   await expect(page.getByLabel("Mensaje para el equipo")).toBeVisible()
+}
+
+async function showTeamPanel(page: Page) {
+  // Exercise the optional legacy panel through production controls; the modern
+  // full-width workspace has dedicated coverage in studio.spec.ts.
+  await expect(page.getByRole("button", { name: "Equipo", exact: true })).toHaveAttribute("aria-pressed", "true")
+  await page.getByRole("button", { name: "Código", exact: true }).click()
+  await page.getByRole("button", { name: "Agente (Ctrl+Alt+B)", exact: true }).click()
 }
 
 test.describe("fallback · IPC simulado", () => {
@@ -198,7 +209,7 @@ test.describe("fallback · IPC simulado", () => {
 
   test("acceso desde comandos ofrece Modelos Fallback", async ({ page }) => {
     await setup(page)
-    await page.locator(".command-center").click()
+    await page.getByRole("button", { name: "Buscar archivos y comandos (Ctrl+P)", exact: true }).click()
     await page.locator(".quick-input input").fill(">Modelos Fallback")
     await expect(page.locator(".quick-input")).toContainText("Modelos Fallback")
     await page.keyboard.press("Enter")
@@ -532,7 +543,7 @@ async function expectSelector(page: Page, model: string) {
   await expect(page.getByRole("contentinfo").getByRole("button", { name: `QA-FALLBACK ${model}`, exact: true })).toBeVisible()
 }
 async function openManager(page: Page) {
-  await page.locator(".command-center").click()
+  await page.getByRole("button", { name: "Buscar archivos y comandos (Ctrl+P)", exact: true }).click()
   await page.locator(".quick-input input").fill(">Modelos Fallback")
   await page.keyboard.press("Enter")
   await expect(manager(page).getByLabel("Modelo fallback disponible")).toBeVisible()

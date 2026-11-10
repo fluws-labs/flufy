@@ -10,7 +10,6 @@ import {
   selectSession,
   sessionInProject,
   setSessionArchived,
-  startPreviewTask,
   useAgent,
 } from "../state/agent"
 import { notify } from "../state/toasts"
@@ -40,7 +39,7 @@ import { confirmAction } from "../components/Dialog"
 import { TeamChat } from "./TeamChat"
 import { groupTeamSessions } from "../team/session-index"
 import { TeamSessionHistory } from "../team/TeamSessionHistory"
-import { PreviewChoiceCard, PreviewFloatingEditor } from "./PreviewHost"
+import { PreviewFloatingEditor } from "./PreviewHost"
 import { PreviewLibrary } from "./PreviewLibrary"
 import { previewIdentityFor, usePreviewTaskId } from "./preview-identity"
 import { previewIdentityKey } from "../preview"
@@ -64,8 +63,6 @@ export function SessionPane({ sessionId, variant, onPreviewOpen }: { sessionId: 
   const view = useAgent((s) => (sessionId ? s.views[sessionId] : undefined))
   const sessions = useMemo(() => allSessions.filter(sessionInProject), [allSessions])
   const root = useProject((s) => s.root)
-  const taskId = usePreviewTaskId(sessionId)
-  const previewIdentity = taskId ? previewIdentityFor(root, sessionId, taskId) : null
   const busy = status === "busy" || status === "retry"
   const archived = archivedSessionOwner(session, sessions)
   const chats = useTeams(s => s.chats)
@@ -196,10 +193,6 @@ export function SessionPane({ sessionId, variant, onPreviewOpen }: { sessionId: 
         </div>
       )}
       <div className="session-dock">
-        {root && sessionId && !archived && <div className="preview-actions" aria-label="Tarea de previsualización">
-          <span className="preview-note">Los ajustes continúan la tarea actual.</span>
-          <button type="button" className="btn btn-xs" disabled={busy} onClick={() => startPreviewTask(root, sessionId)}>Nueva tarea en este chat</button>
-        </div>}
         {leadBound && (
           <div className="context-banner lead-banner">
             <Icon name="organization" />
@@ -236,13 +229,6 @@ export function SessionPane({ sessionId, variant, onPreviewOpen }: { sessionId: 
           <div className="retry-banner">
             <Icon name="sync" spin /> Reintentando ({retry.attempt}): {providerErrorMessage({ data: { message: retry.message } })}
           </div>
-        )}
-        {previewIdentity && onPreviewOpen && (
-          <PreviewChoiceCard
-            key={previewIdentityKey(previewIdentity)}
-            identity={previewIdentity}
-            onChosen={(choice) => { if (choice === "create") onPreviewOpen() }}
-          />
         )}
         {mine.questions.map((q) => (
           <QuestionCard key={q.id} request={q} />
@@ -282,7 +268,7 @@ export function SessionPane({ sessionId, variant, onPreviewOpen }: { sessionId: 
             <button type="button" className="btn btn-xs" onClick={() => void setSessionArchived(archived.id, false)}>Restaurar</button>
           </div>
         ) : (
-          <Composer sessionId={sessionId} busy={busy} compact={variant === "panel"} usage={usage} />
+          <Composer sessionId={sessionId} busy={busy} compact={variant === "panel"} usage={usage} onPreviewOpen={onPreviewOpen} />
         )}
       </div>
     </div>

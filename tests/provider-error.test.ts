@@ -14,6 +14,19 @@ test("el rechazo de modelos Zen exclusivos de OpenCode indica cambiar modelo", (
   assert.equal(isRetryableProviderError(error), false)
 })
 
+test("la restricción regional de modelos Go indica elegir Global", () => {
+  const message = "This Go model is hosted outside Europe and the United States. Select Global at https://opencode.ai/console/org_qa_region/settings/privacy#regions to use it."
+  const error = { name: "APIError", data: { statusCode: 400, isRetryable: false, message, responseBody: JSON.stringify({ error: { type: "invalid_request_error", message } }) } }
+  for (const value of [error, JSON.stringify(error)]) {
+    for (const human of [readableProviderError(value), readableTeamError(value), providerErrorMessage(value)!]) {
+      assert.match(human, /modelo Go.*región.*organización.*Global/i)
+      assert.doesNotMatch(human, /org_qa_region|https:|invalid_request|HTTP 400/)
+    }
+  }
+  assert.match(readableTeamError("This Go model is hosted outside Europe and the United States."), /modelo Go.*región.*organización.*Global/i)
+  assert.equal(isRetryableProviderError(error), false)
+})
+
 test("un error de cuota anidado no expone cuerpo, cabeceras ni tokens", () => {
   const error = { name: "APIError", data: { message: "HTTP 429", isRetryable: true, responseBody: JSON.stringify({ error: { type: "usage_limit_reached", message: "The usage limit has been reached" } }), responseHeaders: { "set-cookie": "private-session", "x-codex-turn-state": "private-state" } } }
   for (const value of [error, JSON.stringify(error), new Error(JSON.stringify(error))]) {

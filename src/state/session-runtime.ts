@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from "react"
 import type { ModelRef } from "../lib/opencode"
 import type { ContextItem } from "./agent"
+import type { TeamImageInput } from "../team/types"
 
 export type SessionRuntime = {
   agent?: string; model?: ModelRef; variants?: Record<string, string>
@@ -9,6 +10,8 @@ export type SessionRuntime = {
   voiceStarted?: number; voiceEnded?: number; transcribedAt?: number
   submittedAt?: number; preparedAt?: number
   browserWindow?: number
+  previewEnabled?: boolean
+  teamImages?: TeamImageInput[]
   browserChoice?: { kind: "internal" } | { kind: "chrome"; pageId: number; windowId: number; tabs: number }
   transfer?: { id: string; source: string; target: string; expires: number; state: "pending" | "received" | "cancelled" }
 }

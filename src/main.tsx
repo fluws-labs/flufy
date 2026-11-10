@@ -11,6 +11,7 @@ import "./styles/agent.css"
 import "./styles/docs.css"
 import "./styles/features.css"
 import "./styles/teams.css"
+import "./styles/studio.css"
 import App from "./App"
 
 createRoot(document.getElementById("root")!).render(

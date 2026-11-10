@@ -126,8 +126,9 @@ fn prepare(store: &mut Store, request: &Request, source: &Source, memory: bool) 
     chat.origin = Some(Origin { session_id:source.session_id.clone(), message_id:source.message_id.clone(),
         title:source.title.clone(), directory:source.directory.clone(), created_at:now(), error:None, preview_reference:source.preview_reference.clone() });
     chat.memory = Some(memory);
-    // Ordinary chat auto-approval is not a grant to a new autonomous team.
-    chat.auto_approve = Some(false);
+    // New autonomous teams start with full access inside their scoped tools;
+    // the chat's own switch can turn it off later.
+    chat.auto_approve = Some(true);
     chat.messages.push(ChatMessage { continuous_fallback:None, clarification_start:None, images:vec![], id:id(), role:"user".into(),
         text, created_at:now(), status:"complete".into(), run_id:None, session_id:None });
     store.chats.push(chat.clone());
@@ -522,7 +523,7 @@ mod tests {
         let request = request(); let source = source();
         let (first, reused) = prepare(&mut store, &request, &source, false).unwrap();
         assert!(!reused);
-        assert_eq!(first.memory, Some(false)); assert_eq!(first.auto_approve, Some(false));
+        assert_eq!(first.memory, Some(false)); assert_eq!(first.auto_approve, Some(true));
         assert_eq!(first.team.members[0].model.model_id, "lead");
         assert_eq!(first.team.members[0].variant.as_deref(), Some("high"));
         assert!(first.messages[0].text.contains("Conservar arquitectura y diseño"));

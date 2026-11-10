@@ -31,6 +31,7 @@ async function setup(page: Page) {
     let result: unknown = null
     if (["recent_projects", "routines_list", "auth_entries", "live_busy_sessions", "fs_read_dir", "fs_list_files", "term_shells", "windows_list", "git_subrepos"].includes(command)) result = []
     if (command === "teams_state") result = store
+    if (command === "memory_overview") result = { scope: "C:/qa/teams", slug: "teams", preferences: "", overview: "", tasks: [], notes: [] }
     if (command === "team_routing_catalog") result = ["lead", "worker"].map(modelId => ({ runtimeId: "opencode", providerId: "openai", modelId, capabilityScope: "provider:openai", variant: null, name: `${modelId} habilitado`, tools: true, vision: true, reasoning: true, variants: ["high"] }))
     if (command === "team_chats_planner") {
       const chat = store.chats.find(c => c.id === args.chatId)!
@@ -172,12 +173,23 @@ async function createTeam(page: Page) {
   await members.nth(2).getByLabel("QA v1", { exact: true }).check()
   await page.screenshot({ path: test.info().outputPath("equipo-configurado.png") })
   await page.getByRole("button", { name: "Guardar y abrir Team Chat", exact: true }).click()
+  await openTeamPanel(page)
   await expect(page.locator(".team-chat-header")).toContainText("Team Backend")
+}
+
+// Legacy side-panel coverage uses the actual Código + Agente controls. The
+// full-width team workspace and its navigation are covered in studio.spec.ts.
+async function openTeamPanel(page: Page) {
+  await expect(page.getByRole("button", { name: "Equipo", exact: true })).toHaveAttribute("aria-pressed", "true")
+  await page.getByRole("button", { name: "Código", exact: true }).click()
+  await page.getByRole("button", { name: "Agente (Ctrl+Alt+B)", exact: true }).click()
+  await expect(page.locator(".agent-panel .team-chat")).toBeVisible()
 }
 
 test("modo equipo abre sin plantilla y muestra integrantes elegidos por el Lead y respuestas breves", async ({ page }) => {
   const { store, calls } = await setup(page)
   await page.getByRole("button", { name: "Modo equipo", exact: true }).click()
+  await openTeamPanel(page)
   await expect(page.locator(".team-chat-welcome")).toContainText("Él decide cuántos especialistas")
   expect(store.teams).toHaveLength(0)
   expect(store.chats[0].team.members).toHaveLength(1)
@@ -256,6 +268,7 @@ test("modo equipo abre sin plantilla y muestra integrantes elegidos por el Lead 
   await page.reload()
   await page.getByTitle("Equipos IA",{exact:true}).click()
   await page.locator(".team-sidebar-card").getByRole("button",{name:"Modo equipo",exact:true}).click()
+  await openTeamPanel(page)
   await expect(page.locator(".team-chat-header")).toContainText("4 integrantes")
   await expect(page.getByText(/Detalle técnico completo:/).first()).not.toBeVisible()
 })
@@ -274,9 +287,10 @@ test("equipo con modelos distintos y skills combinables persiste; chat normal si
   await expect(page.locator(".team-employee").nth(2).getByLabel("Nombre del integrante")).toHaveValue("Ana Backend")
   await page.getByRole("button", { name: "Nuevo chat (Ctrl+Alt+N)", exact: true }).click()
   await page.getByText("Chat normal", { exact: true }).click()
-  await expect(page.locator(".team-chat")).toHaveCount(0)
+  await expect(page.locator(".team-chat:visible")).toHaveCount(0)
   await expect(page.locator(".composer")).toBeVisible()
   await page.locator(".team-sidebar-card").last().getByRole("button", { name: "Team Backend", exact: true }).click()
+  await openTeamPanel(page)
   await expect(page.locator(".team-chat")).toBeVisible()
   await page.keyboard.press("Control+Alt+n")
   await expect(page.locator(".team-chat")).toHaveCount(0)
@@ -288,6 +302,8 @@ test("perfil Backend conserva skills extra y perfil Review quita herramientas de
   await page.evaluate(async () => { const { refreshTeams } = await import(/* @vite-ignore */ "/src/state/teams.ts"); await refreshTeams() })
   await createTeam(page)
   const member = page.locator(".team-employee").nth(2)
+  await page.getByTitle("Equipos IA", { exact: true }).click()
+  await page.locator(".team-sidebar-card").first().getByRole("button", { name: "Configurar", exact: true }).click()
   await member.getByLabel("Aplicar perfil de skills").selectOption("Backend")
   await expect(member.getByLabel("Security v2", { exact: true })).toBeChecked()
   await expect(member.getByLabel("QA v1", { exact: true })).toBeChecked()
@@ -579,6 +595,7 @@ test("se conversa con el Lead durante bloqueos y trabajo sin duplicar las tareas
   await page.reload()
   await page.getByTitle("Equipos IA", { exact: true }).click()
   await page.locator(".team-sidebar-card").last().getByRole("button", { name: "Team Backend", exact: true }).click()
+  await openTeamPanel(page)
   await expect(page.locator(".team-conversation.assistant")).toHaveCount(3)
   await page.screenshot({ path: test.info().outputPath("lead-conversacion-recuperada.png") })
 })
@@ -739,6 +756,7 @@ test("imágenes: adjuntar, quitar, enviar y recuperar del historial", async ({ p
   await page.reload()
   await page.getByTitle("Equipos IA",{exact:true}).click()
   await page.locator(".team-sidebar-card").last().getByRole("button",{name:"Team Backend",exact:true}).click()
+  await openTeamPanel(page)
   const image = page.locator(".team-chat-message img[alt='referencia.png']")
   await expect(image).toBeVisible()
   await expect(image).toHaveAttribute("src",`data:image/png;base64,${png.toString("base64")}`)
@@ -857,6 +875,7 @@ test("abrir la conversación normal que ya estaba seleccionada cierra la vista d
     useAgent.setState({ activeSessionId: normal.id, sessions: [normal], allSessions: [normal], openSessionIds: [normal.id], sessionsLoaded: true })
     selectTeamChat(useTeams.getState().chats[0].id)
   })
+  await openTeamPanel(page)
   await expect(page.locator(".team-chat")).toBeVisible()
   await page.getByTitle(/Sesiones del agente/).click()
   await page.locator(".session-row", { hasText: "Conversación anterior" }).click()
@@ -905,6 +924,8 @@ test("el historial pliega cada equipo completo y conserva los chats normales al 
   await expect(group.locator(".session-row")).toHaveCount(6)
   await expect(group.getByRole("button", { name: "Hablar con el Lead" })).toBeVisible()
   await group.getByRole("button", { name: "Hablar con el Lead" }).click()
+  await openTeamPanel(page)
+  await page.getByTitle(/Sesiones del agente/).click()
   await expect(page.locator(".team-chat-header")).toContainText("Listo para tu revisión")
   await page.getByPlaceholder("Filtrar sesiones").fill("Subagente anidado")
   await expect(group).toHaveCount(1)
@@ -1125,6 +1146,7 @@ test("Plan Vivo: las tarjetas siguen sesiones y evidencia, rechazan falsos compl
   await page.reload()
   await page.getByTitle("Equipos IA", { exact: true }).click()
   await page.getByText("Team Backend", { exact: true }).first().click()
+  await openTeamPanel(page)
   await page.getByRole("navigation", { name: "Vistas del equipo" }).getByRole("button", { name: "Tablero", exact: true }).click()
   await expect(page.locator('.team-board-card[data-task-id="api"]')).toHaveAttribute("data-column", "verified")
 })

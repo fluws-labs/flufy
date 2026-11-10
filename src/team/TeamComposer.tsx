@@ -1,6 +1,7 @@
 import { useEffect, useImperativeHandle, useRef, useState, type Ref } from "react"
 import { Icon } from "../components/ui"
 import { teamCall } from "../state/teams"
+import { patchSessionRuntime, sessionRuntime } from "../state/session-runtime"
 import { setContinuousMode, validateContinuousSend } from "../state/fallback"
 import { openImage } from "../state/lightbox"
 import { CHATGPT } from "../state/accounts"
@@ -21,10 +22,12 @@ export type TeamComposerHandle = { write: (text: string) => void }
 
 const CONNECT_CHATGPT = "__connect_chatgpt__"
 
-export function TeamComposer({ ref, chat, label, pending, onSent, onBrowser, allowImages = true }: { ref?: Ref<TeamComposerHandle>; chat: TeamChatRecord; label: string; pending: boolean; onSent: () => void; onBrowser?: () => void; allowImages?: boolean }) {
+export function TeamComposer({ ref, chat, label, pending, onSent, onBrowser, allowImages = true, compact = false }: { ref?: Ref<TeamComposerHandle>; chat: TeamChatRecord; label: string; pending: boolean; onSent: () => void; onBrowser?: () => void; allowImages?: boolean; compact?: boolean }) {
   const chatId = chat.id
-  const [text, setText] = useState("")
-  const [images, setImages] = useState<TeamImageInput[]>([])
+  const draftKey = `team:${chatId}`
+  const [text, setText] = useState(() => sessionRuntime(draftKey).draft ?? "")
+  const [images, setImages] = useState<TeamImageInput[]>(() => sessionRuntime(draftKey).teamImages ?? [])
+  useEffect(() => { patchSessionRuntime(draftKey, { draft: text, teamImages: images }) }, [draftKey, text, images])
   const [sending, setSending] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState("")
@@ -128,12 +131,12 @@ export function TeamComposer({ ref, chat, label, pending, onSent, onBrowser, all
     const [providerID, ...rest] = item.id.split("/")
     await teamCall("team_chats_model", { chatId, agentId: lead.id, model: { providerID, modelID: rest.join("/") }, variant: null })
   }
-  return <form className="team-composer" onSubmit={e => { e.preventDefault(); void submit() }}
+  return <form className={`team-composer${compact ? " team-composer-compact" : ""}`} onSubmit={e => { e.preventDefault(); void submit() }}
     onDragOver={e => { if (allowImages && e.dataTransfer.types.includes("Files")) e.preventDefault() }}
     onDrop={e => { if (allowImages && e.dataTransfer.files.length) { e.preventDefault(); void addImages(Array.from(e.dataTransfer.files)) } }}>
     <div className="team-composer-heading"><label htmlFor={`team-goal-${chatId}`}>{label}</label>{pending && <button className="btn btn-xs" type="button" aria-label="Detener pedido del Lead" title="Detener pedido del Lead" onClick={() => void teamCall("team_chat_cancel", { chatId })}>Detener</button>}</div>
     {images.length > 0 && <div className="team-chat-images team-image-drafts">{images.map((image, i) => <figure key={i}><button type="button" onClick={() => openImage(image.url, image.filename)} title={`Ampliar ${image.filename}`}><img src={image.url} alt={image.filename} /></button><figcaption>{image.filename}</figcaption><button type="button" className="btn btn-xs" disabled={locked} aria-label={`Quitar ${image.filename}`} onClick={() => setImages(previous => previous.filter((_, index) => index !== i))}><Icon name="close" /></button></figure>)}</div>}
-    <textarea ref={textarea} id={`team-goal-${chatId}`} rows={3} value={text} onChange={e => setText(e.target.value)} placeholder={pending ? "Escribile al Lead: si hay trabajo en curso, lo ajusta…" : "Hablá con el Lead: pedí un cambio o preguntá qué falló…"}
+    <textarea ref={textarea} id={`team-goal-${chatId}`} rows={compact ? 1 : 3} value={text} onChange={e => setText(e.target.value)} placeholder={pending ? "Escribile al Lead: si hay trabajo en curso, lo ajusta…" : compact ? "Escribile al equipo…" : "Hablá con el Lead: pedí un cambio o preguntá qué falló…"}
       onPaste={e => { if (!allowImages) return; const files = Array.from(e.clipboardData.items).filter(item => item.type.startsWith("image/")).map(item => item.getAsFile()).filter((file): file is File => !!file); if (files.length) { e.preventDefault(); void addImages(files) } }}
       onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void submit() } }} />
     <input ref={fileInput} type="file" accept={IMAGE_TYPES} multiple hidden aria-label="Imágenes para el equipo" onChange={e => { if (e.target.files) void addImages(Array.from(e.target.files)); e.target.value = "" }} />
@@ -155,7 +158,7 @@ export function TeamComposer({ ref, chat, label, pending, onSent, onBrowser, all
     <div className="team-composer-actions">
       <div className="team-composer-tools">
         {onBrowser && <button className="btn btn-sm" type="button" onClick={onBrowser}><Icon name="browser" /> Navegador</button>}
-        {allowImages && <button className="btn btn-sm" type="button" disabled={locked} onClick={() => fileInput.current?.click()}><Icon name="file-media" /> {loading ? "Cargando imágenes…" : "Adjuntar imagen"}</button>}
+        {allowImages && <button className="btn btn-sm" type="button" disabled={locked} onClick={() => fileInput.current?.click()}><Icon name="file-media" /> {loading ? "Cargando imágenes…" : compact ? "Adjuntar" : "Adjuntar imagen"}</button>}
       </div>
       <div className="team-composer-send">
         {recording ? (

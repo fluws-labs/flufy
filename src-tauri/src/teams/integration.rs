@@ -438,7 +438,7 @@ fn native_team_end_to_end() {
                     .unwrap();
                 }
             }
-            assert!(!crate::approvals::auto_approve(
+            assert!(crate::approvals::auto_approve(
                 &handle,
                 result.tasks[0].attempts[0].session_id.as_ref().unwrap()
             ));

@@ -60,6 +60,7 @@ import { Icon, IconButton } from "../components/ui"
 import { openMenuAt } from "../components/ContextMenu"
 import { Logo } from "../components/Logo"
 import { UpdateButton } from "../components/Updates"
+import { useStudio, type StudioMode } from "../state/studio"
 
 const VIEWS: Array<{ id: ViewId; icon: string; title: string; keys: string }> = [
   { id: "explorer", icon: "files", title: "Explorador", keys: "Ctrl+Shift+E" },
@@ -130,6 +131,7 @@ function FeatureChip() {
 }
 
 export function TitleBar() {
+  const mode = useStudio(s => s.mode)
   const root = useProject((s) => s.project ?? s.root)
   const recent = useProject((s) => s.recent)
   const sidebar = useLayout((s) => s.sidebarVisible)
@@ -172,18 +174,29 @@ export function TitleBar() {
     <header className="title-bar">
       <div className="title-left">
         <button type="button" className="title-brand" onClick={(e) => projectMenu(e.currentTarget)} title={root ?? "Abrir carpeta"}>
-          <Logo size={22} className="brand-logo" />
-          <span className="title-project">{projectName(root)}</span>
+          {mode === "code" ? <Logo size={22} className="brand-logo" /> : <span className="studio-brand-mark" aria-hidden="true">f</span>}
+          {mode === "code" ? <span className="title-project">{projectName(root)}</span> : <><span>flufy</span><span className="studio-brand-project">{root ? projectName(root) : ""}</span></>}
           <Icon name="chevron-down" />
         </button>
         <FeatureChip />
       </div>
-      <button type="button" className="command-center" onClick={() => showQuickOpen()}>
-        <Icon name="search" />
-        <span>Buscar archivos, comandos (&gt;), sesiones (#)</span>
-        <kbd className="kbd">Ctrl+P</kbd>
-      </button>
+      <nav className="studio-mode-switch" aria-label="Modo de trabajo">
+        {([["design", "Diseñar"], ["team", "Equipo"], ["research", "Investigar"], ["code", "Código"]] as [StudioMode, string][]).map(([id, label]) => <button key={id} type="button" aria-pressed={mode === id} className={mode === id ? "active" : ""} title={id === "code" ? "Explorar y leer los archivos del proyecto" : undefined} onClick={() => {
+          if (id === "code") {
+            useLayout.setState({ activeView: "explorer", sidebarVisible: true, focusChat: false, agentVisible: false, panelVisible: false })
+            const editors = useEditors.getState()
+            const group = editors.groups.find(g => g.id === editors.activeGroupId)
+            const active = group?.tabs.find(t => t.id === group.activeId)
+            if (active?.input.kind !== "file") {
+              const file = group?.tabs.findLast(t => t.input.kind === "file")
+              openEditor(file?.input ?? { kind: "welcome" })
+            }
+          }
+          useStudio.getState().setMode(id)
+        }}>{label}</button>)}
+      </nav>
       <div className="title-actions">
+        <IconButton icon="search" title="Buscar archivos y comandos (Ctrl+P)" onClick={() => showQuickOpen()} />
         <UpdateButton />
         <IconButton icon="layout" title="Presets de layout" onClick={(e) => layoutMenu(e.currentTarget)} />
         <IconButton icon={sidebar ? "layout-sidebar-left" : "layout-sidebar-left-off"} title="Barra lateral (Ctrl+B)" active={sidebar} onClick={() => useLayout.getState().toggleSidebar()} />
