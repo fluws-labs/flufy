@@ -28,6 +28,9 @@ import { desktopContextText, prepareDesktopContext } from "../lib/desktop-contex
 import { desktopCaptureMarker, INTERNAL_SCREENSHOT_FILENAME } from "../lib/internal-context"
 import { previewTaskContext, previewTaskKey, resolvePreviewTaskId } from "../preview/task-identity"
 import { previewAdjustmentContext, type PreviewAdjustment } from "../preview/editor-context"
+import { previewClient } from "../preview/client"
+import { preparePreviewChoice, previewPreferenceContext } from "../preview/prompt-choice"
+import { useStudio } from "./studio"
 
 export type ChatMessage = { info: Message; parts: Part[] }
 
@@ -1042,6 +1045,7 @@ export function selectSession(id: string | null) {
     foreignSessionHandler(foreign, id)
     return
   }
+  if (useStudio.getState().mode === "team") useStudio.getState().setMode("research")
   useAgent.setState((s) => {
     if (!id) {
       return {
@@ -1071,6 +1075,7 @@ export function setMemory(sessionId: string, enabled: boolean): void {
 }
 
 export function newSession() {
+  if (useStudio.getState().mode === "team") useStudio.getState().setMode("research")
   useAgent.setState((s) => ({
     activeSessionId: null,
     openSessionIds: s.openSessionIds.includes(DRAFT_TAB) ? s.openSessionIds : [...s.openSessionIds, DRAFT_TAB],
@@ -1311,11 +1316,14 @@ export async function sendPrompt(
     const taskId = resolvePreviewTaskId(view?.messages ?? [], root, id,
       current.previewTasks[previewTaskKey(root, id)], !!view && !view.hasMore) ?? startPreviewTask(root, id)
     rememberPreviewTask(root, id, taskId)
+    const previewEnabled = previewAdjustment ? true : runtime.previewEnabled === true
+    if (isTauri) await preparePreviewChoice(previewClient, { project: root, conversationId: id, taskId }, previewEnabled)
     if (previewAdjustment) {
       if (taskId !== previewAdjustment.identity.taskId) throw new Error("La tarea visual cambió. Reabrí el editor de la tarea vigente antes de enviar ajustes.")
       contextParts.push({ type: "text", synthetic: true, text: previewAdjustmentContext(previewAdjustment) })
     }
     contextParts.push({ type: "text", synthetic: true, text: previewTaskContext({ projectRoot: root, sessionId: id, taskId, designId: "design" }) })
+    contextParts.push({ type: "text", synthetic: true, text: previewPreferenceContext(previewEnabled) })
   }
   const trimmed = text.trim()
   const command = findCommand(trimmed, s.commands)
@@ -1332,7 +1340,7 @@ export async function sendPrompt(
   }
   const variant = selectedVariant(s)
   const agentName = runtime.agent ?? (isBubbleWindow() ? BUBBLE_AGENT : s.agentName)
-  patchSessionRuntime(id, { agent: agentName, model: s.model, variants: s.variants, submittedAt: Date.now() })
+  patchSessionRuntime(id, { agent: agentName, model: s.model, variants: s.variants, previewEnabled: runtime.previewEnabled === true, submittedAt: Date.now() })
   if (isTauri && agentName === BUBBLE_AGENT && command) {
     await call("desktop_task_begin", { session: id, instruction: trimmed }).catch(() => undefined)
   }

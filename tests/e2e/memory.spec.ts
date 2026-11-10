@@ -14,6 +14,7 @@ const overview = {
 
 async function setup(page: Page) {
   await page.addInitScript(({ root, overview }) => {
+    localStorage.setItem("guillecode:studio.mode", JSON.stringify("code"))
     const key = root.toLowerCase()
     localStorage.setItem(`guillecode:agent.openSessions@${key}`, JSON.stringify(["s1"]))
     localStorage.setItem(`guillecode:agent.activeSession@${key}`, JSON.stringify("s1"))
@@ -101,7 +102,7 @@ test("toggle de memoria por conversación, encendido por defecto", async ({ page
 
 test("la vista de memoria muestra trabajos y notas, y permite continuar en un chat nuevo", async ({ page }) => {
   await setup(page)
-  await page.locator(".command-center").click()
+  await page.getByRole("button", { name: "Buscar archivos y comandos (Ctrl+P)", exact: true }).click()
   await page.locator(".quick-input input").fill(">memoria")
   await page.keyboard.press("Enter")
   await expect(page.locator(".memory-editor")).toBeVisible()

@@ -969,6 +969,14 @@
 .composer textarea::placeholder {
   color: var(--fg-faint);
 }
+.composer-preferences { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; min-height: 28px; padding-top: 6px; margin-top: 1px; border-top: 1px solid var(--border); }
+.composer-preview-toggle { display: inline-flex; align-items: center; gap: 7px; font-size: 11px; color: var(--fg-dim); cursor: pointer; }
+.composer-preview-toggle input { width: 13px; height: 13px; margin: 0; accent-color: var(--accent-strong); cursor: pointer; }
+.composer-preview-toggle.enabled { color: var(--accent-strong); }
+.composer-preview-toggle:focus-within { outline: 1px solid var(--accent-strong); outline-offset: 3px; border-radius: 3px; }
+.composer-preference-action { display: inline-flex; align-items: center; gap: 5px; min-height: 24px; padding: 2px 4px; border-radius: 4px; color: var(--fg-dim); font-size: 10px; }
+.composer-preference-action:hover:not(:disabled) { color: var(--fg); background: var(--bg-hover); }
+.composer-new-task { margin-left: auto; }
 .composer-footer {
   display: flex;
   flex-wrap: wrap;

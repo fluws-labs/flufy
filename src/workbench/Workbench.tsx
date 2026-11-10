@@ -46,6 +46,8 @@ import { Icon, Spinner } from "../components/ui"
 import { Logo } from "../components/Logo"
 import { UpdatesHost } from "../components/Updates"
 import { startUpdates } from "../state/updates"
+import { useStudio } from "../state/studio"
+import { StudioWorkspace } from "./StudioWorkspace"
 
 const VIEW_COMPONENTS: Record<ViewId, () => React.ReactElement> = {
   explorer: ExplorerView,
@@ -145,6 +147,7 @@ function NoProject() {
 }
 
 export function Workbench() {
+  const studioMode = useStudio(s => s.mode)
   const modelsLoaded = useAgent((s) => s.modelsLoaded)
   const modelCount = useAgent((s) => s.models.length)
   const [setup, setSetup] = useState(false)
@@ -197,7 +200,7 @@ export function Workbench() {
   )
 
   return (
-    <div className="workbench">
+    <div className={`workbench studio-workbench${studioMode === "code" ? " code-reading-mode" : ""}`}>
       <TitleBar />
       <div className={`workbench-main${focusChat ? " focus-chat" : ""}`}>
         <ActivityBar />
@@ -218,6 +221,7 @@ export function Workbench() {
             />
           </>
         )}
+        {root && studioMode !== "code" ? <StudioWorkspace mode={studioMode} /> : <>
         {!focusChat && (
           <div className="center">
             {root ? (
@@ -269,6 +273,7 @@ export function Workbench() {
             </div>
           </>
         )}
+        </>}
       </div>
       <StatusBar />
       <QuickInput />

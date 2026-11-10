@@ -81,7 +81,7 @@ export function initApprovals(): void {
 }
 
 export function setApprovalForSession(sessionId: string, enabled: boolean): void {
-  if (enabled && isTeamSession(sessionId)) {notify.info("Permisos del equipo", "Los comandos habituales de verificación ya están autorizados. Las demás acciones conservan su confirmación de OpenCode.");return}
+  if (enabled && isTeamSession(sessionId)) {notify.info("Permisos del equipo", "El acceso del equipo se configura en el chat del equipo; los agentes ya usan su acceso total salvo que lo desactives.");return}
   useApprovals.setState((s) => ({ sessions: { ...s.sessions, [sessionId]: enabled } }))
   saveJson("approvals.sessions", useApprovals.getState().sessions)
   if (isTauri && sessionId && sessionId !== DRAFT_TAB) {

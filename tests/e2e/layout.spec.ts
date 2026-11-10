@@ -3,6 +3,7 @@ import { expect, test, type Page } from "@playwright/test"
 async function boot(page: Page) {
   await page.addInitScript(() => {
     localStorage.clear()
+    localStorage.setItem("guillecode:studio.mode", JSON.stringify("code"))
     let id = 0
     Object.assign(window, { __TAURI_INTERNALS__: {
       metadata: { currentWindow: { label: "main" }, currentWebview: { label: "main" } },
@@ -22,6 +23,39 @@ async function boot(page: Page) {
 
 const width = (page: Page) =>
   page.evaluate(async () => (await import(/* @vite-ignore */ "/src/state/layout.ts")).useLayout.getState().agentWidth)
+
+test("la barra lateral permanece montada en Diseñar, Equipo e Investigar y Código está disponible", async ({ page }) => {
+  await boot(page)
+  await expect(page.getByRole("button", { name: "Continuar con Flufy" })).toBeVisible()
+  await page.evaluate(() => {
+    const original = window.__TAURI_INTERNALS__.invoke
+    window.__TAURI_INTERNALS__.invoke = async (command, args) => {
+      if (command === "memory_overview") return { scope: "D:/qa/studio", slug: "studio", preferences: "", overview: "", notes: [], tasks: [] }
+      if (command === "teams_state") return { schemaVersion: 1, teams: [], chats: [], skills: [] }
+      return original(command, args)
+    }
+  })
+  await page.evaluate(async () => {
+    // @ts-ignore imports served by Vite
+    const { useLayout } = await import("/src/state/layout.ts")
+    const { useAgent } = await import(/* @vite-ignore */ "/src/state/agent.ts")
+    const { useProject } = await import(/* @vite-ignore */ "/src/state/project.ts")
+    useProject.setState({ root: "D:/qa/studio", ready: true })
+    useAgent.setState({ modelsLoaded: true, modelsError: null, models: [{ providerID: "qa", modelID: "qa", providerName: "QA", name: "QA", variants: [], contextLimit: 100000 }] })
+    useLayout.setState({ sidebarVisible: true, focusChat: false, activeView: "explorer" })
+  })
+  const sidebar = page.locator(".side-bar-slot")
+  await expect(sidebar).toBeVisible()
+  await sidebar.evaluate(element => element.setAttribute("data-sidebar-persisted", "yes"))
+  for (const mode of ["Diseñar", "Equipo", "Investigar"]) {
+    await page.getByRole("button", { name: mode, exact: true }).click()
+    await expect(page.locator(".studio-workspace")).toBeVisible()
+    await expect(sidebar).toBeVisible()
+    await expect(sidebar).toHaveAttribute("data-sidebar-persisted", "yes")
+    await expect(page.locator(".activity-bar")).toBeVisible()
+    await expect(page.getByRole("button", { name: "Código", exact: true })).toBeVisible()
+  }
+})
 
 test("el chat en foco se puede redimensionar y vuelve a su ancho al salir", async ({ page }) => {
   await boot(page)

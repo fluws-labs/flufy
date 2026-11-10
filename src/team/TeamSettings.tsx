@@ -24,7 +24,7 @@ export function TeamSettings({ team, run, chatId, pending, memory, approve }: { 
     <section className="team-card"><h4>Preferencias de este chat</h4>
       <label className="team-board-density"><input type="checkbox" disabled={pending} checked={approve} onChange={e => void teamCall("team_chats_settings", { chatId, memory, autoApprove: e.target.checked })} /> Permitir que el equipo actúe sin pedirme permiso</label>
       <label className="team-board-density"><input type="checkbox" disabled={pending} checked={memory} onChange={e => void teamCall("team_chats_settings", { chatId, memory: e.target.checked, autoApprove: approve })} /> Recordar este proyecto y este chat</label>
-      <p className="team-note">Con la aprobación automática el equipo no te interrumpe por permisos; solo por decisiones que no puede tomar. La memoria se inyecta y se guarda desde este chat.</p>
+      <p className="team-note">El acceso total viene activado por defecto: el equipo no te interrumpe por permisos, solo por decisiones que no puede tomar. Podés desactivarlo en este chat. La memoria se inyecta y se guarda desde este chat.</p>
     </section>
     <section className="team-card"><h4>Plan Vivo V2 · experimental</h4>
       <p className="team-note">Se aplica a los próximos objetivos. Cada ejecución conserva su planificador original. Desactivado inicialmente.</p>

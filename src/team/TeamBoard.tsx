@@ -7,10 +7,10 @@ import { recoveredAutomatically } from "./ownership"
 import type { TeamRun, TeamTask } from "./types"
 import { formatDateTime } from "../lib/time"
 
-type Props = { run: TeamRun; onSession: (id: string, directory: string) => void; onRetry: () => Promise<unknown>; onEvidence?: () => void; readOnly?: boolean }
+type Props = { run: TeamRun; onSession: (id: string, directory: string) => void; onRetry: () => Promise<unknown>; onEvidence?: () => void; readOnly?: boolean; compact?: boolean }
 type Card = ReturnType<typeof projectBoard>[number]
 
-export function TeamBoard({ run, onSession, onRetry, onEvidence, readOnly = false }: Props) {
+export function TeamBoard({ run, onSession, onRetry, onEvidence, readOnly = false, compact = false }: Props) {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [retrying, setRetrying] = useState(false)
   const detail = useRef<HTMLElement>(null)
@@ -52,8 +52,15 @@ export function TeamBoard({ run, onSession, onRetry, onEvidence, readOnly = fals
   }
 
   function columns(lane: Card[]) {
-    return <div className="team-board-columns">{boardColumns.filter(column => ["todo", "ready", "running", "verifying", "verified"].includes(column.id) || lane.some(c => c.column === column.id)).map(column => {
-      const content = lane.filter(c => c.column === column.id)
+    const groups = compact ? [
+      { id: "todo", label: "Pendiente", icon: "circle-filled", states: ["todo", "ready", "blocked", "reconciling"] },
+      { id: "running", label: "En curso", icon: "circle-filled", states: ["running"] },
+      { id: "verifying", label: "Revisión", icon: "circle-filled", states: ["verifying", "needs_changes"] },
+      { id: "verified", label: "Listo", icon: "circle-filled", states: ["verified"] },
+      ...(lane.some(card => card.column === "cancelled") ? [{ id: "cancelled", label: "Canceladas", icon: "circle-slash", states: ["cancelled"] }] : []),
+    ] : boardColumns.filter(column => ["todo", "ready", "running", "verifying", "verified"].includes(column.id) || lane.some(c => c.column === column.id)).map(column => ({ ...column, states: [column.id] }))
+    return <div className="team-board-columns">{groups.map(column => {
+      const content = lane.filter(c => column.states.includes(c.column))
       return <section key={column.id} className={`team-board-column is-${column.id}`} aria-label={column.label}>
         <h4><Icon name={column.icon} /> {column.label}<span>{content.length}</span></h4>
         <div className="team-board-stack">{content.map(renderCard)}{!content.length && <p className="team-board-empty">Sin tareas</p>}</div>
@@ -61,14 +68,14 @@ export function TeamBoard({ run, onSession, onRetry, onEvidence, readOnly = fals
     })}</div>
   }
 
-  return <section className="team-board" aria-label="Tablero de tareas">
-    <header className="team-board-header">
+  return <section className={`team-board${compact ? " team-board-compact" : ""}`} aria-label="Tablero de tareas">
+    {!compact && <header className="team-board-header">
       <div><span className="team-board-eyebrow">{run.planV2?.enabled ? `PLAN VIVO · v${run.planV2.revisionNumber}` : "TABLERO DE TRABAJO"}</span><h3>{verified}/{cards.length} verificadas</h3>
         <p className="team-note">{run.planV2?.enabled ? `Etapa: ${{ discovery: "Descubriendo", proposal: "Proponiendo", repair: "Reparando", validation: "Validando cobertura", plan_invalid: "Plan inválido", validated: "Plan validado", dispatch: "Ejecución" }[run.planV2.stage] ?? run.planV2.stage}` : "Estado derivado de tareas, sesiones y evidencias."}</p>
         <p className="team-board-next">{next.length ? <>Sigue: <strong>{next.join(" → ")}</strong></> : hasOpenTasks ? "El equipo está cerrando las tareas en curso." : "No queda nada pendiente: después te toca revisar la entrega."}</p>
       </div>
       {onEvidence && <button className="btn btn-xs" onClick={onEvidence}>Ver evidencias</button>}
-    </header>
+    </header>}
     {run.status === "planning_blocked" && <section className="team-error" role="alert"><strong>El plan necesita corrección. No se inició ningún trabajador.</strong><ul>{run.planV2?.validation?.issues.map((issue, i) => <li key={i}>{issue.code} · {issue.taskIds.join(", ")} {issue.message}</li>)}</ul><button className="btn btn-sm" disabled={retrying || readOnly} onClick={() => { setRetrying(true); void onRetry().finally(() => setRetrying(false)) }}>Reintentar planificación</button></section>}
     {!cards.length && run.status !== "planning_blocked" && <p className="team-board-empty">{run.status === "planning" ? "El Lead está preparando el plan. Las tarjetas aparecen después de validarlo." : "Esta ejecución todavía no tiene tareas."}</p>}
     {!!cards.length && columns(cards)}
