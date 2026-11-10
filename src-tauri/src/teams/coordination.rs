@@ -1,6 +1,7 @@
 use super::{domain::*, evidence, run, runner, update_run};
 use serde::Deserialize;
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use tauri::AppHandle;
 
@@ -45,6 +46,16 @@ struct ResumeTask {
 const CIRCULAR_WAIT: &str = "El pedido crea una espera circular entre agentes; el Lead debe separar el contrato de la integración";
 const INVALID_RESUME: &str = "El Lead debe dar instrucciones concretas para cada otra tarea suspendida, sin repetir IDs";
 const TECHNICAL_ESCALATION: &str = "El Lead derivó un problema técnico al usuario sin una decisión imprescindible. Diagnosticá la causa y proponé resume o tareas de ayuda con wait; una prueba fallida o faltante la resuelve el equipo";
+const NO_PROGRESS: &str = "NO_PROGRESS: repetiste una espera sin cambios en tareas ni evidencia. Revisá el insumo real, reutilizá tareas existentes y separá documentación de verificación; no repitas la decisión ni crees reemplazos duplicados";
+
+fn progress_state(r: &Run) -> String {
+    // Summaries, timestamps, Lead sessions and replies are coordination, not
+    // progress. Persist the observable state so restarts cannot reset the guard.
+    let state = json!(r.tasks.iter().map(|t| json!({"id":t.id,"status":t.status,"dependencies":t.dependencies,
+        "evidence":t.attempts.iter().filter(|a| !a.commands.is_empty() || !a.observations.is_empty())
+            .map(|a| json!({"commands":a.commands,"observations":a.observations})).collect::<Vec<_>>()})).collect::<Vec<_>>());
+    format!("{:x}", Sha256::digest(state.to_string().as_bytes()))
+}
 
 // Pending requests are suggestions, not scheduler edges, but must be included
 // when diagnosing a mutual wait before the Lead installs its next decision.
@@ -97,9 +108,14 @@ pub(super) fn validate_wait(r: &Run, from: &str, targets: &[String]) -> Result<(
     }
     if targets
         .iter()
-        .any(|id| !r.tasks.iter().any(|t| &t.id == id))
+        .any(|id| !r.tasks.iter().any(|t| &t.id == id && t.status != "cancelled"))
     {
         return Err("Pedido al Lead con una tarea inexistente".into());
+    }
+    if r.coordination.iter().any(|c| c.status == "waiting" && c.from_task_id != from
+        && r.tasks.iter().any(|t| t.id == c.from_task_id && !["completed", "cancelled"].contains(&t.status.as_str()))
+        && c.task_ids.iter().any(|id| !r.tasks.iter().any(|t| &t.id == id && t.status != "cancelled"))) {
+        return Err("Pedido al Lead con una tarea inexistente o cancelada en una espera vigente".into());
     }
     let mut done = HashSet::new();
     loop {
@@ -179,6 +195,8 @@ fn repairable_decision(error: &str) -> bool {
             "REVISION_CONFLICT",
             "INVALID_OPERATION",
             "ACTIVE_TASK",
+            "DUPLICATE_DELIVERABLE",
+            "NO_PROGRESS",
             "[{\"code\":",
             "JSON incompleto",
             "El Lead devolvió una respuesta de coordinación inválida",
@@ -293,7 +311,7 @@ fn check_once(app: &AppHandle, run_id: &str, request_id: &str) -> Result<(), Str
         }
         Ok(())
     })?;
-    let prompt = format!("Sos el Lead de coordinación, con herramientas SOLO de lectura. Un agente necesita algo de otro. Revisá los archivos actuales y los estados reales de todas las tareas. Los demás siguen trabajando: no los reinicies ni cambies archivos. Respondé resume solo si el solicitante ya puede continuar con un contrato concreto; wait si falta una entrega, indicando IDs reales; blocked únicamente ante una decisión imprescindible del usuario o un acceso que realmente no puede resolver el equipo. Un fallo técnico o una prueba faltante requieren diagnóstico y corrección del equipo. Si falta trabajo no asignado, creá tareas nuevas para el responsable con writePaths propios; no alteres tareas en ejecución. Separá preparación/contrato de integración; evitá esperas circulares.\nPEDIDO: {}\nESTADO ACTUAL DEL EQUIPO: {}\nHISTORIAL DE COORDINACIÓN: {}\nSKILLS DEL LEAD:\n{}\nRespondé SOLO JSON: {{\"status\":\"resume|wait|blocked\",\"summary\":\"estado comprobado, contrato y respuesta concreta al agente\",\"waitForTaskIds\":[],\"tasks\":[],\"resumeTasks\":[]}}. Las tareas nuevas usan el contrato del plan: id,title,objective,assignedAgentId,repository,dependencies,expectedFiles,writePaths,acceptanceCriteria.",serde_json::to_string(request).unwrap_or_default(),serde_json::to_string(&r.tasks).unwrap_or_default(),serde_json::to_string(&r.coordination).unwrap_or_default(),runner::skills_prompt(&r,&employee));
+    let prompt = format!("Sos el Lead de coordinación, con herramientas SOLO de lectura. Un agente necesita algo de otro. Revisá los archivos actuales y los estados reales de todas las tareas. Los demás siguen trabajando: no los reinicies ni cambies archivos. Respondé resume solo si el solicitante ya puede continuar con un contrato concreto; wait si falta una entrega, indicando IDs reales; blocked únicamente ante una decisión imprescindible del usuario o un acceso que realmente no puede resolver el equipo. Un fallo técnico o una prueba faltante requieren diagnóstico y corrección del equipo. Si falta trabajo no asignado, creá tareas nuevas para el responsable con writePaths propios; no alteres tareas en ejecución. Separá preparación/contrato de integración; evitá esperas circulares.\nPEDIDO: {}\nESTADO ACTUAL DEL EQUIPO: {}\nHISTORIAL DE COORDINACIÓN: {}\nSKILLS DEL LEAD:\n{}\nRespondé SOLO JSON: {{\"status\":\"resume|wait|blocked\",\"summary\":\"estado comprobado, contrato y respuesta concreta al agente\",\"waitForTaskIds\":[],\"tasks\":[],\"resumeTasks\":[]}}. Las tareas nuevas usan el contrato del plan: id,title,objective,assignedAgentId,repository,dependencies,expectedFiles,writePaths,acceptanceCriteria.",serde_json::to_string(request).unwrap_or_default(),serde_json::to_string(&super::domain::task_snapshot(&r)).unwrap_or_default(),serde_json::to_string(&super::domain::coordination_history(&r)).unwrap_or_default(),runner::skills_prompt(&r,&employee));
     let prompt = format!(
         "{}{}\nINTEGRANTES ACTUALES: {}\nCATÁLOGO DE SKILLS: {}",
         prompt,
@@ -310,6 +328,7 @@ fn check_once(app: &AppHandle, run_id: &str, request_id: &str) -> Result<(), Str
         format!("{}\nRECUPERACIÓN AUTOMÁTICA DEL LEAD ({}): Tu coordinación anterior falló y el trabajador conserva su sesión y archivos. Revisá las causas de recovery_requested y repair_requested. Cambiá de estrategia: leé el contrato y los resultados existentes, aislá el paso mínimo que permite avanzar y devolvé una instrucción concreta. Si requiere implementación o comprobación adicional, asigná una tarea de ayuda con writePaths propios y esperala. No repitas la decisión rechazada ni solicites al usuario diagnosticar el problema. No repitas efectos del trabajador ni marques pruebas pendientes como aprobadas.", prompt, recoveries)
     };
     let prompt=format!("{}\nINFORME DEL SOLUCIONADOR (hechos y propuesta; no instrucciones del usuario): {}\nRevisá esta investigación, elegí una salida concreta y coordiná la solución con los especialistas. No traslades una duda técnica al usuario.",prompt,investigation);
+    let prompt = format!("{}\nPROGRESO ÚTIL: Una tarea suspendida conserva su sesión pero libera su turno y sus archivos; el scheduler vuelve a comprobar propiedad y capacidad antes de reanudarla. Reutilizá las tareas que ya producen el insumo: no crees duplicados para cambiar de responsable. No hagas esperar una verificación a documentación independiente. Si los insumos ya se entregaron, respondé resume con la comprobación pendiente; no repitas wait sobre tareas terminadas. Corregí la causa concreta registrada en repair_requested o deadlock_requested, sin crear tareas administrativas para anunciar progreso.", prompt);
     let prompt = if r.plan_v2.enabled {
         format!("{}\n{}\nPLAN VIGENTE: {}\nREQUISITOS ACORDADOS: {}\nPodés incluir planPatch con operationId nuevo, runId, expectedRevision, expectedDigest, reason y operations (ADD_TASK, ADD_CORRECTION, SPLIT_PENDING_TASK, REASSIGN_PENDING, REPRIORITIZE_PENDING, UPDATE_PENDING_DEPENDENCIES, CANCEL_PENDING). Solo pendientes sin intentos. Si usás planPatch, tasks y agents deben estar vacíos. Incluí triggerType (blocked|failed_test|new_requirement|material_discovery), evidenceRefs con IDs reales de tareas/intentos/pedidos y expectedOutcome concreto.",prompt,super::plan_v2::CONTRACT_PROMPT,
             json!({"runId":r.id,"expectedRevision":r.plan_v2.revision_number,"expectedDigest":r.plan_v2.digest}),serde_json::to_string(&r.plan_v2.contract.requirements).unwrap_or_default())
@@ -479,6 +498,13 @@ fn apply_decision(r: &mut Run, request_id: &str, mut decision: Decision) -> Resu
             .iter()
             .any(|t| &t.id == id && t.status == "completed")
     });
+    let progress = progress_state(&proposed);
+    if decision.status == "wait" && proposed.coordination.iter().any(|c| c.from_task_id == from
+        && c.replies.iter().any(|reply| reply["status"] == "wait" && reply["progress"] == progress
+            && reply["taskIds"].as_array().is_some_and(|ids| ids.len() == decision.wait_for_task_ids.len()
+                && decision.wait_for_task_ids.iter().all(|id| ids.iter().any(|v| v.as_str() == Some(id)))))) {
+        return Err(NO_PROGRESS.into());
+    }
     let c = proposed
         .coordination
         .iter_mut()
@@ -495,7 +521,7 @@ fn apply_decision(r: &mut Run, request_id: &str, mut decision: Decision) -> Resu
         _ => "blocked",
     }
     .into();
-    c.replies.push(json!({"at":now(),"sessionId":c.sessions.last(),"status":decision.status,"summary":c.summary,"taskIds":c.task_ids}));
+    c.replies.push(json!({"at":now(),"sessionId":c.sessions.last(),"status":decision.status,"summary":c.summary,"taskIds":c.task_ids,"progress":progress}));
     let task = proposed
         .tasks
         .iter_mut()
@@ -699,6 +725,7 @@ mod tests {
         let mut r = mutual_wait();
         let mut independent = r.tasks[0].clone();
         independent.id = "independent".into();
+        independent.objective = "Implementar un módulo independiente".into();
         independent.status = "running".into();
         r.tasks.push(independent.clone());
         let original = serde_json::to_value(&r.tasks).unwrap();
@@ -732,10 +759,12 @@ mod tests {
         let mut r = mutual_wait();
         let mut active = r.tasks[0].clone();
         active.id = "active".into();
+        active.objective = "Implementar otro módulo activo".into();
         active.status = "running".into();
         r.tasks.push(active);
         let mut done = r.tasks[0].clone();
         done.id = "done".into();
+        done.objective = "Implementar otro módulo entregado".into();
         done.status = "completed".into();
         r.tasks.push(done);
         for ids in [
@@ -817,6 +846,49 @@ mod tests {
         assert_eq!(r.tasks[1].status, "pending");
         assert_eq!(r.coordination[0].status, "resolved");
         assert_eq!(r.coordination[0].replies.len(), 2);
+    }
+
+    #[test]
+    fn repeating_wait_without_observable_progress_is_rejected_across_restart() {
+        let mut r = fixture();
+        r.tasks[0].status = "completed".into();
+        let wait = || serde_json::from_value(json!({"status":"wait","summary":"Ya revisé: sigo esperando el mismo artefacto","waitForTaskIds":["back"]})).unwrap();
+        apply_decision(&mut r, "req", wait()).unwrap(); // A legitimate completion race.
+        let mut restored: Run = serde_json::from_str(&serde_json::to_string(&r).unwrap()).unwrap();
+        restored.coordination[0].summary = "Otro texto no significa progreso".into();
+        restored.coordination[0].sessions.push("another-lead-session".into());
+        restored.tasks[1].attempts.push(serde_json::from_value(json!({"id":"empty-retry","agent":restored.team.members[0],"startedAt":now(),"status":"waiting_dependency","summary":"Otro resumen sin evidencia","commands":[]})).unwrap());
+        let before = serde_json::to_value(&restored).unwrap();
+        assert_eq!(apply_decision(&mut restored, "req", wait()).unwrap_err(), NO_PROGRESS);
+        assert_eq!(serde_json::to_value(&restored).unwrap(), before);
+        assert!(repairable_decision(NO_PROGRESS));
+        let resume = serde_json::from_value(json!({"status":"resume","summary":"El artefacto ya existe: ejecutá la comprobación pendiente"})).unwrap();
+        apply_decision(&mut restored, "req", resume).unwrap();
+        assert_eq!(restored.tasks[1].status, "pending");
+    }
+
+    #[test]
+    fn new_delivery_is_progress_but_cancelled_work_is_never_a_wait_target() {
+        let mut r = fixture();
+        let wait = || serde_json::from_value(json!({"status":"wait","summary":"Esperar el artefacto concreto de Backend","waitForTaskIds":["back"]})).unwrap();
+        apply_decision(&mut r, "req", wait()).unwrap();
+        r.tasks[0].status = "completed".into();
+        apply_decision(&mut r, "req", wait()).unwrap();
+        r.tasks[0].status = "cancelled".into();
+        assert!(validate_wait(&r, "front", &["back".into()]).is_err());
+    }
+
+    #[test]
+    fn coordinator_cannot_add_a_duplicate_generator_under_another_id() {
+        let mut r = fixture();
+        r.tasks[0].expected_files = vec!["api/result.json".into()];
+        let mut duplicate = r.tasks[0].clone(); duplicate.id = "another-generator".into();
+        let decision = serde_json::from_value(json!({"status":"wait","summary":"Crear de nuevo el mismo generador","waitForTaskIds":["another-generator"],"tasks":[duplicate]})).unwrap();
+        let before = serde_json::to_value(&r).unwrap();
+        let error = apply_decision(&mut r, "req", decision).unwrap_err();
+        assert!(error.starts_with("DUPLICATE_DELIVERABLE"));
+        assert!(repairable_decision(&error));
+        assert_eq!(serde_json::to_value(&r).unwrap(), before);
     }
 
     #[test]

@@ -549,6 +549,43 @@ pub fn validate_team(t: &Team, skills: &[Skill]) -> Result<(), String> {
     Ok(())
 }
 
+pub(super) fn duplicate_deliverables(tasks: &[Task]) -> Vec<(&str, &str)> {
+    fn text(value: &str) -> String {
+        value.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
+    }
+    fn texts(values: &[String], paths: bool) -> Vec<String> {
+        let mut values: Vec<_> = values.iter().map(|v| if paths {
+            v.replace('\\', "/").to_lowercase()
+        } else { text(v) }).collect();
+        values.sort();
+        values.dedup();
+        values
+    }
+    let mut duplicates = vec![];
+    for (i, a) in tasks.iter().enumerate() {
+        for b in tasks.iter().skip(i + 1) {
+            if [a, b].iter().any(|t| t.status == "cancelled" || t.contract.task_kind.as_deref() == Some("group"))
+                || !same_path(&a.repository, &b.repository)
+                || a.contract.correction_for_task_id.as_deref() == Some(&b.id)
+                || b.contract.correction_for_task_id.as_deref() == Some(&a.id) {
+                continue;
+            }
+            // Different IDs/owners/dependencies do not make another deliverable.
+            // Deliberate stages (implementation, review, correction) remain
+            // distinct when their objective and acceptance actually differ.
+            let same_outputs = texts(&a.expected_files, true) == texts(&b.expected_files, true);
+            let same_scope = texts(&a.write_paths, true) == texts(&b.write_paths, true);
+            let same_objective = text(&a.objective) == text(&b.objective);
+            let same_acceptance = texts(&a.acceptance_criteria, false) == texts(&b.acceptance_criteria, false);
+            if same_outputs && ((!a.expected_files.is_empty() && (same_objective || same_acceptance))
+                || (a.expected_files.is_empty() && same_scope && same_objective && same_acceptance)) {
+                duplicates.push((a.id.as_str(), b.id.as_str()));
+            }
+        }
+    }
+    duplicates
+}
+
 pub fn validate_plan(p: &Plan, team: &Team) -> Result<(), String> {
     super::capture::validate_targets(&p.evidence_targets)?;
     if p.tasks.is_empty() || p.tasks.len() > 100 {
@@ -557,6 +594,9 @@ pub fn validate_plan(p: &Plan, team: &Team) -> Result<(), String> {
     let ids: HashSet<_> = p.tasks.iter().map(|t| t.id.as_str()).collect();
     if ids.len() != p.tasks.len() || ids.contains("") {
         return Err("IDs de tareas duplicados o vacíos".into());
+    }
+    if let Some((a, b)) = duplicate_deliverables(&p.tasks).first() {
+        return Err(format!("DUPLICATE_DELIVERABLE: {a} y {b} repiten la misma entrega. Reutilizá la tarea existente; no crees otra con un ID o responsable distinto"));
     }
     for t in &p.tasks {
         if t.write_paths.iter().any(|p| !valid_write_path(p)) {
@@ -582,7 +622,8 @@ pub fn validate_plan(p: &Plan, team: &Team) -> Result<(), String> {
         }
         if t.dependencies
             .iter()
-            .any(|d| !ids.contains(d.as_str()) || d == &t.id)
+            .any(|d| !ids.contains(d.as_str()) || d == &t.id
+                || t.status != "cancelled" && p.tasks.iter().any(|v| &v.id == d && v.status == "cancelled"))
         {
             return Err("Dependencia inválida".into());
         }
@@ -622,6 +663,91 @@ pub fn parse_json<T: serde::de::DeserializeOwned>(text: &str) -> Result<T, Strin
         s
     };
     serde_json::from_str(s).map_err(|e| format!("Respuesta estructurada inválida: {}", e))
+}
+
+fn brief(value: &str, max: usize) -> String {
+    let text: String = value.chars().take(max).collect();
+    if text.chars().count() < value.chars().count() { format!("{}…", text) } else { text }
+}
+
+// Prompts carry decisions and evidence references, never the raw session log:
+// command outputs, reasoning and images already live in each session.
+pub fn task_snapshot(r: &Run) -> Vec<serde_json::Value> {
+    r.tasks.iter().map(|t| {
+        let last = t.attempts.last();
+        serde_json::json!({
+            "id": t.id,
+            "title": t.title,
+            "objective": brief(&t.objective, 800),
+            "assignedAgentId": t.assigned_agent_id,
+            "repository": t.repository,
+            "status": t.status,
+            "dependencies": t.dependencies,
+            "writePaths": t.write_paths,
+            "expectedFiles": t.expected_files,
+            "acceptanceCriteria": t.acceptance_criteria,
+            "error": t.error.as_ref().map(|e| brief(e, 400)),
+            "attempt": last.map(|a| serde_json::json!({
+                "id": a.id,
+                "status": a.status,
+                "sessionId": a.session_id,
+                "summary": brief(&a.summary, 1200),
+                "checks": a.declared_checks,
+                "error": a.error.as_ref().map(|e| brief(e, 400)),
+                "review": a.review.as_ref().map(|r| serde_json::json!({
+                    "status": r.status,
+                    "summary": brief(&r.summary, 600),
+                    "criteriaSatisfied": r.criteria_satisfied,
+                })),
+            })),
+        })
+    }).collect()
+}
+
+fn coordination_entry(c: &Coordination) -> serde_json::Value {
+    serde_json::json!({
+        "id": c.id,
+        "kind": c.kind,
+        "fromTaskId": c.from_task_id,
+        "taskIds": c.task_ids,
+        "status": c.status,
+        "message": brief(&c.message, 600),
+        "summary": brief(&c.summary, 600),
+        "replies": c.replies.iter().map(|reply| serde_json::json!({
+            "status": reply["status"],
+            "at": reply["at"],
+            "taskIds": reply["taskIds"],
+            "summary": brief(reply["summary"].as_str().unwrap_or(""), 400),
+            "reason": brief(reply["reason"].as_str().unwrap_or(""), 400),
+            "attempt": reply["attempt"],
+        })).collect::<Vec<_>>(),
+    })
+}
+
+pub fn coordination_history(r: &Run) -> Vec<serde_json::Value> {
+    let start = r.coordination.len().saturating_sub(12);
+    r.coordination[start..].iter().map(coordination_entry).collect()
+}
+
+pub fn coordination_for_task(r: &Run, task_id: &str) -> Vec<serde_json::Value> {
+    let mut related: Vec<_> = r.coordination.iter()
+        .filter(|c| c.from_task_id == task_id || c.task_ids.iter().any(|id| id == task_id))
+        .collect();
+    let start = related.len().saturating_sub(3);
+    related.drain(..start);
+    related.into_iter().map(coordination_entry).collect()
+}
+
+pub fn support_snapshot(r: &Run) -> Vec<serde_json::Value> {
+    let start = r.support_reports.len().saturating_sub(8);
+    r.support_reports[start..].iter().map(|s| serde_json::json!({
+        "id": s.id,
+        "kind": s.kind,
+        "status": s.status,
+        "taskId": s.task_id,
+        "summary": brief(&s.summary, 800),
+        "result": brief(s.result["summary"].as_str().unwrap_or(""), 600),
+    })).collect()
 }
 
 pub fn catalog() -> Vec<Skill> {
@@ -681,7 +807,7 @@ pub(super) mod tests {
             contract: Default::default(),
             id: id.into(),
             title: id.into(),
-            objective: "Objetivo".into(),
+            objective: format!("Entregar {id}"),
             assigned_agent_id: "lead".into(),
             repository: "D:/repo".into(),
             dependencies: deps.iter().map(|s| s.to_string()).collect(),
@@ -748,5 +874,62 @@ pub(super) mod tests {
     fn repository_lock_handles_nested_paths() {
         assert!(overlaps("D:\\Repo", "d:/repo/packages/web"));
         assert!(!overlaps("D:/repo", "D:/repo-other"));
+    }
+    fn run_fixture() -> Run {
+        serde_json::from_value(serde_json::json!({"id":"r","goal":"g","team":team(),"skills":[],"status":"running","startedAt":0,"tasks":[],"summary":"","evidenceDir":"unused","artifacts":[],"baseline":[],"notified":false})).unwrap()
+    }
+    fn coordination(id: &str, from: &str) -> Coordination {
+        Coordination {
+            kind: String::new(),
+            attempt_id: None,
+            cycle_task_ids: vec![],
+            id: id.into(),
+            from_task_id: from.into(),
+            message: format!("pedido {id}"),
+            task_ids: vec![],
+            status: "pending".into(),
+            summary: String::new(),
+            created_at: 0,
+            sessions: vec![],
+            replies: vec![],
+        }
+    }
+    #[test]
+    fn prompt_snapshots_carry_references_not_raw_session_logs() {
+        let mut r = run_fixture();
+        let mut t = task("generator", &[]);
+        t.status = "completed".into();
+        t.attempts.push(serde_json::from_value(serde_json::json!({
+            "id":"a1","agent":team().members[0],"sessionId":"ses_1","startedAt":0,"status":"completed",
+            "summary":"x".repeat(5000),"commands":[{"command":"npm test","exitCode":0,"output":"y".repeat(300000)}],
+            "declaredChecks":["npm test"]
+        })).unwrap());
+        r.tasks.push(t);
+        r.coordination = vec![
+            coordination("c1", "generator"),
+            coordination("c2", "generator"),
+            coordination("c3", "generator"),
+            coordination("c4", "generator"),
+            coordination("c5", "other"),
+        ];
+        r.support_reports = (0..10).map(|i| SupportReport {
+            routing: None, id: format!("s{i}"), kind: "investigation".into(), agent: team().members[0].clone(),
+            session_id: "ses".into(), repository: "D:/repo".into(), task_id: None, request_id: None,
+            started_at: 0, finished_at: Some(1), status: "completed".into(), summary: "resumen".into(),
+            result: serde_json::json!({"summary":"causa","findings":["z".repeat(200000)]}),
+        }).collect();
+        let tasks = serde_json::to_string(&task_snapshot(&r)).unwrap();
+        assert!(tasks.contains("npm test") && tasks.contains("completed"));
+        assert!(!tasks.contains("yyyy"));
+        assert!(tasks.len() < 5000, "snapshot acotado: {} chars", tasks.len());
+        let related = coordination_for_task(&r, "generator");
+        assert_eq!(related.len(), 3);
+        assert!(related.iter().all(|c| c["fromTaskId"] == "generator"));
+        assert_eq!(related.last().unwrap()["id"], "c4");
+        let history = serde_json::to_string(&coordination_history(&r)).unwrap();
+        assert!(history.contains("c5") && history.len() < 2000);
+        let support = serde_json::to_string(&support_snapshot(&r)).unwrap();
+        assert!(support.contains("causa") && !support.contains("zzzz"));
+        assert_eq!(support_snapshot(&r).len(), 8);
     }
 }

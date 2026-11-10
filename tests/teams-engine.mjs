@@ -18,6 +18,7 @@ const supervision=process.argv.includes("--supervision")
 let integrationObserved=false
 const transportFaults = process.argv.includes("--transport-faults")
 const circularWait = process.argv.includes("--circular-wait")
+const slotWait = process.argv.includes("--slot-wait")
 const leadHelp = process.argv.includes("--lead-help")
 assert.ok(!leadHelp || (!autonomous && !circularWait), 'El escenario de ayuda usa dos trabajadores distintos')
 let helpRounds = 0
@@ -150,6 +151,32 @@ const mock = createServer(async (request, response) => {
         assert.ok(body.tools.some(t=>t.name===name),`Falta herramienta ${name}`)
         const args=name==='read'?{filePath:join(repo,'user.txt')}:name==='write'?{filePath:join(repo,`${role}.txt`),content:'version 2\n'}:{command:commands[role],description:'Comprobar contrato',timeout:10000}
         item={type:'function_call',id:`fc-help-${Date.now()}-${role}`,call_id:`call-help-${Date.now()}-${role}`,name,arguments:JSON.stringify(args),status:'completed'}
+      }
+    }
+  } else if (slotWait) {
+    if (leadPhase === 'plan') item = message({ tasks: ['frontend','backend'].map(role => ({id:role,title:`Crear ${role}`,objective:`Crear ${role}.txt con versión 2`,assignedAgentId:'frontend',repository:repo,dependencies:[],expectedFiles:[`${role}.txt`],writePaths:[`${role}.txt`],acceptanceCriteria:['Archivo con versión 2','Comprobación ejecutada']})) })
+    else if (leadPhase === 'coordination') {
+      coordinationChecks++
+      const input = [...body.input].reverse().find(i => i.role === 'user')
+      const prompt = typeof input?.content === 'string' ? input.content : (input?.content ?? []).map(p => p.text ?? '').join('\n')
+      const states = JSON.parse(prompt.split('ESTADO ACTUAL DEL EQUIPO: ')[1].split('\nHISTORIAL DE COORDINACIÓN:')[0])
+      item = states.find(t => t.id === 'backend').status === 'completed'
+        ? message({status:'resume',summary:'El generador ya entregó el artefacto; ejecutá la comprobación pendiente sin repetir la escritura.'})
+        : message({status:'wait',summary:'Esperar únicamente el artefacto del generador, no documentación.',waitForTaskIds:['backend']})
+    } else if (leadPhase) { reviews++; item = message({status:'approved',summary:'Artefactos y comprobaciones observados sin duplicar tareas.',criteriaSatisfied:true,tasks:[]}) }
+    else {
+      const role = latestUserPrompt.includes('TAREA: Crear backend.txt') ? 'backend' : 'frontend'
+      const outputs = body.input.filter(i => i.type === 'function_call_output')
+      parallelWorkers.add(role)
+      if (role === 'frontend' && outputs.length === 2 && !latestUserPrompt.includes('COORDINACIÓN ACTUAL DEL LEAD')) {
+        circularPauses.add(role)
+        item = message({status:'waiting_dependency',summary:'Preparación lista, falta el artefacto del generador.',checks:[],limitations:[],request:{message:'Necesito el artefacto backend antes de verificar.',taskIds:['backend']}})
+      } else if (outputs.length >= 3) item = message({status:'completed',summary:`${role} implementado y comprobado`,checks:[commands[role]],limitations:[]})
+      else {
+        if (role === 'backend') assert.ok(circularPauses.has('frontend'), 'El único turno se libera después de suspender la verificación')
+        const name = outputs.length === 0 ? 'read' : outputs.length === 1 ? 'write' : 'bash'
+        const args = name === 'read' ? {filePath:join(repo,'user.txt')} : name === 'write' ? {filePath:join(repo,`${role}.txt`),content:'version 2\n'} : {command:commands[role],description:'Comprobar contrato',timeout:10000}
+        item = {type:'function_call',id:`fc-slot-${Date.now()}-${role}`,call_id:`call-slot-${Date.now()}-${role}`,name,arguments:JSON.stringify(args),status:'completed'}
       }
     }
   } else if (circularWait) {
@@ -358,7 +385,7 @@ try {
     await new Promise(done => proxy.listen(0, "127.0.0.1", done))
     testOrigin = `http://127.0.0.1:${proxy.address().port}`
   }
-  const cargo = spawn("cargo", ["test", "--manifest-path", "src-tauri/Cargo.toml", "--release", "--lib", "--features", "desktop-e2e", "teams::integration::native_team_end_to_end", "--", "--ignored", "--nocapture", "--test-threads=1"], { env: { ...process.env, GUILLE_TEAM_TEST_ROUTING:routed?"1":"0", GUILLE_TEAM_TEST_PLAN_V2:planV2?"1":"0", GUILLE_TEAM_TEST_INVALID_PLAN_V2:invalidPlanV2?"1":"0", GUILLE_TEAM_TEST_CYCLE: circularWait ? "1" : "0", GUILLE_TEAM_TEST_HELP: leadHelp ? "1" : "0", GUILLE_TEAM_TEST_TRANSPORT: transportFaults ? "1" : "0", GUILLE_TEAM_TEST_AUTO: autonomous?'1':'0', GUILLE_TEAM_TEST_SUPERVISION:supervision?'1':'0', GUILLE_TEAM_TEST_ENGINE: testOrigin, GUILLE_TEAM_TEST_REPO: repo,GUILLE_TEAM_TEST_NO_GIT:noGit?'1':'0',GUILLE_TEAM_TEST_CAPTURE_URL:`http://127.0.0.1:${mock.address().port}/app`,GUILLE_TEAM_TEST_ARTIFACTS:resolve(noGit?'test-results/native-team-evidence-no-git':'test-results/native-team-evidence') }, windowsHide: true, stdio: "inherit" })
+  const cargo = spawn("cargo", ["test", "--manifest-path", "src-tauri/Cargo.toml", "--release", "--lib", "--features", "desktop-e2e", "teams::integration::native_team_end_to_end", "--", "--ignored", "--nocapture", "--test-threads=1"], { env: { ...process.env, GUILLE_TEAM_TEST_SLOT:slotWait?"1":"0", GUILLE_TEAM_TEST_ROUTING:routed?"1":"0", GUILLE_TEAM_TEST_PLAN_V2:planV2?"1":"0", GUILLE_TEAM_TEST_INVALID_PLAN_V2:invalidPlanV2?"1":"0", GUILLE_TEAM_TEST_CYCLE: circularWait ? "1" : "0", GUILLE_TEAM_TEST_HELP: leadHelp ? "1" : "0", GUILLE_TEAM_TEST_TRANSPORT: transportFaults ? "1" : "0", GUILLE_TEAM_TEST_AUTO: autonomous?'1':'0', GUILLE_TEAM_TEST_SUPERVISION:supervision?'1':'0', GUILLE_TEAM_TEST_ENGINE: testOrigin, GUILLE_TEAM_TEST_REPO: repo,GUILLE_TEAM_TEST_NO_GIT:noGit?'1':'0',GUILLE_TEAM_TEST_CAPTURE_URL:`http://127.0.0.1:${mock.address().port}/app`,GUILLE_TEAM_TEST_ARTIFACTS:resolve(noGit?'test-results/native-team-evidence-no-git':'test-results/native-team-evidence') }, windowsHide: true, stdio: "inherit" })
   const code = await new Promise((done) => cargo.once("exit", done))
   assert.equal(code, 0, `Native runner failed\n${log}`)
   if (invalidPlanV2) { assert.equal(invalidPlanCalls,60); assert.equal(parallelWorkers.size,0); console.log("Verified: 20 invalid plans, 40 bounded repairs, zero worker dispatches."); }
@@ -375,7 +402,13 @@ try {
     if (autonomous) assert.ok(lostAcknowledgements.has("conversation"))
     console.log("Verified: three failed status reads and lost conversation/Lead/worker acknowledgements recovered without resubmitting any prompt.")
   }
-  if (leadHelp) {
+   if (slotWait) {
+     assert.equal(circularPauses.size,1)
+     assert.equal(parallelWorkers.size,2)
+     assert.ok(coordinationChecks >= 1 && coordinationChecks <= 2, 'Solo inspección inicial y, si hace falta, una revisión al entregarse el artefacto')
+     assert.equal(reviews,3)
+     console.log('Verified: verifier releases the only employee slot → generator completes → original verifier resumes once → both observed checks pass, two tasks only, no manual retry.')
+   } else if (leadHelp) {
     assert.equal(helpRounds,2)
     assert.equal(parallelWorkers.size,2)
     assert.ok(coordinationChecks>=4)
@@ -387,11 +420,11 @@ try {
     assert.equal(circularPauses.size,2)
     assert.equal(parallelWorkers.size,2)
     assert.ok(circularRepairs >= 1)
-    assert.ok(coordinationChecks >= 7)
+    assert.ok(coordinationChecks <= 7, `La recuperación no debe necesitar rondas de coordinación redundantes: ${coordinationChecks}`)
     assert.equal(reviews,3)
     for(const role of ['backend','frontend']) assert.equal(await readFile(join(repo,`${role}.txt`),'utf8'),'version 2\n')
     assert.equal(await readFile(join(repo,'user.txt'),'utf8'),'user work\n')
-    console.log('Verified: real parallel sessions mutually wait → cyclic Lead decision rejected → automatic Lead repair → same worker sessions resume → both observed checks pass.')
+    console.log(`Verified: real parallel sessions mutually wait → cyclic Lead decision rejected → automatic Lead repair → same worker sessions resume → both observed checks pass; ${coordinationChecks} coordination calls.`)
   } else if (autonomous) {
     assert.equal(planFormatRepairs,1,"A wrapped plan must be repaired once before dispatching specialists")
     assert.equal(desktopCalls, 1, "The native Lead conversation must execute exactly one PC observation")

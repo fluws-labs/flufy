@@ -1310,6 +1310,12 @@ export async function sendPrompt(
     }
   }
   const contextParts = contextToParts(root, s.context, s.includeActiveFile ? activeFile : null)
+  const consumeContext = () => {
+    const remaining = (sessionRuntime(runtimeKey).context ?? s.context).filter(item => !s.context.includes(item) && !s.context.some(sent => JSON.stringify(sent) === JSON.stringify(item)))
+    patchSessionRuntime(runtimeKey, { context: remaining })
+    patchSessionRuntime(id, { context: remaining })
+    if (useAgent.getState().activeSessionId === id) useAgent.setState({ context: remaining })
+  }
   if (root) {
     const current = useAgent.getState()
     const view = current.views[id]
@@ -1330,11 +1336,13 @@ export async function sendPrompt(
   if (isTauri && id) {
     const bound = await call<boolean>("teams_lead_bound", { session: id }).catch(() => false)
     if (bound) {
-      if (command || contextParts.length || !trimmed) {
+      if (command || contextParts.some(part => part.type !== "text") || !trimmed) {
         throw new Error("En una conversación con equipo, enviá un mensaje de texto sin adjuntos por ahora.")
       }
-      const messageId = await call<string>("teams_lead_send", { session: id, text: trimmed })
+      const context = contextParts.flatMap(part => part.type === "text" ? [part.text] : [])
+      const messageId = await call<string>("teams_lead_send", { session: id, text: trimmed, context })
       appendQueuedUserMessage(id, messageId, trimmed, s.model, s.agentName)
+      consumeContext()
       return id
     }
   }
@@ -1388,10 +1396,7 @@ export async function sendPrompt(
       parts,
     })
   }
-  const remaining = (sessionRuntime(runtimeKey).context ?? s.context).filter(item => !s.context.includes(item) && !s.context.some(sent => JSON.stringify(sent) === JSON.stringify(item)))
-  patchSessionRuntime(runtimeKey, { context: remaining })
-  patchSessionRuntime(id, { context: remaining })
-  if (useAgent.getState().activeSessionId === id) useAgent.setState({ context: remaining })
+  consumeContext()
   return id
 }
 

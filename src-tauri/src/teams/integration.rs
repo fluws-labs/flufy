@@ -221,7 +221,7 @@ fn native_team_end_to_end() {
                 plan_v2_team_scenario(&handle,&repo);
                 return;
             }
-            if std::env::var("GUILLE_TEAM_TEST_CYCLE").as_deref() == Ok("1") || std::env::var("GUILLE_TEAM_TEST_HELP").as_deref() == Ok("1") {
+            if std::env::var("GUILLE_TEAM_TEST_CYCLE").as_deref() == Ok("1") || std::env::var("GUILLE_TEAM_TEST_HELP").as_deref() == Ok("1") || std::env::var("GUILLE_TEAM_TEST_SLOT").as_deref() == Ok("1") {
                 circular_team_scenario(&handle, &repo);
                 return;
             }
@@ -747,6 +747,7 @@ fn plan_v2_team_scenario(app: &AppHandle, repo: &str) {
 
 fn circular_team_scenario(handle: &tauri::AppHandle, repo: &str) {
     let lead_help = std::env::var("GUILLE_TEAM_TEST_HELP").as_deref() == Ok("1");
+    let slot_wait = std::env::var("GUILLE_TEAM_TEST_SLOT").as_deref() == Ok("1");
     let mut team = super::domain::tests::team();
     team.project_root = repo.into();
     team.allowed_repositories = vec![repo.into()];
@@ -760,6 +761,7 @@ fn circular_team_scenario(handle: &tauri::AppHandle, repo: &str) {
         worker.tools = ["read", "write", "edit", "bash"].iter().map(|s| s.to_string()).collect();
         team.members.push(worker);
     }
+    if slot_wait { team.members.iter_mut().for_each(|m| m.max_concurrent_tasks = 1); }
     let team = teams_save(handle.clone(), team).unwrap();
     let chat = team_chats_create(handle.clone(), team.id).unwrap();
     let id = team_runs_start(handle.clone(), chat.id.clone(), "Separar dependencias circulares sin perder sesiones ni criterios".into()).unwrap();
@@ -792,10 +794,16 @@ fn circular_team_scenario(handle: &tauri::AppHandle, repo: &str) {
         assert!(result.configuration_changes.iter().any(|c| c["kind"] == "automaticCloseoutRepair"), "A technical closeout cannot be delegated to the user");
         assert!(result.configuration_changes.iter().any(|c| c["kind"] == "automaticCoordinatorRecovery"), "The Lead must recover its own exhausted corrections without blocking the team");
     } else { assert!(result.tasks.iter().all(|t| t.attempts.len() == 1)); }
-    assert_eq!(result.coordination.len(), 2);
+    assert_eq!(result.coordination.len(), if slot_wait { 1 } else { 2 });
     assert!(result.coordination.iter().all(|c| c.status == "resolved"));
-    assert!(result.coordination.iter().flat_map(|c| &c.replies).any(|reply| reply["status"] == "repair_requested"));
-    if !lead_help { assert!(result.configuration_changes.iter().any(|c| c["resumedTaskIds"].as_array().is_some_and(|ids| !ids.is_empty()))); }
+    if slot_wait {
+        assert_eq!(result.tasks.len(), 2, "No replacement tasks should be created to free a slot");
+        assert!(result.tasks.iter().all(|t| t.assigned_agent_id == "frontend"));
+        assert!(!result.configuration_changes.iter().any(|c| c["kind"] == "automaticDeadlockRecovery"));
+    } else {
+        assert!(result.coordination.iter().flat_map(|c| &c.replies).any(|reply| reply["status"] == "repair_requested"));
+        if !lead_help { assert!(result.configuration_changes.iter().any(|c| c["resumedTaskIds"].as_array().is_some_and(|ids| !ids.is_empty()))); }
+    }
     assert!(super::coordination::circular_tasks(&result).is_empty());
     for role in ["backend", "frontend"] {
         assert_eq!(std::fs::read_to_string(std::path::Path::new(repo).join(format!("{}.txt", role))).unwrap(), "version 2\n");
@@ -813,7 +821,7 @@ fn circular_team_scenario(handle: &tauri::AppHandle, repo: &str) {
         assert_eq!(task.acceptance_criteria.len(), 2);
     }
     let persisted = read_db(&db(handle).unwrap()).unwrap();
-    assert_eq!(persisted.chats[0].runs[0].coordination.len(), 2);
+    assert_eq!(persisted.chats[0].runs[0].coordination.len(), if slot_wait { 1 } else { 2 });
     assert!(persisted.chats[0].runs[0].coordination.iter().all(|c| c.status == "resolved"));
 }
 

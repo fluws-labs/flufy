@@ -425,8 +425,8 @@ pub fn teams_lead_unbind(app: AppHandle, session: String) -> Result<bool, String
 }
 
 #[tauri::command]
-pub fn teams_lead_send(app: AppHandle, session: String, text: String) -> Result<String, String> {
-    lead_actor::send_user(&app, &session, &text)
+pub fn teams_lead_send(app: AppHandle, session: String, text: String, context: Option<Vec<String>>) -> Result<String, String> {
+    lead_actor::send_user_context(&app, &session, &text, &context.unwrap_or_default())
 }
 
 /// Remote/PWA entry point. It stores the message before any engine effect and

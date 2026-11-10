@@ -96,6 +96,7 @@ pub struct DiscoveryReport {
 pub enum PlanErrorCode {
     InvalidTaskShape,
     DuplicateTaskId,
+    DuplicateDeliverable,
     MissingOwner,
     InvalidRepository,
     UnknownDependency,
@@ -409,6 +410,10 @@ pub(super) fn validate(plan: &Plan, team: &Team, strict: bool) -> ValidationRece
     if let Err(e) = super::capture::validate_targets(&plan.evidence_targets) {
         out.reject(InvalidTaskShape, vec![], e);
     }
+    for (a, b) in duplicate_deliverables(&plan.tasks) {
+        out.reject(DuplicateDeliverable, vec![a.into(), b.into()],
+            "Dos tareas repiten la misma entrega. Reutilizá la existente; cambiar ID, responsable o dependencia no justifica duplicarla");
+    }
     let mut ids = HashSet::new();
     for task in &plan.tasks {
         let one = || vec![task.id.clone()];
@@ -451,9 +456,10 @@ pub(super) fn validate(plan: &Plan, team: &Team, strict: bool) -> ValidationRece
         if task
             .dependencies
             .iter()
-            .any(|d| !plan.tasks.iter().any(|t| &t.id == d))
+            .any(|d| !plan.tasks.iter().any(|t| &t.id == d)
+                || task.status != "cancelled" && plan.tasks.iter().any(|t| &t.id == d && t.status == "cancelled"))
         {
-            out.reject(UnknownDependency, one(), "La dependencia no existe");
+            out.reject(UnknownDependency, one(), "La dependencia no existe o está cancelada");
         }
         if task.acceptance_criteria.is_empty()
             || task.acceptance_criteria.iter().any(|c| c.trim().is_empty())
@@ -704,10 +710,12 @@ pub(super) fn parse_proposal(text: &str, run: &Run) -> Result<Plan, ValidationRe
 pub(super) const CONTRACT_PROMPT: &str = r#"
 PLAN VIVO V2. Discovery ya terminó: usá el inventario observado y leé solo lo pertinente.
 El trabajo simple necesita UNA tarea; separá 2–4 entregables solo con responsabilidad y evidencia independientes.
+Antes de agregar tareas, reutilizá las pendientes o entregadas que ya cubren el resultado. No dupliques generadores, verificaciones ni documentación cambiando IDs o responsables. Una corrección de una entrega existente usa ADD_CORRECTION, con defecto concreto y evidencia.
 Enumerá requirements:[{id:"R1",description:"requisito original completo",limitation:null}]. Cubrí todos los requisitos, también restricciones del usuario; registrá una limitación concreta si no es posible cumplir alguno.
 Cada tarea necesita requirementIds:["R1"], risk:"low|medium|high", priority:0 y verificationPlan:[{kind:"command",command:"comando pertinente observado",expected:"resultado observable, p.ej. exitCode=0 y casos negativos aprobados"}].
 No inventes npm test: consultá observedScripts y los archivos. Para navegación sin archivos usá kind:"observation",command:null y expected con el estado final comprobable.
 Cada criterio explica un comportamiento observable, no "funciona". writePaths debe incluir los archivos esperados. Si dos tareas escriben el mismo alcance, serializalas con dependencies.
+Cada dependencia debe corresponder a un insumo imprescindible: nombrá en el objetivo qué entrega consume. Una verificación espera el artefacto que comprueba, no la documentación de ese artefacto. Documentación y comprobaciones independientes avanzan en paralelo; no crees tareas administrativas para comunicar algo que ya está en el tablero.
 Más de cuatro tareas potencialmente listas en paralelo requieren whyParallel, whyNotSingleUnit, independentScopes y expectedEvidence; justificá el beneficio real.
 No incluyas herramientas, permisos, runtime, modelos, estados completados ni intentos en el plan. No cambies el objetivo ni lo sustituyas por una tarea genérica para esquivar errores.
 "#;
@@ -1122,6 +1130,9 @@ fn simulate_patch_policy(
     if !receipt.valid {
         return Err(receipt.message());
     }
+    // A static DAG can still deadlock with a worker's committed runtime wait
+    // (verifier waits for generator; generator is patched to depend on verifier).
+    super::coordination::validate_wait(&next, "", &[])?;
     let operations = patch
         .operations
         .iter()
