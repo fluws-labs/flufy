@@ -5,6 +5,7 @@ import { flattenNodes, findNode, parentOf } from "./document"
 import { usePreview } from "./usePreview"
 import { PreviewFrame } from "./PreviewFrame"
 import { PreviewLayers } from "./PreviewLayers"
+import { useStudio } from "../state/studio"
 import "./preview.css"
 
 export type PreviewPanelProps = {
@@ -15,6 +16,14 @@ export type PreviewPanelProps = {
 
 type ColorTarget = "color" | "background" | "borderColor"
 const COLOR_PRESETS = ["#FAFAFA", "#FFFFFF", "#172033", "#7668F5", "#46BB98", "#EB7D7D", "#F5C451", "#202024"]
+const FONT_FAMILIES = ["Inter, Segoe UI, system-ui, sans-serif", "Segoe UI, system-ui, sans-serif", "Georgia, Times New Roman, serif", "Menlo, Consolas, monospace"]
+const FONT_WEIGHTS = [[300, "Light"], [400, "Regular"], [500, "Medium"], [600, "Semibold"], [700, "Bold"], [800, "Extra bold"]] as const
+function familyName(value: string | undefined): string | undefined {
+  return value?.split(",")[0]?.trim().replace(/^["']|["']$/g, "")
+}
+function weightName(value: number | undefined): string | undefined {
+  return FONT_WEIGHTS.find(([weight]) => weight === value)?.[1]
+}
 function normalizeHex(raw: string): string | undefined {
   const text = raw.trim().startsWith("#") ? raw.trim() : `#${raw.trim()}`
   if (/^#[0-9a-f]{3}$/i.test(text)) return `#${[...text.slice(1)].map(ch => ch + ch).join("").toUpperCase()}`
@@ -53,7 +62,8 @@ function Panel({ identity, client, onApproved, onStateChange, onClose, onContext
   const [selected, setSelected] = useState<string>()
   const [propertiesOpen, setPropertiesOpen] = useState(false)
   const [fit, setFit] = useState(true)
-  const [layersOpen, setLayersOpen] = useState(true)
+  const [layersOpen, setLayersOpen] = useState(() => !useStudio.getState().layouts.design.sidebarCollapsed)
+  const [fontsOpen, setFontsOpen] = useState(true)
   const [screenId, setScreenId] = useState<string>()
   const screens = useMemo(() => revision ? revision.document.screens ?? [{ id: 'default', name: revision.document.title, nodeId: revision.document.root.id }] : [], [revision])
   const activeScreen = screens.find(screen => screen.id === screenId) ?? screens[0]
@@ -76,6 +86,10 @@ function Panel({ identity, client, onApproved, onStateChange, onClose, onContext
     setSelected(id || undefined)
   }, [revision, screens, textBase])
   const node = revision && selected ? findNode(revision.document.root, selected) : undefined
+  const fontOptions = useMemo(() => {
+    const options = [revision?.document.theme.tokens.fontFamily, ...FONT_FAMILIES].filter((value): value is string => !!value)
+    return [...new Set(options)]
+  }, [revision?.document.theme.tokens.fontFamily])
   const parent = revision && node ? parentOf(revision.document.root, node.id) : undefined
   const nodes = revision ? flattenNodes(revision.document.root).filter(node => !node.placeholderFor) : []
   const layout = node ? (viewport === "mobile" ? { ...node.layout, ...node.mobile } : node.layout) : {}
@@ -98,6 +112,8 @@ function Panel({ identity, client, onApproved, onStateChange, onClose, onContext
     return next
   }
   const patchLayout = (patch: PreviewLayout) => { if (node) void apply([{ type: "layout", nodeId: node.id, viewport, patch }], "Ajuste de layout") }
+  const patchStyle = (patch: NonNullable<PreviewNode["style"]>) => { if (node) void apply([{ type: "style", nodeId: node.id, patch }], "Ajustar tipografía") }
+  const setLayers = (open: boolean) => { setLayersOpen(open); useStudio.getState().setLayout("design", { sidebarCollapsed: !open }) }
   const history = async (direction: "undo" | "redo") => {
     if (!revision) return
     const stack = direction === "undo" ? undo : redo
@@ -131,12 +147,12 @@ function Panel({ identity, client, onApproved, onStateChange, onClose, onContext
         <button className="btn btn-sm" disabled={busy || !redo.length} onClick={() => void history("redo")}>Rehacer</button>
         <button className="btn btn-sm" aria-pressed={fit} onClick={() => setFit(value => !value)}>{fit ? "Ajustar al espacio" : "Zoom 100 %"}</button>
         <button className="btn btn-sm" aria-expanded={propertiesOpen} onClick={() => setPropertiesOpen(value => !value)}>Propiedades</button>
-        <button className="btn btn-sm" aria-expanded={layersOpen} onClick={() => setLayersOpen(value => !value)}>Pantallas y capas</button>
+        <button className="btn btn-sm" aria-expanded={layersOpen} onClick={() => setLayers(!layersOpen)}>Pantallas y capas</button>
         <label className="preview-layer-picker">Bloque seleccionado<select value={selected ?? ""} onChange={e => selectNode(e.target.value)}><option value="">Elegir bloque · capas</option>{nodes.map(n => <option key={n.id} value={n.id}>{n.id} · {n.kind}</option>)}</select></label>
       </div>
       <div className="preview-guide"><span><strong>Mové</strong> solo el bloque elegido; los demás conservan su lugar. Fuera de su caja, queda independiente.</span><span><strong>Redimensioná</strong> desde la esquina.</span><span><strong>Navegá</strong> con doble clic en un botón vinculado.</span></div>
       <div className={`preview-editor${propertiesOpen ? " properties-open" : ""}${layersOpen ? " layers-open" : ""}`}>
-        {layersOpen && <PreviewLayers document={revision.document} screens={screens} activeScreen={activeScreen} selected={selected} disabled={busy || loading || !!textBase} onScreen={screen => { setScreenId(screen.id); setSelected(undefined) }} onSelect={selectNode} onOperation={async operation => {
+        {layersOpen && <PreviewLayers document={revision.document} screens={screens} activeScreen={activeScreen} selected={selected} disabled={busy || loading || !!textBase} onClose={() => setLayers(false)} onScreen={screen => { setScreenId(screen.id); setSelected(undefined) }} onSelect={selectNode} onOperation={async operation => {
           const next = await apply([operation], operation.type === 'screen-add' ? 'Añadir pantalla' : operation.type === 'screen-rename' ? 'Renombrar pantalla' : 'Mover capa por arrastre')
           if (next && operation.type === 'screen-add') { setScreenId(operation.screenId); setSelected(undefined) }
         }} />}
@@ -149,6 +165,18 @@ function Panel({ identity, client, onApproved, onStateChange, onClose, onContext
           {!node && <p className="preview-note">Seleccioná un texto, botón o caja para editarlo.</p>}
           {node && <fieldset disabled={busy}><legend>{node.text?.slice(0, 42) || node.id}</legend>
             <div className="preview-selection-info"><span>{({ container: 'Contenedor', heading: 'Título', text: 'Texto', button: 'Botón', image: 'Imagen' })[node.kind]}</span><code>{node.id}</code><p>{node.layout.position === 'absolute' ? 'Libre en la pantalla · ya no sigue a su caja anterior' : parent ? `Dentro de ${parent.text || parent.id} · se mueve con ese contenedor` : 'Contenedor de la pantalla'}</p></div>
+            <div className={`preview-fonts${fontsOpen ? " open" : ""}`}>
+              <button type="button" className="preview-fonts-head" aria-expanded={fontsOpen} onClick={() => setFontsOpen(value => !value)}>
+                <span>Fuentes <em>Nuevo</em></span><span aria-hidden="true">{fontsOpen ? "⌃" : "⌄"}</span>
+              </button>
+              <p className="preview-fonts-summary">{familyName(node.style?.fontFamily ?? revision.document.theme.tokens.fontFamily) ?? "Heredar"} · {node.style?.fontSize ?? "—"} px · {weightName(node.style?.fontWeight) ?? "Regular"}</p>
+              {fontsOpen && <div className="preview-fonts-row">
+                <label className="preview-font-field"><span>Familia</span><select value={node.style?.fontFamily ?? ""} onChange={event => patchStyle({ fontFamily: event.target.value })}><option value="">Heredar</option>{[...new Set([node.style?.fontFamily, ...fontOptions].filter((value): value is string => !!value))].map(font => <option key={font} value={font}>{familyName(font)}</option>)}</select></label>
+                <label className="preview-font-field"><span>Tamaño</span><input type="number" min={8} max={200} key={`${node.id}-${revision.id}-size`} defaultValue={node.style?.fontSize ?? ""} placeholder="Auto" onBlur={event => { const value = Number(event.target.value); if (event.target.value !== "" && event.target.validity.valid && value !== node.style?.fontSize) patchStyle({ fontSize: value }) }} onKeyDown={event => { if (event.key === "Enter") event.currentTarget.blur() }} /></label>
+                <label className="preview-font-field"><span>Peso</span><select value={node.style?.fontWeight ?? ""} onChange={event => patchStyle({ fontWeight: Number(event.target.value) })}>{node.style?.fontWeight === undefined && <option value="">Automático</option>}{node.style?.fontWeight !== undefined && !FONT_WEIGHTS.some(([weight]) => weight === node.style?.fontWeight) && <option value={node.style.fontWeight}>{node.style.fontWeight}</option>}{FONT_WEIGHTS.map(([weight, label]) => <option key={weight} value={weight}>{label}</option>)}</select></label>
+              </div>}
+              <p className="preview-note">Tipografía y tamaños más compactos</p>
+            </div>
             {(node.kind === 'button' || node.kind === 'text' || node.targetScreenId) && <div className="preview-property-section">
               <h4>Navegación</h4><label>Pantalla de destino<select value={node.targetScreenId ?? ''} onChange={e => void apply([{ type: 'link', nodeId: node.id, screenId: e.target.value || null }], 'Vincular botón con pantalla')}><option value="">Sin enlace</option>{screens.map(screen => <option key={screen.id} value={screen.id}>{screen.name}</option>)}</select></label>
               {node.targetScreenId ? <><button type="button" className="btn btn-sm" onClick={() => { setScreenId(node.targetScreenId); setSelected(undefined) }}>Probar enlace →</button><p className="preview-note">También podés hacer doble clic en el botón del lienzo. El destino se guarda con el diseño.</p></> : <p className="preview-note">Creá la pantalla con «+ Pantalla» y elegila acá como destino.</p>}

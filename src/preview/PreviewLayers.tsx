@@ -2,9 +2,10 @@ import { useRef, useState } from 'react'
 import { findNode, flattenNodes, parentOf } from './document'
 import type { PreviewDocument, PreviewNode, PreviewOperation, PreviewScreen } from './types'
 
-export function PreviewLayers({ document, screens, activeScreen, selected, disabled, onScreen, onSelect, onOperation }: {
+export function PreviewLayers({ document, screens, activeScreen, selected, disabled, onScreen, onSelect, onOperation, onClose }: {
   document: PreviewDocument; screens: PreviewScreen[]; activeScreen: PreviewScreen; selected?: string; disabled: boolean
   onScreen: (screen: PreviewScreen) => void; onSelect: (id: string) => void; onOperation: (operation: PreviewOperation) => void
+  onClose?: () => void
 }) {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const dragged = useRef<string | null>(null)
@@ -37,7 +38,7 @@ export function PreviewLayers({ document, screens, activeScreen, selected, disab
     {!collapsed.has(node.id) && node.children.length > 0 && <ul>{node.children.map(row)}</ul>}
   </li>
   return <aside className="preview-layers" aria-label="Pantallas y capas">
-    <header><strong>Pantallas</strong><button type="button" className="btn btn-xs" disabled={disabled || screens.length >= 40} onClick={() => onOperation({ type: 'screen-add', nodeId: `frame-${crypto.randomUUID()}`, boardId: `board-${crypto.randomUUID()}`, screenId: `screen-${crypto.randomUUID()}`, name: `Pantalla ${screens.length + 1}` })}>+ Pantalla</button></header>
+    <header><strong>Pantallas</strong><div className="preview-layers-actions">{onClose && <button type="button" className="preview-layers-close" aria-label="Ocultar pantallas y capas" title="Ocultar pantallas y capas" onClick={onClose}>«</button>}<button type="button" className="btn btn-xs" disabled={disabled || screens.length >= 40} onClick={() => onOperation({ type: 'screen-add', nodeId: `frame-${crypto.randomUUID()}`, boardId: `board-${crypto.randomUUID()}`, screenId: `screen-${crypto.randomUUID()}`, name: `Pantalla ${screens.length + 1}` })}>+ Pantalla</button></div></header>
     <nav aria-label="Pantallas del diseño">{screens.map(screen => <button type="button" key={screen.id} disabled={disabled} className={activeScreen.id === screen.id ? 'selected' : ''} aria-current={activeScreen.id === screen.id ? 'page' : undefined} onClick={() => onScreen(screen)}>▣ <span>{screen.name}</span></button>)}</nav>
     {document.screens && <label className="preview-screen-name">Nombre de pantalla<input aria-label="Nombre de pantalla" maxLength={120} disabled={disabled} value={screenName?.id === activeScreen.id ? screenName.value : activeScreen.name} onChange={event => setScreenName({ id: activeScreen.id, value: event.target.value })} onBlur={() => {
       if (screenName?.id === activeScreen.id && screenName.value.trim() && screenName.value.trim() !== activeScreen.name) onOperation({ type: 'screen-rename', screenId: activeScreen.id, name: screenName.value.trim() })

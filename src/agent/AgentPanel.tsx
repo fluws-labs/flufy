@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useState, type ReactNode } from "react"
 import {
   compactSession,
   contextUsage,
@@ -51,7 +51,7 @@ const SUGGESTIONS = [
   { icon: "git-pull-request", title: "Revisar mis cambios", text: "/review" },
 ]
 
-export function SessionPane({ sessionId, variant, onPreviewOpen }: { sessionId: string | null; variant: "panel" | "editor"; onPreviewOpen?: () => void }) {
+export function SessionPane({ sessionId, variant, onPreviewOpen, emptyState }: { sessionId: string | null; variant: "panel" | "editor"; onPreviewOpen?: () => void; emptyState?: ReactNode }) {
   const session = useAgent((s) => s.allSessions.find((x) => x.id === sessionId) ?? null)
   const status = useAgent((s) => (sessionId ? (s.statuses[sessionId]?.type ?? "idle") : "idle"))
   const retry = useAgent((s) => (sessionId ? s.statuses[sessionId] : undefined))
@@ -154,6 +154,8 @@ export function SessionPane({ sessionId, variant, onPreviewOpen }: { sessionId: 
     <div className={`session-pane ${variant}`}>
       {session ? (
         <Chat session={session} busy={busy} />
+      ) : emptyState ? (
+        emptyState
       ) : (
         <div className="agent-welcome">
           <div className="agent-welcome-hero">

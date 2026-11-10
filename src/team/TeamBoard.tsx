@@ -53,10 +53,9 @@ export function TeamBoard({ run, onSession, onRetry, onEvidence, readOnly = fals
 
   function columns(lane: Card[]) {
     const groups = compact ? [
-      { id: "todo", label: "Pendiente", icon: "circle-filled", states: ["todo", "ready", "blocked", "reconciling"] },
-      { id: "running", label: "En curso", icon: "circle-filled", states: ["running"] },
-      { id: "verifying", label: "Revisión", icon: "circle-filled", states: ["verifying", "needs_changes"] },
-      { id: "verified", label: "Listo", icon: "circle-filled", states: ["verified"] },
+      { id: "todo", label: "Pendientes", icon: "circle-filled", states: ["todo", "ready", "blocked", "reconciling"] },
+      { id: "running", label: "En curso", icon: "circle-filled", states: ["running", "verifying", "needs_changes"] },
+      { id: "verified", label: "Verificadas", icon: "check", states: ["verified"] },
       ...(lane.some(card => card.column === "cancelled") ? [{ id: "cancelled", label: "Canceladas", icon: "circle-slash", states: ["cancelled"] }] : []),
     ] : boardColumns.filter(column => ["todo", "ready", "running", "verifying", "verified"].includes(column.id) || lane.some(c => c.column === column.id)).map(column => ({ ...column, states: [column.id] }))
     return <div className="team-board-columns">{groups.map(column => {
