@@ -34,13 +34,14 @@ export type DocMeta = { eol: Eol; bom: boolean; indent: string; language: string
 export type CursorInfo = { line: number; column: number; selected: number; selections: number }
 
 type DocsUi = {
+  content: Record<string, Text>
   dirty: Record<string, true>
   conflicts: Record<string, true>
   meta: Record<string, DocMeta>
   cursor: CursorInfo | null
 }
 
-export const useDocs = create<DocsUi>(() => ({ dirty: {}, conflicts: {}, meta: {}, cursor: null }))
+export const useDocs = create<DocsUi>(() => ({ content: {}, dirty: {}, conflicts: {}, meta: {}, cursor: null }))
 
 export class BinaryFileError extends Error {
   constructor() {
@@ -66,6 +67,7 @@ function setFlag(field: "dirty" | "conflicts", key: string, on: boolean) {
 function publishMeta(entry: DocEntry) {
   const key = docKey(entry.path)
   useDocs.setState((s) => ({
+    content: { ...s.content, [key]: entry.state.doc },
     meta: { ...s.meta, [key]: { eol: entry.eol, bom: entry.bom, indent: entry.indent, language: entry.language } },
   }))
 }
@@ -164,6 +166,10 @@ export function dispatchToDoc(path: string, spec: TransactionSpec): void {
 }
 
 function refreshDirty(entry: DocEntry) {
+  const key = docKey(entry.path)
+  if (useDocs.getState().content[key] !== entry.state.doc) {
+    useDocs.setState(s => ({ content: { ...s.content, [key]: entry.state.doc } }))
+  }
   setFlag("dirty", docKey(entry.path), !entry.state.doc.eq(entry.saved))
 }
 
@@ -299,8 +305,10 @@ export function closeDocument(path: string): void {
   useDocs.setState((s) => {
     if (!(key in s.meta)) return {}
     const meta = { ...s.meta }
+    const content = { ...s.content }
     delete meta[key]
-    return { meta }
+    delete content[key]
+    return { meta, content }
   })
 }
 

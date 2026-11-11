@@ -28,6 +28,8 @@ import { readBase64 } from "../lib/fs"
 import { relativePath } from "../lib/paths"
 import { errorMessage } from "../lib/tauri"
 import { Icon, Spinner } from "../components/ui"
+import { markdownView, useMarkdownViews } from "./markdownViews"
+import { MarkdownPreview } from "./MarkdownPreview"
 
 const DIAGNOSTIC_SEVERITY: Record<Finding["severity"], Diagnostic["severity"]> = { alta: "error", media: "warning", baja: "info" }
 
@@ -119,6 +121,12 @@ export function FileEditor({ groupId, path, visible }: { groupId: string; path: 
   const reveal = useEditors((s) => s.reveal)
   const conflict = useDocs((s) => (path ? !!s.conflicts[docKey(path)] : false))
   const image = path ? isRasterImage(path) : false
+  const root = useProject((s) => s.root)
+  useMarkdownViews((s) => s.projects)
+  const preview = !!path && markdownView(root, path) === "preview"
+  const previewRef = useRef(preview)
+  previewRef.current = preview
+  const content = useDocs(s => path ? s.content[docKey(path)] : undefined)
 
   useEffect(() => {
     const view = new EditorView({
@@ -170,9 +178,9 @@ export function FileEditor({ groupId, path, visible }: { groupId: string; path: 
         setActiveCode(path, view)
         publishCursor(view)
         setStatus("ready")
-        const r = consumeReveal(tabId({ kind: "file", path }))
+        const r = previewRef.current ? null : consumeReveal(tabId({ kind: "file", path }))
         if (r) requestAnimationFrame(() => goToLine(view, r.line, r.column, r.endLine, r.endColumn))
-        else if (useEditors.getState().activeGroupId === groupId) requestAnimationFrame(() => view.focus())
+        else if (!previewRef.current && useEditors.getState().activeGroupId === groupId) requestAnimationFrame(() => view.focus())
       })
       .catch((e) => {
         if (cancelled) return
@@ -207,20 +215,19 @@ export function FileEditor({ groupId, path, visible }: { groupId: string; path: 
 
   useEffect(() => {
     const view = viewRef.current
-    if (!view || !path || status !== "ready" || !reveal) return
+    if (!view || !path || preview || status !== "ready" || !reveal) return
     if (reveal.tabId !== tabId({ kind: "file", path })) return
     const r = consumeReveal(reveal.tabId)
     if (r) requestAnimationFrame(() => goToLine(view, r.line, r.column, r.endLine, r.endColumn))
-  }, [reveal, path, status])
+  }, [reveal, path, preview, status])
 
   useEffect(() => {
-    if (!visible || activeGroupId !== groupId || status !== "ready") return
+    if (!visible || preview || activeGroupId !== groupId || status !== "ready") return
     const view = viewRef.current
     if (view && !view.hasFocus) requestAnimationFrame(() => view.focus())
-  }, [focusNonce, visible, activeGroupId, groupId, status])
+  }, [focusNonce, visible, preview, activeGroupId, groupId, status])
 
   const repo = path ? repoForPath(path) : null
-  const root = useProject((s) => s.root)
 
   return (
     <div className="file-editor" style={{ display: visible ? "flex" : "none" }}>
@@ -248,7 +255,8 @@ export function FileEditor({ groupId, path, visible }: { groupId: string; path: 
         </div>
       )}
       <div className="file-editor-body">
-        <div ref={containerRef} className="cm-host" style={{ visibility: status === "ready" ? "visible" : "hidden" }} />
+        <div ref={containerRef} className="cm-host" style={{ display: preview ? "none" : undefined, visibility: status === "ready" ? "visible" : "hidden" }} />
+        {preview && path && status === "ready" && <MarkdownPreview key={path} path={path} text={content?.toString() ?? ""} />}
         {image && path && <ImagePreview path={path} />}
         {status === "loading" && (
           <div className="editor-overlay">
