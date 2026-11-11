@@ -110,7 +110,7 @@ function ImagePreview({ path }: { path: string }) {
 }
 
 export function FileEditor({ groupId, path, visible }: { groupId: string; path: string | null; visible: boolean }) {
-  const reading = useStudio(s => s.mode === "code")
+  const reading = useStudio(s => s.readOnly)
   const containerRef = useRef<HTMLDivElement>(null)
   const viewRef = useRef<EditorView | null>(null)
   const currentPath = useRef<string | null>(null)
@@ -173,8 +173,9 @@ export function FileEditor({ groupId, path, visible }: { groupId: string; path: 
         if (!state) return
         currentPath.current = path
         if (view.state !== state) view.setState(state)
-        view.dispatch({ effects: readOnlyCompartment.reconfigure(EditorState.readOnly.of(reading)) })
-        view.contentDOM.setAttribute("aria-readonly", String(reading))
+        const readOnly = useStudio.getState().readOnly
+        view.dispatch({ effects: readOnlyCompartment.reconfigure(EditorState.readOnly.of(readOnly)) })
+        view.contentDOM.setAttribute("aria-readonly", String(readOnly))
         setActiveCode(path, view)
         publishCursor(view)
         setStatus("ready")
@@ -193,7 +194,14 @@ export function FileEditor({ groupId, path, visible }: { groupId: string; path: 
     return () => {
       cancelled = true
     }
-  }, [path, image, groupId, reading])
+  }, [path, image, groupId])
+
+  useEffect(() => {
+    const view = viewRef.current
+    if (!view || !path || status !== "ready" || currentPath.current !== path) return
+    view.dispatch({ effects: readOnlyCompartment.reconfigure(EditorState.readOnly.of(reading)) })
+    view.contentDOM.setAttribute("aria-readonly", String(reading))
+  }, [path, reading, status])
 
   const reviewRuns = useAiReview((s) => s.runs)
   const dismissedFindings = useAiReview((s) => s.dismissed)
@@ -232,7 +240,12 @@ export function FileEditor({ groupId, path, visible }: { groupId: string; path: 
   return (
     <div className="file-editor" style={{ display: visible ? "flex" : "none" }}>
       {path && <Breadcrumbs path={path} />}
-      {path && reading && <div className="file-reading-banner"><Icon name="book" /><span>Solo lectura</span><small>Explorá, buscá y copiá código sin modificar el archivo.</small></div>}
+      {path && !image && status === "ready" && <div className="file-reading-banner">
+        <button type="button" className="btn btn-xs" aria-pressed={reading} title={reading ? "Permitir edición de todos los archivos" : "Poner todos los archivos en solo lectura"} onClick={() => useStudio.getState().setReadOnly(!reading)}>
+          <Icon name={reading ? "book" : "edit"} />{reading ? "Solo lectura" : "Editable"}
+        </button>
+        <small>{reading ? "Todos los archivos están en solo lectura. Hacé clic para habilitar la edición." : "Podés editar los archivos. Hacé clic en Editable para activar solo lectura global."}</small>
+      </div>}
       {conflict && path && (
         <div className="editor-banner warning">
           <Icon name="warning" />

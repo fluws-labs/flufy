@@ -181,7 +181,7 @@ export function TitleBar() {
         <FeatureChip />
       </div>
       <nav className="studio-mode-switch" aria-label="Modo de trabajo">
-        {([["design", "Diseñar"], ["team", "Equipo"], ["research", "Investigar"], ["code", "Código"]] as [StudioMode, string][]).map(([id, label]) => <button key={id} type="button" aria-pressed={mode === id} className={mode === id ? "active" : ""} title={id === "code" ? "Explorar y leer los archivos del proyecto" : undefined} onClick={() => {
+        {([["design", "Diseñar"], ["team", "Equipo"], ["research", "Investigar"], ["code", "Código"]] as [StudioMode, string][]).map(([id, label]) => <button key={id} type="button" aria-pressed={mode === id} className={mode === id ? "active" : ""} title={id === "code" ? "Explorar y editar los archivos del proyecto" : undefined} onClick={() => {
           if (id === "code") {
             useLayout.setState({ activeView: "explorer", sidebarVisible: true, focusChat: false, agentVisible: false, panelVisible: false })
             const editors = useEditors.getState()
