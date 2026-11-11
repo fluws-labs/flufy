@@ -24,6 +24,7 @@ import { decorationLetter } from "../lib/git"
 import { docKey, useDocs } from "./documents"
 import { closeAllTabs, closeOtherTabs, closeSavedTabs, closeTab, closeTabsToRight } from "./tabs"
 import { FileEditor } from "./FileEditor"
+import { isMarkdown, markdownView, setMarkdownView, useMarkdownViews } from "./markdownViews"
 import { GitDiffEditor, CommitFileEditor } from "./GitDiffEditor"
 import { ReviewEditor } from "./ReviewEditor"
 import { GraphEditor } from "./GraphEditor"
@@ -214,7 +215,10 @@ function TabView({
 
 function GroupActions({ group, tab }: { group: Group; tab: Tab | null }) {
   useGit((s) => s.revision)
+  const root = useProject((s) => s.root)
+  useMarkdownViews((s) => s.projects)
   const path = tab?.input.kind === "file" ? tab.input.path : null
+  const preview = path ? markdownView(root, path) === "preview" : false
   const status = path ? statusEntryFor(path) : null
   return (
     <div className="tabs-actions">
@@ -237,6 +241,13 @@ function GroupActions({ group, tab }: { group: Group; tab: Tab | null }) {
             useLayout.getState().toggleAgent(true)
             focusComposer()
           }}
+        />
+      )}
+      {path && isMarkdown(path) && (
+        <IconButton
+          icon={preview ? "code" : "open-preview"}
+          title={preview ? "Vista previa · Cambiar a Código" : "Código · Cambiar a Vista previa"}
+          onClick={() => setMarkdownView(root, path, preview ? "code" : "preview")}
         />
       )}
       {tab && <IconButton icon="split-horizontal" title="Mover al grupo de la derecha" onClick={() => moveTabToNextGroup(tab.id)} />}
