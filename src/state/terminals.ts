@@ -2,6 +2,7 @@ import { create } from "zustand"
 import { Terminal } from "@xterm/xterm"
 import { FitAddon } from "@xterm/addon-fit"
 import { WebLinksAddon } from "@xterm/addon-web-links"
+import { SearchAddon } from "@xterm/addon-search"
 import { openUrl } from "@tauri-apps/plugin-opener"
 import {
   terminalKill,
@@ -37,6 +38,7 @@ type TerminalsState = {
   activeId: string | null
   shells: ShellInfo[]
   defaultShell: string | null
+  searches: Record<string, { open: boolean; query: string; resultIndex: number; resultCount: number }>
 }
 
 const DEFAULT_SHELL_KEY = "terminal.defaultShell"
@@ -46,6 +48,7 @@ export const useTerminals = create<TerminalsState>(() => ({
   activeId: null,
   shells: [],
   defaultShell: loadJson<string | null>(DEFAULT_SHELL_KEY, null),
+  searches: {},
 }))
 
 export function setDefaultShell(shell: string | null): void {
@@ -56,6 +59,7 @@ export function setDefaultShell(shell: string | null): void {
 type Instance = {
   term: Terminal
   fit: FitAddon
+  search: SearchAddon
   host: HTMLDivElement
   ready: Promise<void>
   opened: boolean
@@ -117,6 +121,40 @@ export function getInstance(id: string): Instance | undefined {
   return instances.get(id)
 }
 
+function patchSearch(id: string, patch: Partial<TerminalsState["searches"][string]>): void {
+  if (!instances.has(id)) return
+  useTerminals.setState(s => ({ searches: { ...s.searches, [id]: {
+    ...(s.searches[id] ?? { open: false, query: "", resultIndex: -1, resultCount: 0 }), ...patch,
+  } } }))
+}
+
+export function openTerminalSearch(id: string): void {
+  patchSearch(id, { open: true })
+}
+
+export function closeTerminalSearch(id: string): void {
+  instances.get(id)?.search.clearDecorations()
+  patchSearch(id, { open: false, resultIndex: -1, resultCount: 0 })
+  focusTerminal(id)
+}
+
+export function searchTerminal(id: string, query: string, direction: "next" | "previous" = "next", incremental = false): void {
+  const instance = instances.get(id)
+  if (!instance?.opened) return
+  patchSearch(id, { query })
+  if (!query) {
+    instance.search.clearDecorations()
+    patchSearch(id, { resultIndex: -1, resultCount: 0 })
+    return
+  }
+  const options = { incremental, decorations: {
+    matchBackground: "#5c481b", matchOverviewRuler: "#e3b341",
+    activeMatchBackground: "#725c25", activeMatchBorder: "#e3b341", activeMatchColorOverviewRuler: "#e3b341",
+  } }
+  if (direction === "previous") instance.search.findPrevious(query, options)
+  else instance.search.findNext(query, options)
+}
+
 function patchInfo(id: string, patch: Partial<TerminalInfo>) {
   useTerminals.setState((s) => ({ terminals: s.terminals.map((t) => (t.id === id ? { ...t, ...patch } : t)) }))
 }
@@ -144,6 +182,9 @@ export function createTerminal(
   const fit = new FitAddon()
   term.loadAddon(fit)
   term.loadAddon(new WebLinksAddon((_event, uri) => void openUrl(uri)))
+  const search = new SearchAddon()
+  term.loadAddon(search)
+  search.onDidChangeResults(result => patchSearch(id, result))
   const host = document.createElement("div")
   host.className = "terminal-host"
   const info: TerminalInfo = {
@@ -177,7 +218,7 @@ export function createTerminal(
   term.onResize(({ cols, rows }) => {
     void terminalResize(id, cols, rows).catch(() => undefined)
   })
-  instances.set(id, { term, fit, host, ready, opened: false })
+  instances.set(id, { term, fit, search, host, ready, opened: false })
   useTerminals.setState((s) => ({ terminals: [...s.terminals, info], activeId: id }))
   if (opts.show !== false) useLayout.getState().showPanel("terminal")
   return id
@@ -245,9 +286,11 @@ export async function killTerminal(id: string): Promise<void> {
   await terminalKill(id).catch(() => undefined)
   inst?.term.dispose()
   useTerminals.setState((s) => {
+    const searches = { ...s.searches }
+    delete searches[id]
     const terminals = s.terminals.filter((t) => t.id !== id)
     const activeId = s.activeId === id ? (terminals[terminals.length - 1]?.id ?? null) : s.activeId
-    return { terminals, activeId }
+    return { terminals, activeId, searches }
   })
 }
 
@@ -296,6 +339,8 @@ export function clearTerminal(id: string | null): void {
   if (!id) return
   const inst = instances.get(id)
   if (!inst) return
+  inst.search.clearDecorations()
+  patchSearch(id, { resultIndex: -1, resultCount: 0 })
   inst.term.clear()
   void terminalWrite(id, "\x0c").catch(() => undefined)
 }

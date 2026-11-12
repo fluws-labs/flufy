@@ -539,9 +539,28 @@ body.resizing-y * {
   flex: 1;
   min-width: 0;
   display: flex;
+  flex-direction: column;
   padding: 4px 0 0 10px;
   background: #0d1117;
+  position: relative;
 }
+.terminal-search {
+  position: absolute;
+  top: 4px;
+  right: 8px;
+  z-index: 5;
+  max-width: calc(100% - 16px);
+  background: var(--bg-overlay);
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+}
+.terminal-search .input { flex: 1; min-width: 100px; }
+.terminal-search [role="status"] { color: var(--fg-dim); font-size: 11px; min-width: 70px; }
 .terminal-surface {
   flex: 1;
   min-width: 0;

@@ -3,9 +3,13 @@ import { useLayout } from "../state/layout"
 import {
   attachTerminal,
   clearTerminal,
+  closeTerminalSearch,
   createTerminal,
   ensureShells,
   focusTerminal,
+  getInstance,
+  openTerminalSearch,
+  searchTerminal,
   shouldAutoFocus,
   terminalTitle,
   killTerminal,
@@ -24,10 +28,40 @@ function TerminalSurface({ id }: { id: string }) {
     const el = ref.current
     if (!el) return
     const detach = attachTerminal(id, el)
-    if (shouldAutoFocus(id)) requestAnimationFrame(() => focusTerminal(id))
+    if (shouldAutoFocus(id)) requestAnimationFrame(() => {
+      if (!useTerminals.getState().searches[id]?.open) focusTerminal(id)
+    })
     return detach
   }, [id])
   return <div ref={ref} className="terminal-surface" />
+}
+
+function TerminalSearch({ id }: { id: string }) {
+  const search = useTerminals(s => s.searches[id])
+  const input = useRef<HTMLInputElement>(null)
+  const open = !!search?.open
+  useEffect(() => {
+    if (!open) return
+    input.current?.focus()
+    searchTerminal(id, useTerminals.getState().searches[id]?.query ?? "", "next", true)
+    return () => { /* Keep each terminal's query; remove hidden search highlights. */
+      getInstance(id)?.search.clearDecorations()
+    }
+  }, [id, open])
+  if (!open) return null
+  return <div className="terminal-search" role="search" aria-label="Búsqueda en la terminal">
+    <input ref={input} className="input" aria-label="Buscar en esta terminal" placeholder="Buscar en esta terminal" value={search.query}
+      onChange={e => searchTerminal(id, e.target.value, "next", true)}
+      onKeyDown={e => {
+        e.stopPropagation()
+        if (e.key === "Enter") { e.preventDefault(); searchTerminal(id, search.query, e.shiftKey ? "previous" : "next") }
+        else if (e.key === "Escape") { e.preventDefault(); closeTerminalSearch(id) }
+      }} />
+    <span role="status" aria-live="polite">{!search.query ? "" : search.resultCount === 0 ? "Sin resultados" : search.resultIndex < 0 ? `${search.resultCount} coincidencias` : `${search.resultIndex + 1} de ${search.resultCount}`}</span>
+    <IconButton icon="arrow-up" title="Coincidencia anterior" disabled={!search.query} onClick={() => searchTerminal(id, search.query, "previous")} />
+    <IconButton icon="arrow-down" title="Coincidencia siguiente" disabled={!search.query} onClick={() => searchTerminal(id, search.query)} />
+    <IconButton icon="close" title="Cerrar búsqueda" onClick={() => closeTerminalSearch(id)} />
+  </div>
 }
 
 function TerminalsPanel() {
@@ -35,6 +69,7 @@ function TerminalsPanel() {
   const activeId = useTerminals((s) => s.activeId)
   const shells = useTerminals((s) => s.shells)
   const defaultShell = useTerminals((s) => s.defaultShell)
+  const searchOpen = useTerminals(s => !!(s.activeId && s.searches[s.activeId]?.open))
 
   useEffect(() => {
     let cancelled = false
@@ -66,10 +101,16 @@ function TerminalsPanel() {
 
   return (
     <div className="terminals">
-      <div className="terminal-main">{activeId && <TerminalSurface key={activeId} id={activeId} />}</div>
+      <div className="terminal-main">{activeId && <><TerminalSearch key={`search-${activeId}`} id={activeId} /><TerminalSurface key={activeId} id={activeId} /></>}</div>
       {terminals.length > 0 && (
         <div className="terminal-list">
           <div className="terminal-list-actions">
+            <IconButton icon="search" title="Buscar en esta terminal" active={searchOpen} disabled={!activeId} onClick={() => {
+              if (activeId) {
+                if (searchOpen) closeTerminalSearch(activeId)
+                else openTerminalSearch(activeId)
+              }
+            }} />
             <IconButton icon="add" title={defaultName ? `Nueva terminal (${defaultName})` : "Nueva terminal"} onClick={() => createTerminal()} />
             <IconButton icon="chevron-down" title="Elegir shell predeterminado" onClick={(e) => newMenu(e.currentTarget)} />
             <IconButton icon="clear-all" title="Limpiar" onClick={() => clearTerminal(activeId)} />
