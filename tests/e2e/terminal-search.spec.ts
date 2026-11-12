@@ -49,9 +49,15 @@ window.__vite_plugin_react_preamble_installed__ = true;
 
 test("search is isolated by terminal and does not send search keys to the shell", async ({ page }) => {
   await boot(page)
+  const surface = page.locator(".terminal-surface")
+  const closedBounds = await surface.boundingBox()
   await page.getByRole("button", { name: "Buscar en esta terminal", exact: true }).click()
   const input = page.getByRole("textbox", { name: "Buscar en esta terminal" })
   await expect(input).toBeFocused()
+  const searchBounds = await page.getByRole("search").boundingBox()
+  const openBounds = await surface.boundingBox()
+  expect(openBounds!.y).toBeGreaterThanOrEqual(searchBounds!.y + searchBounds!.height)
+  expect(openBounds!.height).toBeLessThan(closedBounds!.height)
   await input.fill("error")
   await expect(page.getByRole("status")).toHaveText("1 de 2")
   await input.press("Enter")
@@ -68,6 +74,7 @@ test("search is isolated by terminal and does not send search keys to the shell"
   await expect(page.getByRole("status")).toHaveText("1 de 2")
   await input.press("Escape")
   await expect(input).toHaveCount(0)
+  await expect.poll(async () => (await surface.boundingBox())!.height).toBe(closedBounds!.height)
   await expect(page.locator(".xterm-helper-textarea")).toBeFocused()
   expect(await page.evaluate(() => (window as any).__terminalWrites)).toEqual([])
   await page.locator(".xterm-helper-textarea").press("Control+f")
