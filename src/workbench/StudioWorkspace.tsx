@@ -5,12 +5,11 @@ import { PreviewPane } from "../agent/PreviewHost"
 import { PreviewConversation } from "../agent/PreviewConversation"
 import { PreviewLibrary } from "../agent/PreviewLibrary"
 import { previewIdentityFor, usePreviewTaskId } from "../agent/preview-identity"
-import { newSession, rememberPreviewTask, selectSession, sessionInProject, useAgent } from "../state/agent"
+import { newSession, rememberPreviewTask, selectSession, useAgent } from "../state/agent"
 import { loadMemory, openMemory, useMemory } from "../state/memory"
 import { useProject } from "../state/project"
 import { useTeams } from "../state/teams"
 import { useStudio, type StudioMode } from "../state/studio"
-import { unarchivedSessions } from "../lib/sessions"
 import { TeamWorkspace } from "../team/TeamWorkspace"
 import { previewIdentityKey, type PreviewEditorContext } from "../preview"
 
@@ -65,10 +64,9 @@ function ResearchSidebar() {
 function ResearchWorkspace() {
   const activeId = useAgent(s => s.activeSessionId)
   const sessions = useAgent(s => s.allSessions)
-  const recent = unarchivedSessions(sessions).filter(session => !session.parentID && sessionInProject(session)).slice(0, 12)
   const active = sessions.find(session => session.id === activeId)
   return <div className="studio-columns studio-research">
-    <aside className="studio-sidebar" aria-label="Investigaciones"><section className="studio-side-section"><h3>Investigación</h3><button type="button" className="studio-nav-item active" onClick={() => { useTeams.setState({ activeChatId: null }); newSession() }}><Icon name="add" /> Nueva consulta</button><div className="studio-session-list">{recent.map(session => <button type="button" className={`studio-nav-item${session.id === activeId ? " selected" : ""}`} key={session.id} onClick={() => selectSession(session.id)}>{session.title || "Sin título"}</button>)}</div></section><MemoryCards /></aside>
+    <aside className="studio-sidebar" aria-label="Investigaciones"><section className="studio-side-section"><h3>Investigación</h3><button type="button" className="studio-nav-item active" onClick={() => { useTeams.setState({ activeChatId: null }); newSession() }}><Icon name="add" /> Nueva consulta</button></section><MemoryCards /></aside>
     <main className="studio-content"><header className="studio-page-heading research-heading"><div className="research-heading-icon"><Icon name="search" /></div><h1>Investigación profunda</h1><span className="research-heading-session" title={active?.title}>{active?.title || "Nueva conversación"}</span></header><SessionPane sessionId={activeId} variant="panel" onPreviewOpen={() => useStudio.getState().setMode("design")} /></main>
     <ResearchSidebar />
   </div>

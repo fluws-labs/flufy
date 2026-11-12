@@ -62,6 +62,8 @@ import { Logo } from "../components/Logo"
 import { UpdateButton } from "../components/Updates"
 import { useStudio, type StudioMode } from "../state/studio"
 
+let codeLayout: { activeView: ViewId; sidebarVisible: boolean; agentVisible: boolean; panelVisible: boolean } | null = null
+
 const VIEWS: Array<{ id: ViewId; icon: string; title: string; keys: string }> = [
   { id: "explorer", icon: "files", title: "Explorador", keys: "Ctrl+Shift+E" },
   { id: "search", icon: "search", title: "Buscar", keys: "Ctrl+Shift+F" },
@@ -182,8 +184,12 @@ export function TitleBar() {
       </div>
       <nav className="studio-mode-switch" aria-label="Modo de trabajo">
         {([["design", "Diseñar"], ["team", "Equipo"], ["research", "Investigar"], ["code", "Código"]] as [StudioMode, string][]).map(([id, label]) => <button key={id} type="button" aria-pressed={mode === id} className={mode === id ? "active" : ""} title={id === "code" ? "Explorar y editar los archivos del proyecto" : undefined} onClick={() => {
-          if (id === "code") {
-            useLayout.setState({ activeView: "explorer", sidebarVisible: true, focusChat: false, agentVisible: false, panelVisible: false })
+          if (mode === "code" && id !== "code") {
+            const s = useLayout.getState()
+            codeLayout = { activeView: s.activeView, sidebarVisible: s.sidebarVisible, agentVisible: s.agentVisible, panelVisible: s.panelVisible }
+          }
+          if (id === "code" && mode !== "code") {
+            useLayout.setState({ ...(codeLayout ?? { activeView: "explorer", sidebarVisible: true, agentVisible: false, panelVisible: false }), focusChat: false })
             const editors = useEditors.getState()
             const group = editors.groups.find(g => g.id === editors.activeGroupId)
             const active = group?.tabs.find(t => t.id === group.activeId)
