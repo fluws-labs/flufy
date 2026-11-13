@@ -575,6 +575,20 @@ body.resizing-y * {
 .terminal-host .xterm-viewport {
   background: transparent !important;
 }
+.terminal-file-tooltip {
+  position: fixed;
+  z-index: 10000;
+  max-width: min(560px, calc(100vw - 8px));
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-overlay);
+  color: var(--fg);
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+}
 .terminal-list {
   width: 190px;
   flex-shrink: 0;

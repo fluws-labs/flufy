@@ -4,6 +4,8 @@ import { FitAddon } from "@xterm/addon-fit"
 import { WebLinksAddon } from "@xterm/addon-web-links"
 import { SearchAddon } from "@xterm/addon-search"
 import { openUrl } from "@tauri-apps/plugin-opener"
+import { TerminalFileLinksAddon } from "../lib/terminalFileLinks"
+import type { TerminalFileReference } from "../lib/terminalFileReferences"
 import {
   terminalKill,
   terminalKillAll,
@@ -11,6 +13,7 @@ import {
   terminalShells,
   terminalSpawn,
   terminalWrite,
+  terminalFileReference,
   type ShellInfo,
 } from "../lib/term"
 import { basename, samePath } from "../lib/paths"
@@ -121,6 +124,27 @@ export function getInstance(id: string): Instance | undefined {
   return instances.get(id)
 }
 
+async function openTerminalReference(id: string, reference: TerminalFileReference): Promise<void> {
+  const { useFeatures } = await import("./features")
+  const root = useProject.getState().root
+  const workspace = useFeatures.getState().activeWorkspace
+  try {
+    const resolved = await terminalFileReference(id, reference.path, workspace, true)
+    if (!resolved.file) throw new Error("no se recibió un archivo de texto validado")
+    const [{ loadDocument }, { openFile }, { setMarkdownView }] = await Promise.all([
+      import("../editor/documents"), import("./editors"), import("../editor/markdownViews"),
+    ])
+    if (!instances.has(id) || useProject.getState().root !== root || useFeatures.getState().activeWorkspace !== workspace) return
+    // Seed from the guarded native read; do not reopen an unchecked path to display it.
+    await loadDocument(resolved.path, resolved.file)
+    if (!instances.has(id) || useProject.getState().root !== root || useFeatures.getState().activeWorkspace !== workspace) return
+    setMarkdownView(root, resolved.path, "code")
+    openFile(resolved.path, { line: reference.line, column: reference.column })
+  } catch (error) {
+    notify.warning("No se pudo abrir la referencia de la terminal", errorMessage(error))
+  }
+}
+
 function patchSearch(id: string, patch: Partial<TerminalsState["searches"][string]>): void {
   if (!instances.has(id)) return
   useTerminals.setState(s => ({ searches: { ...s.searches, [id]: {
@@ -181,7 +205,16 @@ export function createTerminal(
   })
   const fit = new FitAddon()
   term.loadAddon(fit)
-  term.loadAddon(new WebLinksAddon((_event, uri) => void openUrl(uri)))
+  term.loadAddon(new TerminalFileLinksAddon({
+    cwd,
+    resolve: async path => {
+      const { useFeatures } = await import("./features")
+      return (await terminalFileReference(id, path, useFeatures.getState().activeWorkspace, false)).path
+    },
+    open: reference => { void openTerminalReference(id, reference) },
+  }))
+  // Ctrl+click is reserved for guarded source navigation, never an external fallback.
+  term.loadAddon(new WebLinksAddon((event, uri) => { if (!event.ctrlKey) void openUrl(uri) }))
   const search = new SearchAddon()
   term.loadAddon(search)
   search.onDidChangeResults(result => patchSearch(id, result))

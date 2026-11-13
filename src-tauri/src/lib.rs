@@ -35,6 +35,7 @@ pub mod teams;
 pub mod search;
 pub mod speech;
 pub mod term;
+mod terminal_files;
 pub mod usage;
 pub mod updates;
 pub mod voice;
@@ -501,6 +502,7 @@ pub fn run() {
             gh::gh_pr_ready,
             term::terminal_shells,
             term::terminal_spawn,
+            terminal_files::terminal_file_reference,
             term::terminal_write,
             term::terminal_resize,
             term::terminal_kill,

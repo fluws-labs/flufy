@@ -120,13 +120,14 @@ export function FileEditor({ groupId, path, visible }: { groupId: string; path: 
   const activeGroupId = useEditors((s) => s.activeGroupId)
   const reveal = useEditors((s) => s.reveal)
   const conflict = useDocs((s) => (path ? !!s.conflicts[docKey(path)] : false))
-  const image = path ? isRasterImage(path) : false
+  const content = useDocs(s => path ? s.content[docKey(path)] : undefined)
+  // A validated text document (including an image-like filename) stays in code.
+  const image = path ? isRasterImage(path) && !content : false
   const root = useProject((s) => s.root)
   useMarkdownViews((s) => s.projects)
   const preview = !!path && markdownView(root, path) === "preview"
   const previewRef = useRef(preview)
   previewRef.current = preview
-  const content = useDocs(s => path ? s.content[docKey(path)] : undefined)
 
   useEffect(() => {
     const view = new EditorView({
