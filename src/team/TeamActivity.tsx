@@ -2,10 +2,40 @@ import { useEffect, useMemo, useState } from "react"
 import { Icon } from "../components/ui"
 import { shortAgo, timeAgo } from "../lib/time"
 import { loadTeamActivity, useTeamActivity, type TeamActivityEvent } from "../state/team-activity"
+import { useTeams } from "../state/teams"
 import type { TeamRun } from "./types"
 
 type Props = { run: TeamRun; onSession: (id: string, directory: string) => void; compact?: boolean; onOpen?: () => void }
 type Tone = "working" | "waiting" | "error" | "done" | "idle"
+
+const REASON_LABELS: Record<string, string> = {
+  "user.message_received": "mensaje del usuario",
+  "team.activated": "activación",
+  "run.attention": "atención del trabajo",
+  "run.completed": "trabajo terminado",
+  "run.blocked": "trabajo bloqueado",
+  "run.reconciled": "reconciliación",
+  "dependency.unlocked": "dependencia liberada",
+  "task.unblocked": "tarea liberada",
+  "task.blocked": "tarea bloqueada",
+  "coordination.requested": "coordinación",
+  "coordination.updated": "coordinación",
+  "lead.coordination": "coordinación",
+  "response.expected": "respuesta esperada",
+}
+
+function reasonLabel(kind: string) {
+  return REASON_LABELS[kind] ?? kind
+}
+
+function waitLabel(nextAt: number) {
+  const seconds = Math.max(0, Math.ceil((nextAt - Date.now()) / 1000))
+  return seconds < 60 ? `${seconds} s` : `${Math.ceil(seconds / 60)} min`
+}
+
+function formatTokens(tokens: number) {
+  return new Intl.NumberFormat("es-AR").format(tokens)
+}
 
 function tone(event: TeamActivityEvent | undefined): Tone {
   if (!event) return "idle"
@@ -22,6 +52,11 @@ const NO_EVENTS: TeamActivityEvent[] = []
 export function TeamActivity({ run, onSession, compact = false, onOpen }: Props) {
   const events = useTeamActivity((state) => state.byRun[run.id])
   const loaded = useTeamActivity((state) => state.loaded[run.id])
+  const summary = useTeams((state) => state.ledger?.find((item) => item.runId === run.id))
+  const guard = useTeams((state) => {
+    const chat = state.chats.find((item) => item.runs.some((entry) => entry.id === run.id))
+    return chat ? state.guards?.find((item) => item.chatId === chat.id) : undefined
+  })
   const [agentFilter, setAgentFilter] = useState("")
   useEffect(() => { void loadTeamActivity(run.id) }, [run.id])
   const list = events ?? NO_EVENTS
@@ -43,6 +78,10 @@ export function TeamActivity({ run, onSession, compact = false, onOpen }: Props)
       <div><strong><Icon name="play" /> Ahora</strong><small>{active ? `${active} en movimiento · ` : ""}{list.length} eventos observados</small></div>
       {compact ? <button className="btn btn-xs" type="button" onClick={onOpen}>Ver todo</button> : <label className="team-activity-filter">Agente<select value={agentFilter} onChange={(event) => setAgentFilter(event.target.value)}><option value="">Todos</option>{run.team.members.map((member) => <option key={member.id} value={member.id}>{member.name}</option>)}</select></label>}
     </header>
+    {(guard || summary) && <div className="team-activity-ledger" aria-label="Resumen de coordinación">
+      {guard && <p className="team-note" role="status"><Icon name="sync" /> En espera: {guard.reason} · vuelve en {waitLabel(guard.nextAt)} · {guard.repeats} {guard.repeats === 1 ? "repetición" : "repeticiones"}</p>}
+      {summary && <p className="team-note">{summary.tokens == null ? "Tokens sin dato del motor" : `${formatTokens(summary.tokens)} tokens`} · {summary.leadTurns} {summary.leadTurns === 1 ? "turno del Lead" : "turnos del Lead"} · {summary.uiOnlyEvents} {summary.uiOnlyEvents === 1 ? "aviso sin turno" : "avisos sin turno"}{summary.noticesGrouped > 0 ? ` · ${summary.noticesGrouped} agrupados` : ""}{summary.reasons.length > 0 ? ` · ${summary.reasons.map((item) => `${reasonLabel(item.reason)} ×${item.count}`).join(", ")}` : ""}</p>}
+    </div>}
     <div className="team-activity-cards">
       {members.map((member) => {
         const event = latest.get(member.id)

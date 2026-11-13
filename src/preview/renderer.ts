@@ -40,6 +40,8 @@ export function renderPreview(document: PreviewDocument): { html: string; css: s
     for (const [key, cssKey] of [["radius", "border-radius"], ["fontSize", "font-size"], ["fontWeight", "font-weight"]] as const) {
       const v = node.style?.[key]; if (v !== undefined && Number.isFinite(v) && v >= 0 && v <= 1000) declarations.push(`${cssKey}:${v}${key === "fontWeight" ? "" : "px"}`)
     }
+    const family = node.style?.fontFamily?.replace(/[^a-zA-Z0-9 ,_-]/g, "").trim()
+    if (family) declarations.push(`font-family:${family}`)
     rules.push(`[data-node="${node.id}"]{${declarations.join(";")}}`)
     if (node.mobile || node.mobileOffset) mobile.push(`[data-node="${node.id}"]{${layoutCss(node.mobile ?? {})}${node.mobileOffset ? `;${offsetCss(node.mobileOffset)}` : ""}}`)
     const attrs = `data-node="${node.id}"${node.placeholderFor ? ' data-preview-slot aria-hidden="true"' : ' tabindex="0"'}${node.targetScreenId ? ` data-target-screen="${escape(node.targetScreenId)}"` : ''}`

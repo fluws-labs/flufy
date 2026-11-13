@@ -25,7 +25,10 @@ export type TeamChatMessage = { continuousFallback?: ContinuousFallback | null; 
 export type ApprovedPreviewReference = PreviewReference
 export type TeamOrigin = { sessionId: string; messageId: string; title: string; directory: string; createdAt: number; error?: string | null; previewReference?: ApprovedPreviewReference | null }
 export type TeamChatRecord = { continuousMode?: boolean; origin?: TeamOrigin | null; messages?: TeamChatMessage[]; id: string; title: string; archived: boolean; team: Team; skills: Skill[]; createdAt: number; runs: TeamRun[]; memory?: boolean | null; autoApprove?: boolean | null }
-export type TeamStore = { schemaVersion: number; teams: Team[]; skills: Skill[]; chats: TeamChatRecord[]; fallbackModels?: ModelRef[] }
+export type TeamStore = { schemaVersion: number; teams: Team[]; skills: Skill[]; chats: TeamChatRecord[]; fallbackModels?: ModelRef[]; ledger?: RunLedger[]; guards?: GuardState[] }
+export type LedgerReason = { reason: string; count: number }
+export type RunLedger = { runId: string; chatId: string; tokens: number | null; costUsd: number | null; leadTurns: number; uiOnlyEvents: number; noticesGrouped: number; eventsPreserved: number; toolCalls: number; toolErrors: number; reasons: LedgerReason[]; outcome: string | null }
+export type GuardState = { chatId: string; fingerprint: string; reason: string; repeats: number; nextAt: number; updatedAt: number }
 export type ContinuousFallback = { enabled: boolean; originalModel: ModelRef; originalVariant: string | null; currentModel: ModelRef; candidates: ModelRef[]; nextIndex: number; restored: boolean }
 
 // Initial Lead replies have the same native snapshot before a Run exists.

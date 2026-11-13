@@ -20,6 +20,7 @@ pub mod gh;
 pub mod git;
 pub mod hub;
 pub mod live;
+pub mod local_models;
 pub mod machine;
 pub mod memory;
 pub mod oc;
@@ -414,6 +415,10 @@ pub fn run() {
             voice::voice_set,
             voice::voice_test,
             voice::voice_transcribe,
+            local_models::local_models_state,
+            local_models::local_models_pull,
+            local_models::local_models_cancel,
+            local_models::local_models_install,
             whisper::whisper_status,
             whisper::whisper_download,
             whisper::whisper_cancel,
@@ -591,6 +596,9 @@ pub fn run() {
             app.manage(speech::SpeechState::default());
             let speech_app = app.handle().clone();
             std::thread::spawn(move || speech::prune(&speech_app));
+            std::thread::spawn(|| {
+                local_models::ensure_running();
+            });
             app.manage(term::TermState::new());
             app.manage(watch::WatchState::default());
             term::start_cleanup(app.handle());

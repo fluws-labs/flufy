@@ -17,7 +17,7 @@ export type PreviewNode = {
   targetScreenId?: string
   /** Invisible layout reservation left behind by a detached block. */
   placeholderFor?: string
-  style?: { color?: string; background?: string; borderColor?: string; radius?: number; fontSize?: number; fontWeight?: number }
+  style?: { color?: string; background?: string; borderColor?: string; radius?: number; fontFamily?: string; fontSize?: number; fontWeight?: number }
 }
 export type PreviewTheme = {
   tokens: Record<string, string>

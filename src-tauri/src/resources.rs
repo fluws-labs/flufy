@@ -288,7 +288,7 @@ fn sample(config: &ResourceConfig) -> ResourceSnapshot {
 }
 
 #[cfg(windows)]
-fn memory() -> (u64, u64, u64, u64) {
+pub(crate) fn memory() -> (u64, u64, u64, u64) {
     use windows::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
     let mut status = MEMORYSTATUSEX {
         dwLength: std::mem::size_of::<MEMORYSTATUSEX>() as u32,
@@ -304,6 +304,11 @@ fn memory() -> (u64, u64, u64, u64) {
         mb(status.ullTotalPageFile),
         mb(status.ullAvailPageFile),
     )
+}
+
+#[cfg(not(windows))]
+pub(crate) fn memory() -> (u64, u64, u64, u64) {
+    (0, 0, 0, 0)
 }
 
 #[cfg(windows)]

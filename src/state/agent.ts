@@ -18,6 +18,7 @@ import { normalizePath, relativePath, samePath, toFileUrl } from "../lib/paths"
 import { notify } from "./toasts"
 import { clearApprovalFailed, permissionNeedsResponse, setApprovalForSession, useApprovals } from "./approvals"
 import { chooseAvailableModel, hasAccount, modelAvailable, modelVisible } from "../lib/providers"
+import { localModelUsesAgent } from "../lib/localModels"
 import { isArchivedSession, sessionTreeIds } from "../lib/sessions"
 import { CONTINUE_INTERRUPTED_TURN, isRetryableProviderError, latestFailedAssistant, providerErrorMessage, retryContext, retryMessageID, retryPromptParts } from "../lib/autoretry"
 import { reconcileHistory } from "../lib/history"
@@ -1316,7 +1317,11 @@ export async function sendPrompt(
     patchSessionRuntime(id, { context: remaining })
     if (useAgent.getState().activeSessionId === id) useAgent.setState({ context: remaining })
   }
-  if (root) {
+  const simpleLocal = s.model.providerID === "ollama" && !localModelUsesAgent(s.model.modelID)
+  // La burbuja es un chat de la PC: la escena observada ocupa el turno y las
+  // instrucciones de previsualización solo confunden al modelo (las repetía en
+  // lugar de responder qué se ve en pantalla).
+  if (root && !simpleLocal && !isBubbleWindow()) {
     const current = useAgent.getState()
     const view = current.views[id]
     const taskId = resolvePreviewTaskId(view?.messages ?? [], root, id,
@@ -1347,8 +1352,20 @@ export async function sendPrompt(
     }
   }
   const variant = selectedVariant(s)
-  const agentName = runtime.agent ?? (isBubbleWindow() ? BUBBLE_AGENT : s.agentName)
+  const agentName = simpleLocal
+    ? "local"
+    : isBubbleWindow()
+      ? BUBBLE_AGENT
+      : runtime.agent ?? s.agentName
   patchSessionRuntime(id, { agent: agentName, model: s.model, variants: s.variants, previewEnabled: runtime.previewEnabled === true, submittedAt: Date.now() })
+  // Detener un turno deja la tarea de escritorio en «stopped». En un chat normal
+  // nadie la volvía a iniciar, así que toda herramienta de PC quedaba rechazada en
+  // esa conversación para siempre. Una instrucción nueva abre la generación otra vez;
+  // sin objetivo, no se inyecta estado de escritorio en chats que no lo usan.
+  if (isTauri && id && agentName !== BUBBLE_AGENT) {
+    const task = await call<{ status?: string } | null>("desktop_task_get", { session: id }).catch(() => null)
+    if (task?.status === "stopped") await call("desktop_task_begin", { session: id, instruction: "" }).catch(() => undefined)
+  }
   if (isTauri && agentName === BUBBLE_AGENT && command) {
     await call("desktop_task_begin", { session: id, instruction: trimmed }).catch(() => undefined)
   }

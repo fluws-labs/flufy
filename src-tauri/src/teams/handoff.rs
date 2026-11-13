@@ -193,7 +193,7 @@ fn prepare_lead(
             "title": request.title,
             "goal": request.goal,
         }),
-        Some(100),
+        super::lead_policy::priority("team.activated"),
         now(),
     )?;
     Ok((chat, false, Some(receipt)))
