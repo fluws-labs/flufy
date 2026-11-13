@@ -7,7 +7,7 @@ import { Panel } from "./Panel"
  * this container stable lets every studio mode reveal the same terminals. */
 export function WorkspaceCenter({ children, hasProject }: { children: ReactNode; hasProject: boolean }) {
   const visible = useLayout(s => s.panelVisible) && hasProject
-  const height = useLayout(s => s.panelHeight)
+  const height = useLayout(s => s.sizes.panelHeight)
   const maximized = useLayout(s => s.panelMaximized)
   const start = useRef<number | null>(null)
   return <div className="center workspace-center">
@@ -15,7 +15,7 @@ export function WorkspaceCenter({ children, hasProject }: { children: ReactNode;
     {visible && <>
       {!maximized && <Sash orientation="horizontal"
         onDrag={delta => {
-          start.current ??= useLayout.getState().panelHeight
+          start.current ??= useLayout.getState().sizes.panelHeight
           useLayout.getState().setPanelHeight(start.current - delta)
         }}
         onDragEnd={() => { start.current = null }}

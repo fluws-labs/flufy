@@ -160,9 +160,9 @@ export function Workbench() {
   const ready = useProject((s) => s.ready)
   const root = useProject((s) => s.root)
   const sidebarVisible = useLayout((s) => s.sidebarVisible)
-  const sidebarWidth = useLayout((s) => s.sidebarWidth)
+  const sidebarWidth = useLayout((s) => s.sizes.sidebarWidth)
   const agentVisible = useLayout((s) => s.agentVisible)
-  const agentWidth = useLayout((s) => s.agentWidth)
+  const agentWidth = useLayout((s) => s.sizes.agentWidth)
   const focusChat = useLayout((s) => s.focusChat)
   const start = useRef(0)
 
@@ -209,7 +209,7 @@ export function Workbench() {
             <Sash
               orientation="vertical"
               onDrag={(delta) => {
-                if (start.current === 0) start.current = useLayout.getState().sidebarWidth
+                if (start.current === 0) start.current = useLayout.getState().sizes.sidebarWidth
                 useLayout.getState().setSidebarWidth(start.current + delta)
               }}
               onDragEnd={() => {
@@ -229,7 +229,7 @@ export function Workbench() {
               <Sash
                 orientation="vertical"
                 onDrag={(delta) => {
-                  if (start.current === 0) start.current = useLayout.getState().agentWidth
+                  if (start.current === 0) start.current = useLayout.getState().sizes.agentWidth
                   useLayout.getState().setAgentWidth(start.current - delta)
                 }}
                 onDragEnd={() => {

@@ -135,6 +135,12 @@ test("changing spaces preserves terminal instances and output; the shared panel 
   })
   for (const label of ["Código", "Equipo", "Diseñar", "Investigar", "Código"]) {
     await page.getByRole("button", { name: label, exact: true }).click()
+    // Cada espacio recuerda si su panel inferior está abierto; abrirlo acá no
+    // crea otra terminal, solo muestra la instancia compartida en este modo.
+    await page.evaluate(async () => {
+      const { useLayout } = await import(/* @vite-ignore */ "/src/state/layout.ts")
+      if (!useLayout.getState().panelVisible) useLayout.getState().showPanel("terminal")
+    })
     await expect(page.locator(".xterm-screen:visible")).toHaveCount(1)
     expect(await page.evaluate(() => {
       const w = window as any, current = w.terminalTest.getInstance(w.firstId)
