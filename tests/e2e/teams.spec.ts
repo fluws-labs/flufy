@@ -182,7 +182,9 @@ async function createTeam(page: Page) {
 async function openTeamPanel(page: Page) {
   await expect(page.getByRole("button", { name: "Equipo", exact: true })).toHaveAttribute("aria-pressed", "true")
   await page.getByRole("button", { name: "Código", exact: true }).click()
-  await page.getByRole("button", { name: "Agente (Ctrl+Alt+B)", exact: true }).click()
+  await expect(page.getByRole("button", { name: "Código", exact: true })).toHaveAttribute("aria-pressed", "true")
+  const agentVisible = await page.evaluate(async () => (await import(/* @vite-ignore */ "/src/state/layout.ts")).useLayout.getState().agentVisible)
+  if (!agentVisible) await page.getByRole("button", { name: "Agente (Ctrl+Alt+B)", exact: true }).click()
   await expect(page.locator(".agent-panel .team-chat")).toBeVisible()
 }
 

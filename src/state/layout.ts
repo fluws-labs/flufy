@@ -20,6 +20,8 @@ export type LayoutProfile = {
 
 type LayoutData = LayoutProfile & {
   focusChat: boolean
+  /** Expansión temporaria del chat: no se guarda en el perfil del modo. */
+  chatExpanded: boolean
   /** Ancho del agente antes de entrar en foco-chat, para restaurarlo al salir. */
   agentWidthBeforeFocus: number | null
 }
@@ -43,6 +45,7 @@ type LayoutState = LayoutData & {
   setAgentWidth: (w: number) => void
   togglePanelMaximized: () => void
   toggleFocusChat: (on?: boolean) => void
+  toggleChatExpanded: (on?: boolean) => void
   applyPreset: (preset: "balanced" | "agent" | "code" | "review") => void
   resetLayout: () => void
   fitToViewport: () => void
@@ -190,7 +193,7 @@ function profileOf(s: Pick<LayoutState, keyof LayoutProfile | "focusChat" | "age
 const PROFILES = loadProfiles()
 const STORED_MODE = loadJson<unknown>("studio.mode", "research")
 const INITIAL_MODE: StudioMode = isStudioMode(STORED_MODE) ? STORED_MODE : "research"
-const INITIAL: LayoutData = { ...PROFILES[INITIAL_MODE], focusChat: false, agentWidthBeforeFocus: null }
+const INITIAL: LayoutData = { ...PROFILES[INITIAL_MODE], focusChat: false, chatExpanded: false, agentWidthBeforeFocus: null }
 
 export const useLayout = create<LayoutState>((set, get) => ({
   ...INITIAL,
@@ -207,30 +210,32 @@ export const useLayout = create<LayoutState>((set, get) => ({
       mode,
       profiles,
       focusChat: false,
+      chatExpanded: false,
       agentWidthBeforeFocus: null,
       sizes: clampToViewport({ ...next, focusChat: false }),
     })
   },
   toggleSidebar: () => {
-    set((s) => ({ sidebarVisible: !s.sidebarVisible }))
+    set((s) => ({ sidebarVisible: !s.sidebarVisible, chatExpanded: false }))
     get().fitToViewport()
   },
   showView: (view, toggle = true) => {
     const s = get()
-    if (toggle && s.sidebarVisible && s.activeView === view) set({ sidebarVisible: false })
-    else set({ activeView: view, sidebarVisible: true })
+    if (toggle && s.sidebarVisible && s.activeView === view) set({ sidebarVisible: false, chatExpanded: false })
+    else set({ activeView: view, sidebarVisible: true, chatExpanded: false })
     get().fitToViewport()
   },
   togglePanel: () => {
     set((s) => ({
       panelVisible: !s.panelVisible,
       panelMaximized: s.panelVisible ? false : s.panelMaximized,
+      chatExpanded: false,
       ...(s.panelVisible ? {} : { focusChat: false, agentWidth: s.agentWidthBeforeFocus ?? s.agentWidth, agentWidthBeforeFocus: null }),
     }))
     get().fitToViewport()
   },
   showPanel: (tab) => {
-    set((s) => ({ panelVisible: true, panelTab: tab, focusChat: false, agentWidth: s.agentWidthBeforeFocus ?? s.agentWidth, agentWidthBeforeFocus: null }))
+    set((s) => ({ panelVisible: true, panelTab: tab, chatExpanded: false, focusChat: false, agentWidth: s.agentWidthBeforeFocus ?? s.agentWidth, agentWidthBeforeFocus: null }))
     get().fitToViewport()
   },
   toggleAgent: (visible) => {
@@ -238,7 +243,7 @@ export const useLayout = create<LayoutState>((set, get) => ({
       const next = visible ?? !s.agentVisible
       const focusChat = next ? s.focusChat : false
       const restore = s.focusChat && !focusChat ? { agentWidth: s.agentWidthBeforeFocus ?? s.agentWidth, agentWidthBeforeFocus: null } : {}
-      return { agentVisible: next, focusChat, ...restore }
+      return { agentVisible: next, focusChat, chatExpanded: false, ...restore }
     })
     get().fitToViewport()
   },
@@ -259,34 +264,41 @@ export const useLayout = create<LayoutState>((set, get) => ({
     set({ agentWidth: Math.round(clamp(w, lo, hi)) })
     get().fitToViewport()
   },
-  togglePanelMaximized: () => set((s) => ({ panelMaximized: !s.panelMaximized, panelVisible: true })),
+  togglePanelMaximized: () => set((s) => ({ panelMaximized: !s.panelMaximized, panelVisible: true, chatExpanded: false })),
   toggleFocusChat: (on) => {
     set((s) => {
       const next = on ?? !s.focusChat
-      if (next === s.focusChat) return {}
+      if (next === s.focusChat) return { chatExpanded: false }
       if (next) {
         return {
           focusChat: true,
+          chatExpanded: false,
           agentVisible: true,
           agentWidthBeforeFocus: s.agentWidth,
           agentWidth: Math.round(agentRange({ ...s, sidebarWidth: s.sizes.sidebarWidth, focusChat: true }, window.innerWidth)[1]),
         }
       }
-      return { focusChat: false, agentWidth: s.agentWidthBeforeFocus ?? s.agentWidth, agentWidthBeforeFocus: null }
+      return { focusChat: false, chatExpanded: false, agentWidth: s.agentWidthBeforeFocus ?? s.agentWidth, agentWidthBeforeFocus: null }
     })
     get().fitToViewport()
   },
+  toggleChatExpanded: (on) => {
+    set((s) => {
+      const next = on ?? !s.chatExpanded
+      return next === s.chatExpanded ? {} : { chatExpanded: next }
+    })
+  },
   applyPreset: (preset) => {
     const width = window.innerWidth
-    if (preset === "agent") set({ agentVisible: true, sidebarVisible: false, agentWidth: Math.round(width * 0.62), focusChat: false, agentWidthBeforeFocus: null })
-    else if (preset === "code") set({ agentVisible: false, sidebarVisible: true, focusChat: false, agentWidthBeforeFocus: null })
-    else if (preset === "review") set({ agentVisible: true, sidebarVisible: true, activeView: "scm", agentWidth: 400, focusChat: false, agentWidthBeforeFocus: null })
-    else set({ agentVisible: true, sidebarVisible: true, agentWidth: DEFAULT_PROFILE.agentWidth, sidebarWidth: DEFAULT_PROFILE.sidebarWidth, focusChat: false, agentWidthBeforeFocus: null })
+    if (preset === "agent") set({ agentVisible: true, sidebarVisible: false, agentWidth: Math.round(width * 0.62), focusChat: false, chatExpanded: false, agentWidthBeforeFocus: null })
+    else if (preset === "code") set({ agentVisible: false, sidebarVisible: true, focusChat: false, chatExpanded: false, agentWidthBeforeFocus: null })
+    else if (preset === "review") set({ agentVisible: true, sidebarVisible: true, activeView: "scm", agentWidth: 400, focusChat: false, chatExpanded: false, agentWidthBeforeFocus: null })
+    else set({ agentVisible: true, sidebarVisible: true, agentWidth: DEFAULT_PROFILE.agentWidth, sidebarWidth: DEFAULT_PROFILE.sidebarWidth, focusChat: false, chatExpanded: false, agentWidthBeforeFocus: null })
     get().fitToViewport()
   },
   resetLayout: () => {
     const defaults = MODE_DEFAULTS[get().mode]
-    set({ ...defaults, focusChat: false, agentWidthBeforeFocus: null, sizes: clampToViewport({ ...defaults, focusChat: false }) })
+    set({ ...defaults, focusChat: false, chatExpanded: false, agentWidthBeforeFocus: null, sizes: clampToViewport({ ...defaults, focusChat: false }) })
   },
   fitToViewport: () => set({ sizes: clampToViewport(get()) }),
 }))

@@ -60,8 +60,8 @@ const readLayout = (page: Page) => page.evaluate(async () => {
     agentVisible: s.agentVisible,
     panelMaximized: s.panelMaximized,
     focusChat: s.focusChat,
-  }
-})
+    chatExpanded: s.chatExpanded,
+  }})
 
 
 const width = (page: Page) =>
@@ -113,6 +113,86 @@ test("la barra lateral permanece montada en Diseñar, Equipo e Investigar y Cód
     await expect(page.locator(".activity-bar")).toBeVisible()
     await expect(page.getByRole("button", { name: "Código", exact: true })).toBeVisible()
   }
+})
+
+test("el tercer botón del título controla el contexto del modo y comparte su estado", async ({ page }) => {
+  await page.setViewportSize({ width: 1400, height: 900 })
+  await boot(page)
+  await prepare(page)
+
+  await page.getByRole("button", { name: "Investigar", exact: true }).click()
+  const inspector = page.getByRole("complementary", { name: "Contexto de investigación" })
+  const contextButton = page.getByRole("button", { name: "Contexto", exact: true })
+  await expect(inspector).toBeVisible()
+  await expect(contextButton).toHaveClass(/active/)
+
+  await contextButton.click()
+  await expect(inspector).toBeHidden()
+  await expect(page.getByRole("button", { name: "Mostrar contexto", exact: true })).toBeVisible()
+
+  await page.getByRole("button", { name: "Mostrar contexto", exact: true }).click()
+  await expect(inspector).toBeVisible()
+  await expect(contextButton).toHaveClass(/active/)
+
+  await page.getByRole("button", { name: "Equipo", exact: true }).click()
+  await expect(page.getByRole("button", { name: "Agente (Ctrl+Alt+B)", exact: true })).toHaveCount(0)
+  await expect(contextButton).toBeVisible()
+
+  await page.getByRole("button", { name: "Código", exact: true }).click()
+  await expect(page.getByRole("button", { name: "Agente (Ctrl+Alt+B)", exact: true })).toHaveCount(1)
+})
+
+test("ampliar el chat oculta laterales y panel sin cambiar la disposición guardada", async ({ page }) => {
+  await page.setViewportSize({ width: 1400, height: 900 })
+  await boot(page)
+  await prepare(page)
+  await page.getByRole("button", { name: "Investigar", exact: true }).click()
+  await page.evaluate(async () => {
+    const { useLayout } = await import(/* @vite-ignore */ "/src/state/layout.ts")
+    const { useStudio } = await import(/* @vite-ignore */ "/src/state/studio.ts")
+    useLayout.getState().showView("explorer", false)
+    useStudio.getState().setLayout("research", { sidebarCollapsed: false, inspectorCollapsed: false })
+    if (!useLayout.getState().panelVisible) useLayout.getState().showPanel("output")
+  })
+  expect(await readLayout(page)).toMatchObject({ mode: "research", sidebarVisible: true, chatExpanded: false })
+  await expect(page.locator(".side-bar-slot")).toBeVisible()
+  await expect(page.locator(".studio-research > .studio-sidebar")).toBeVisible()
+  await expect(page.getByRole("complementary", { name: "Contexto de investigación" })).toBeVisible()
+  await expect(page.locator(".studio-content > .panel-slot")).toBeVisible()
+  const storedBefore = await page.evaluate(() => ({
+    layout: JSON.parse(localStorage.getItem("guillecode:layout.v3") ?? "{}"),
+    studio: JSON.parse(localStorage.getItem("guillecode:studio.layouts") ?? "{}"),
+  }))
+
+  await page.getByRole("button", { name: "Ampliar chat", exact: true }).click()
+  await expect(page.locator(".side-bar-slot")).toHaveCount(0)
+  await expect(page.locator(".studio-research > .studio-sidebar")).toBeHidden()
+  await expect(page.getByRole("complementary", { name: "Contexto de investigación" })).toBeHidden()
+  await expect(page.locator(".studio-content > .panel-slot")).toHaveCount(0)
+  expect(await readLayout(page)).toMatchObject({ sidebarVisible: true, panelVisible: true, chatExpanded: true })
+  expect(await page.evaluate(() => ({
+    layout: JSON.parse(localStorage.getItem("guillecode:layout.v3") ?? "{}"),
+    studio: JSON.parse(localStorage.getItem("guillecode:studio.layouts") ?? "{}"),
+  }))).toEqual(storedBefore)
+
+  await page.getByRole("button", { name: "Restaurar", exact: true }).click()
+  await expect(page.locator(".side-bar-slot")).toBeVisible()
+  await expect(page.locator(".studio-research > .studio-sidebar")).toBeVisible()
+  await expect(page.getByRole("complementary", { name: "Contexto de investigación" })).toBeVisible()
+  await expect(page.locator(".studio-content > .panel-slot")).toBeVisible()
+  expect(await readLayout(page)).toMatchObject({ sidebarVisible: true, panelVisible: true, chatExpanded: false })
+})
+
+test("en una ventana angosta no queda un botón para mostrar el contexto oculto", async ({ page }) => {
+  await page.setViewportSize({ width: 760, height: 800 })
+  await boot(page)
+  await prepare(page)
+  await page.getByRole("button", { name: "Investigar", exact: true }).click()
+  await page.evaluate(async () => {
+    const { useStudio } = await import(/* @vite-ignore */ "/src/state/studio.ts")
+    useStudio.getState().setLayout("research", { inspectorCollapsed: true })
+  })
+  await expect(page.getByRole("button", { name: "Mostrar contexto", exact: true })).toBeHidden()
 })
 
 test("el chat en foco se puede redimensionar y vuelve a su ancho al salir", async ({ page }) => {
@@ -286,31 +366,31 @@ test("los presets de cada modo ajustan sus columnas y las superficies globales",
   await page.getByRole("button", { name: "Investigar", exact: true }).click()
   await page.evaluate(async () => {
     const { useStudio } = await import(/* @vite-ignore */ "/src/state/studio.ts")
-    useStudio.getState().setLayout("research", { sidebarCollapsed: false, inspectorCollapsed: false, chatExpanded: false })
+    useStudio.getState().setLayout("research", { sidebarCollapsed: false, inspectorCollapsed: false })
   })
   await applyStudioPreset(page, "research-sources")
   expect(await readLayout(page)).toMatchObject({ mode: "research", sidebarVisible: false, panelVisible: false })
-  expect((await readStudioLayouts(page)).research).toMatchObject({ sidebarCollapsed: true, inspectorCollapsed: false, chatExpanded: false })
+  expect((await readStudioLayouts(page)).research).toMatchObject({ sidebarCollapsed: true, inspectorCollapsed: false })
 
   await applyStudioPreset(page, "research-chat")
-  expect((await readStudioLayouts(page)).research).toMatchObject({ sidebarCollapsed: true, inspectorCollapsed: true, chatExpanded: true })
+  expect((await readStudioLayouts(page)).research).toMatchObject({ sidebarCollapsed: true, inspectorCollapsed: true })
 
   await page.getByRole("button", { name: "Equipo", exact: true }).click()
   await applyStudioPreset(page, "team-context")
-  expect((await readStudioLayouts(page)).team).toMatchObject({ sidebarCollapsed: true, inspectorCollapsed: false, chatExpanded: false })
+  expect((await readStudioLayouts(page)).team).toMatchObject({ sidebarCollapsed: true, inspectorCollapsed: false })
   await applyStudioPreset(page, "team-board")
-  expect((await readStudioLayouts(page)).team).toMatchObject({ sidebarCollapsed: true, inspectorCollapsed: true, chatExpanded: false })
+  expect((await readStudioLayouts(page)).team).toMatchObject({ sidebarCollapsed: true, inspectorCollapsed: true })
 
   await page.getByRole("button", { name: "Diseñar", exact: true }).click()
   await applyStudioPreset(page, "design-chat")
-  expect((await readStudioLayouts(page)).design).toMatchObject({ chatOpen: true, chatExpanded: false })
+  expect((await readStudioLayouts(page)).design).toMatchObject({ chatOpen: true })
   await applyStudioPreset(page, "design-canvas")
   expect((await readStudioLayouts(page)).design).toMatchObject({ chatOpen: false })
 
   // Los presets de un modo no tocan la disposición de los demás.
   const layouts = await readStudioLayouts(page)
   expect(layouts.team).toMatchObject({ inspectorCollapsed: true })
-  expect(layouts.research).toMatchObject({ chatExpanded: true })
+  expect(layouts.research).toMatchObject({ inspectorCollapsed: true })
 })
 
 test("restablecer la disposición vuelve a los valores del modo activo", async ({ page }) => {
@@ -323,7 +403,7 @@ test("restablecer la disposición vuelve a los valores del modo activo", async (
   await resetStudioLayout(page)
 
   expect(await readLayout(page)).toMatchObject({ mode: "team", sidebarVisible: true, panelVisible: false, agentVisible: true })
-  expect((await readStudioLayouts(page)).team).toMatchObject({ sidebarCollapsed: false, inspectorCollapsed: false, chatExpanded: false, chatOpen: false })
+  expect((await readStudioLayouts(page)).team).toMatchObject({ sidebarCollapsed: false, inspectorCollapsed: false, chatOpen: false })
 })
 
 test("el menú de presets muestra los del modo activo", async ({ page }) => {

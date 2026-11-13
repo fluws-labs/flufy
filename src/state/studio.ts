@@ -6,7 +6,7 @@ import { isStudioMode, STUDIO_MODES, type StudioMode } from "./studioModes"
 
 export type { StudioMode } from "./studioModes"
 
-export type StudioLayout = { sidebarCollapsed: boolean; inspectorCollapsed: boolean; chatExpanded: boolean; chatOpen: boolean }
+export type StudioLayout = { sidebarCollapsed: boolean; inspectorCollapsed: boolean; chatOpen: boolean }
 
 const saved = loadJson<unknown>("studio.mode", "research")
 const savedLayouts = loadJson<Partial<Record<StudioMode, Partial<StudioLayout>>>>("studio.layouts", {})
@@ -15,7 +15,6 @@ const compact = typeof window !== "undefined" && window.innerWidth < 900
 const layouts = Object.fromEntries(STUDIO_MODES.map(mode => [mode, {
   sidebarCollapsed: savedLayouts[mode]?.sidebarCollapsed ?? compact,
   inspectorCollapsed: savedLayouts[mode]?.inspectorCollapsed ?? false,
-  chatExpanded: savedLayouts[mode]?.chatExpanded ?? false,
   chatOpen: savedLayouts[mode]?.chatOpen ?? false,
 }])) as Record<StudioMode, StudioLayout>
 
@@ -40,6 +39,7 @@ export const useStudio = create<{
     saveJson("studio.mode", mode)
     set({ mode })
     useLayout.getState().setModeLayout(mode)
+    useLayout.getState().toggleChatExpanded(false)
   },
   setLayout: (mode, patch) => set(state => {
     const layouts = { ...state.layouts, [mode]: { ...state.layouts[mode], ...patch } }
@@ -52,18 +52,19 @@ export const useStudio = create<{
       layout.applyPreset(preset)
       return
     }
+    layout.toggleChatExpanded(false)
     if (layout.sidebarVisible) layout.toggleSidebar()
     if (layout.panelVisible) layout.togglePanel()
     if (layout.focusChat) layout.toggleFocusChat(false)
     const mode = get().mode
-    if (mode === "design") get().setLayout("design", { chatOpen: preset === "design-chat", chatExpanded: false })
-    else if (mode === "team") get().setLayout("team", { sidebarCollapsed: true, inspectorCollapsed: preset !== "team-context", chatExpanded: false })
-    else if (mode === "research") get().setLayout("research", { sidebarCollapsed: true, inspectorCollapsed: preset !== "research-sources", chatExpanded: preset === "research-chat" })
+    if (mode === "design") get().setLayout("design", { chatOpen: preset === "design-chat" })
+    else if (mode === "team") get().setLayout("team", { sidebarCollapsed: true, inspectorCollapsed: preset !== "team-context" })
+    else if (mode === "research") get().setLayout("research", { sidebarCollapsed: true, inspectorCollapsed: preset !== "research-sources" })
   },
   resetModeLayout: () => {
     const mode = get().mode
     const compact = window.innerWidth < 900
-    get().setLayout(mode, { sidebarCollapsed: compact, inspectorCollapsed: false, chatExpanded: false, chatOpen: false })
+    get().setLayout(mode, { sidebarCollapsed: compact, inspectorCollapsed: false, chatOpen: false })
     useLayout.getState().resetLayout()
   },
 }))

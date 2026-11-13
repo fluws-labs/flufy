@@ -7,6 +7,7 @@ import { pendingRequests, useAgent } from "../state/agent"
 import { useApprovals } from "../state/approvals"
 import { useProject } from "../state/project"
 import { useStudio } from "../state/studio"
+import { useLayout } from "../state/layout"
 import { teamAttention } from "./attention"
 import { memberSession } from "./session-index"
 import { newTeamChat, selectTeamChat, startTeams, teamCall, useTeams } from "../state/teams"
@@ -68,6 +69,7 @@ function TeamSpace({ chat, onBack, onCreate, creating, panel }: { chat: TeamChat
   const [actionPending, setActionPending] = useState(false)
   const layout = useStudio(s => s.layouts.team)
   const setLayout = useStudio(s => s.setLayout)
+  const chatExpanded = useLayout(s => s.chatExpanded)
   const run = chat.runs.at(-1)
   const team = run?.team ?? chat.team
   const lead = team.members.find(member => member.id === team.leadAgentId)
@@ -92,7 +94,7 @@ function TeamSpace({ chat, onBack, onCreate, creating, panel }: { chat: TeamChat
     try { await teamCall("team_runs_control", { action: "start_plan", runId: run.id }) }
     finally { setActionPending(false) }
   }
-  return <div className={`studio-columns studio-team team-space${layout.sidebarCollapsed ? " sidebar-collapsed" : ""}${layout.inspectorCollapsed ? " inspector-collapsed" : ""}${layout.chatExpanded ? " chat-expanded" : ""}`} aria-label={`Espacio de ${chat.title}`}>
+  return <div className={`studio-columns studio-team team-space${layout.sidebarCollapsed ? " sidebar-collapsed" : ""}${layout.inspectorCollapsed ? " inspector-collapsed" : ""}${chatExpanded ? " chat-expanded" : ""}`} aria-label={`Espacio de ${chat.title}`}>
     <aside className="studio-sidebar" aria-label="Equipo y agentes">
       <button type="button" className="team-space-back" onClick={onBack}><Icon name="arrow-left" /> Todos los equipos</button>
       <section className="studio-side-section"><div className="studio-side-head"><h3>Tablero</h3><button type="button" className="studio-collapse" title="Ocultar lateral" aria-label="Ocultar lateral" onClick={() => setLayout("team", { sidebarCollapsed: true })}><Icon name="chevron-left" /></button></div><nav aria-label="Navegación del equipo">{nav.map(([id, icon, label]) => <button type="button" className={`studio-nav-item${view === id ? " active" : ""}`} aria-current={view === id ? "page" : undefined} key={id} onClick={() => { setAgentSession(null); setView(id) }}><Icon name={icon} /> {label}{id === "Alertas" && alertCount > 0 && <span className="team-nav-badge">{alertCount}</span>}</button>)}</nav></section>
@@ -106,7 +108,7 @@ function TeamSpace({ chat, onBack, onCreate, creating, panel }: { chat: TeamChat
     </aside>
     <main className="studio-content">
       <StudioCenterMain>
-        <header className="studio-page-heading"><div><h1>{({ Tablero: "Tablero del equipo", Alertas: "Alertas", Plan: "Plan detallado", Agentes: "Agentes del equipo", Navegador: "Navegador interno", Chat: "Chat del equipo", Entrega: "Entrega y evidencias", Ahora: "Actividad del equipo", Configuración: "Configuración del equipo" } as Record<string, string>)[view] ?? view}</h1><p>{view === "Alertas" ? "Lo que necesita tu atención, en texto claro." : "El Lead reparte el trabajo y revisa las evidencias."}</p></div><div className="studio-heading-actions">{layout.inspectorCollapsed && <button type="button" className="studio-collapse" title="Mostrar contexto" aria-label="Mostrar contexto" onClick={() => setLayout("team", { inspectorCollapsed: false })}><Icon name="layout-sidebar-right" /></button>}{layout.sidebarCollapsed && <button type="button" className="studio-collapse" title="Mostrar lateral" aria-label="Mostrar lateral" onClick={() => setLayout("team", { sidebarCollapsed: false })}><Icon name="chevron-right" /></button>}<button type="button" className={`studio-chat-expand${layout.chatExpanded ? " is-expanded" : ""}`} aria-pressed={layout.chatExpanded} title={layout.chatExpanded ? "Restaurar el chat" : "Ampliar el chat"} onClick={() => setLayout("team", { chatExpanded: !layout.chatExpanded })}><Icon name={layout.chatExpanded ? "screen-normal" : "screen-full"} /><span>{layout.chatExpanded ? "Restaurar" : "Ampliar chat"}</span></button><button type="button" className="team-space-mobile-back" onClick={onBack}><Icon name="arrow-left" /> Equipos</button></div></header>
+        <header className="studio-page-heading"><div><h1>{({ Tablero: "Tablero del equipo", Alertas: "Alertas", Plan: "Plan detallado", Agentes: "Agentes del equipo", Navegador: "Navegador interno", Chat: "Chat del equipo", Entrega: "Entrega y evidencias", Ahora: "Actividad del equipo", Configuración: "Configuración del equipo" } as Record<string, string>)[view] ?? view}</h1><p>{view === "Alertas" ? "Lo que necesita tu atención, en texto claro." : "El Lead reparte el trabajo y revisa las evidencias."}</p></div><div className="studio-heading-actions">{layout.inspectorCollapsed && <button type="button" className="studio-collapse studio-show-context" title="Mostrar contexto" aria-label="Mostrar contexto" onClick={() => setLayout("team", { inspectorCollapsed: false })}><Icon name="layout-sidebar-right" /></button>}{layout.sidebarCollapsed && <button type="button" className="studio-collapse" title="Mostrar lateral" aria-label="Mostrar lateral" onClick={() => setLayout("team", { sidebarCollapsed: false })}><Icon name="chevron-right" /></button>}<button type="button" className={`studio-chat-expand${chatExpanded ? " is-expanded" : ""}`} aria-pressed={chatExpanded} title={chatExpanded ? "Restaurar el chat" : "Ampliar el chat"} onClick={() => useLayout.getState().toggleChatExpanded()}><Icon name={chatExpanded ? "screen-normal" : "screen-full"} /><span>{chatExpanded ? "Restaurar" : "Ampliar chat"}</span></button><button type="button" className="team-space-mobile-back" onClick={onBack}><Icon name="arrow-left" /> Equipos</button></div></header>
       <div className="team-sprint"><div><strong>{chat.title}</strong><small>{run ? `${verified} de ${run.tasks.length} tareas verificadas` : "Listo para recibir tu objetivo"}</small></div><progress className="studio-progress team-progress" max={Math.max(run?.tasks.length ?? 0, 1)} value={verified} /><div><strong>{lead?.name ?? "Lead"}</strong><small>{run ? runStatusLabel(run.status) : "Coordinación del equipo"}</small></div><span className={`studio-member-dot${running ? " is-active" : ""}`} /></div>
         <TeamChat chatId={chat.id} workspace currentView={view} onViewChange={setView} agentSession={agentSession} onAgentSession={setAgentSession} />
       </StudioCenterMain>

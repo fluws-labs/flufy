@@ -122,7 +122,7 @@ export function registerBuiltinCommands(): void {
     },
     { id: "workbench.toggleSidebar", title: "Mostrar/ocultar barra lateral", category: "Ver", icon: "layout-sidebar-left", keys: ["ctrl+b"], global: true, run: () => useLayout.getState().toggleSidebar() },
     { id: "workbench.togglePanel", title: "Mostrar/ocultar panel inferior", category: "Ver", icon: "layout-panel", keys: ["ctrl+j"], global: true, run: () => useLayout.getState().togglePanel() },
-    { id: "workbench.toggleAgent", title: "Mostrar/ocultar panel del agente", category: "Ver", icon: "layout-sidebar-right", keys: ["ctrl+alt+b"], global: true, run: () => useLayout.getState().toggleAgent() },
+    { id: "workbench.toggleAgent", title: "Mostrar/ocultar panel del agente", category: "Ver", icon: "layout-sidebar-right", keys: ["ctrl+alt+b"], global: true, when: () => !useProject.getState().root || useStudio.getState().mode === "code", run: () => useLayout.getState().toggleAgent() },
     { id: "workbench.zoomIn", title: "Aumentar zoom", category: "Ver", icon: "zoom-in", keys: ["ctrl+=", "ctrl+shift+="], global: true, run: () => useZoom.getState().zoomIn() },
     { id: "workbench.zoomOut", title: "Reducir zoom", category: "Ver", icon: "zoom-out", keys: ["ctrl+-"], global: true, run: () => useZoom.getState().zoomOut() },
     { id: "workbench.zoomReset", title: "Restablecer zoom", category: "Ver", icon: "screen-normal", keys: ["ctrl+0"], global: true, run: () => useZoom.getState().reset() },

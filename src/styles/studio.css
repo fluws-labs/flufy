@@ -263,7 +263,7 @@
 .studio-columns.chat-expanded > .studio-sidebar, .studio-columns.chat-expanded > .studio-inspector { display: none; }
 .studio-heading-actions .studio-chat-expand { margin-left: 0; }
 @media (max-width: 1150px) { .studio-columns.sidebar-collapsed { grid-template-columns: minmax(0, 1fr) 210px; } }
-@media (max-width: 900px) { .studio-columns.sidebar-collapsed { grid-template-columns: minmax(0, 1fr); } .studio-heading-actions .studio-chat-expand span { display: none; } }
+@media (max-width: 900px) { .studio-columns.sidebar-collapsed { grid-template-columns: minmax(0, 1fr); } .studio-heading-actions .studio-chat-expand span { display: none; } .studio-heading-actions .studio-show-context { display: none; } }
 @media (max-width: 650px) { .studio-columns.sidebar-collapsed { grid-template-columns: minmax(0, 1fr); } }
 
 /* Disenar: el chat ampliado no desmonta el canvas. */

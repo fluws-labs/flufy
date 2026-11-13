@@ -164,6 +164,8 @@ export function Workbench() {
   const agentVisible = useLayout((s) => s.agentVisible)
   const agentWidth = useLayout((s) => s.sizes.agentWidth)
   const focusChat = useLayout((s) => s.focusChat)
+  const chatExpanded = useLayout(s => s.chatExpanded)
+  const focusStudioChat = chatExpanded && (studioMode === "research" || studioMode === "team")
   const start = useRef(0)
 
   useEffect(() => {
@@ -201,7 +203,7 @@ export function Workbench() {
       <TitleBar />
       <div className={`workbench-main${focusChat ? " focus-chat" : ""}`}>
         <ActivityBar />
-        {sidebarVisible && (
+        {sidebarVisible && !focusStudioChat && (
           <>
             <div className="side-bar-slot" style={{ width: sidebarWidth }}>
               <SideBar />
