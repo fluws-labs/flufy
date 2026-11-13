@@ -671,7 +671,7 @@ export function StatusBar() {
           title="Cambiar modelo"
           onClick={async () => {
             const item = await pickOne(
-              models
+              [...models
                 .map((m) => {
                   const key = modelKey(m)
                   return {
@@ -684,9 +684,14 @@ export function StatusBar() {
                   }
                 })
                 .sort((a, b) => Number(b.favorite) - Number(a.favorite)),
+                { id: "localModels", label: "¿Qué puedo correr?", description: "Modelos locales: descargar y usar", icon: "server", group: "Modelos locales" }],
               { title: "Modelo del agente", favorites: true },
             )
             if (item) {
+              if (item.id === "localModels") {
+                openEditor({ kind: "localModels" })
+                return
+              }
               const [providerID, ...rest] = item.id.split("/")
               useAgent.setState({ model: { providerID, modelID: rest.join("/") } })
             }

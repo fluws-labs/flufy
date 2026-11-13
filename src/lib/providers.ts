@@ -1,5 +1,5 @@
 // OpenCode is the engine; its paid providers are optional accounts.
-export const SUPPORTED_PROVIDERS = ["openai", "opencode", "opencode-go", "anthropic", "google", "openrouter"] as const
+export const SUPPORTED_PROVIDERS = ["openai", "opencode", "opencode-go", "anthropic", "google", "openrouter", "ollama"] as const
 export type SupportedProvider = (typeof SUPPORTED_PROVIDERS)[number]
 
 export const API_KEY_PROVIDERS: ReadonlyArray<{ id: SupportedProvider; name: string; hint: string; url: string }> = [
@@ -16,6 +16,7 @@ export type ModelCost = { input?: number; output?: number }
 export const ZEN = "opencode"
 
 export function hasAccount(p: ProviderAccount): boolean {
+  if (p.id === "ollama") return true
   return SUPPORTED_PROVIDERS.some((id) => id === p.id) &&
     p.options?.apiKey !== "public" &&
     (p.source === "api" || p.source === "env" || !!p.options?.apiKey)

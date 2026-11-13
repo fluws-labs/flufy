@@ -130,6 +130,26 @@ for (const image of [true, false]) {
   })
 }
 
+test("bubble keeps the desktop agent of the source conversation from silencing the screen", async ({ page }) => {
+  // Un chat movido a la burbuja conserva el agente con el que se venía usando
+  // (por ejemplo «build»). La burbuja debe seguir siendo el chat de la PC: si no,
+  // no recibe la escena ni las herramientas y contesta que no puede ver la pantalla.
+  const { prompts } = await setup(page)
+  await expect(page.locator("textarea").first()).toBeEnabled()
+  await page.evaluate(async () => {
+    const modulePath = "/src/state/agent.ts"
+    const agent = await import(modulePath)
+    agent.setAgentName("build", "s-bubble")
+  })
+  await page.locator("textarea").first().fill("¿qué estamos mirando?")
+  await page.locator("textarea").first().press("Enter")
+  await expect.poll(() => prompts.length).toBe(1)
+  expect(prompts[0].agent).toBe("escritorio")
+  const parts = JSON.stringify(prompts[0].parts)
+  expect(parts).toContain("scene-1")
+  expect(parts).not.toContain("[FLUFY_PREVIEW_PREFERENCE]")
+})
+
 test("bubble shows partial assistant text before the turn ends", async ({ page }) => {
   const { now } = await setup(page)
   // REST must agree with the streamed busy event; otherwise a background poll
