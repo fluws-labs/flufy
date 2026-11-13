@@ -1,5 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { Icon } from "../components/ui"
+import { useLayout } from "../state/layout"
+import { StudioCenterMain } from "./StudioCenterMain"
+import { WorkspacePanel } from "./WorkspacePanel"
 import { SessionPane } from "../agent/AgentPanel"
 import { PreviewPane } from "../agent/PreviewHost"
 import { PreviewConversation } from "../agent/PreviewConversation"
@@ -126,7 +129,7 @@ function ResearchWelcome() {
   </div>
 }
 
-function ResearchWorkspace() {
+function ResearchWorkspace({ panel }: { panel?: ReactNode }) {
   const activeId = useAgent(s => s.activeSessionId)
   const sessions = useAgent(s => s.allSessions)
   const root = useProject(s => s.root)
@@ -171,6 +174,7 @@ function ResearchWorkspace() {
       <MemoryCards />
     </aside>
     <main className="studio-content">
+      <StudioCenterMain>
       <header className="studio-page-heading research-heading">
         {layout.sidebarCollapsed && <button type="button" className="studio-collapse" title="Mostrar lateral" aria-label="Mostrar lateral" onClick={() => setLayout("research", { sidebarCollapsed: false })}><Icon name="chevron-right" /></button>}
         <div className="research-heading-icon"><Icon name="search" /></div>
@@ -182,12 +186,14 @@ function ResearchWorkspace() {
         </div>
       </header>
       <SessionPane sessionId={activeId} variant="panel" emptyState={<ResearchWelcome />} preferences={continuousPill} onPreviewOpen={() => useStudio.getState().setMode("design")} />
+      </StudioCenterMain>
+      {panel}
     </main>
     <ResearchSidebar leadChat={leadChat} continuousOn={continuousOn} onToggleContinuous={toggleContinuous} onImplement={implement} implementing={implementing} onCollapse={() => setLayout("research", { inspectorCollapsed: true })} />
   </div>
 }
 
-function DesignWorkspace() {
+function DesignWorkspace({ panel }: { panel?: ReactNode }) {
   const root = useProject(s => s.root)
   const activeId = useAgent(s => s.activeSessionId)
   const taskId = usePreviewTaskId(activeId)
@@ -200,7 +206,12 @@ function DesignWorkspace() {
   const expanded = chatOpen && layout.chatExpanded
   return <main className="studio-design"><header className="studio-design-toolbar"><div><Icon name="paintcan" /><strong>Diseño del proyecto</strong><span>/ Editor visual</span></div><div><button type="button" className="btn btn-sm" onClick={() => setLibrary(true)}><Icon name="library" /> Diseños guardados</button><button type="button" className="btn btn-sm" aria-pressed={chatOpen} disabled={!identity} onClick={() => setLayout("design", { chatOpen: !chatOpen })}><Icon name="comment-discussion" /> Chat del diseño</button>{chatOpen && <button type="button" className="btn btn-sm" aria-pressed={layout.chatExpanded} onClick={() => setLayout("design", { chatExpanded: !layout.chatExpanded })}><Icon name={layout.chatExpanded ? "screen-normal" : "screen-full"} /> {layout.chatExpanded ? "Restaurar" : "Ampliar chat"}</button>}{expanded && <span className="studio-chip">Ampliado</span>}</div></header>
     <div className={`studio-design-body${chatOpen && identity ? " with-conversation" : ""}${expanded ? " chat-expanded" : ""}`}>
-      {identity ? <PreviewPane key={previewIdentityKey(identity)} identity={identity} onClose={() => useStudio.getState().setMode("research")} onContextChange={setContext} /> : <div className="studio-empty"><Icon name="paintcan" /><h1>Tu próxima idea empieza acá</h1><p>Abrí un diseño guardado o iniciá una conversación para crear y ajustar sus pantallas.</p><button type="button" className="btn btn-primary" onClick={() => setLibrary(true)}>Abrir diseños guardados</button><button type="button" className="btn" onClick={() => useStudio.getState().setMode("research")}>Ir a la conversación</button></div>}
+      <div className="studio-design-canvas">
+        <StudioCenterMain>
+          {identity ? <PreviewPane key={previewIdentityKey(identity)} identity={identity} onClose={() => useStudio.getState().setMode("research")} onContextChange={setContext} /> : <div className="studio-empty"><Icon name="paintcan" /><h1>Tu próxima idea empieza acá</h1><p>Abrí un diseño guardado o iniciá una conversación para crear y ajustar sus pantallas.</p><button type="button" className="btn btn-primary" onClick={() => setLibrary(true)}>Abrir diseños guardados</button><button type="button" className="btn" onClick={() => useStudio.getState().setMode("research")}>Ir a la conversación</button></div>}
+        </StudioCenterMain>
+        {panel}
+      </div>
       {chatOpen && identity && <PreviewConversation key={previewIdentityKey(identity)} identity={identity} context={context} expanded={layout.chatExpanded} />}
     </div>
     {library && root && <PreviewLibrary projectRoot={root} onClose={() => setLibrary(false)} onOpen={design => { rememberPreviewTask(root, design.identity.sessionId, design.identity.taskId); selectSession(design.identity.sessionId); setContext({ saving: true }); setLibrary(false) }} />}
@@ -209,8 +220,8 @@ function DesignWorkspace() {
 
 export function StudioWorkspace({ mode }: { mode: Exclude<StudioMode, "code"> }) {
   const root = useProject(s => s.root)
+  const panelVisible = useLayout(s => s.panelVisible)
   const [visited, setVisited] = useState([mode])
   if (!visited.includes(mode)) setVisited([...visited, mode])
   useEffect(() => { if (root) void loadMemory(root) }, [root])
-  return <div className={`studio-workspace mode-${mode}`}>{visited.map(view => <div className="studio-mode-page" key={view} hidden={view !== mode}>{view === "design" ? <DesignWorkspace /> : view === "team" ? <TeamWorkspace /> : <ResearchWorkspace />}</div>)}</div>
-}
+  return <div className={`studio-workspace mode-${mode}`}>{visited.map(view => <div className="studio-mode-page" key={view} hidden={view !== mode}>{view === "design" ? <DesignWorkspace panel={view === mode && panelVisible ? <WorkspacePanel /> : null} /> : view === "team" ? <TeamWorkspace panel={view === mode && panelVisible ? <WorkspacePanel /> : null} /> : <ResearchWorkspace panel={view === mode && panelVisible ? <WorkspacePanel /> : null} />}</div>)}</div>}

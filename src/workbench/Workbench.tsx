@@ -219,7 +219,7 @@ export function Workbench() {
           </>
         )}
         {((root && studioMode !== "code") || !focusChat) && (
-          <WorkspaceCenter hasProject={!!root}>
+          <WorkspaceCenter hasProject={!!root} showPanel={studioMode === "code"}>
             {root ? studioMode !== "code" ? <StudioWorkspace mode={studioMode} /> : <EditorArea /> : <NoProject />}
           </WorkspaceCenter>
         )}

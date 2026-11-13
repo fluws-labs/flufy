@@ -75,7 +75,7 @@ window.__vite_plugin_react_preamble_installed__ = true;
     w.__studioDesign = { identity: { projectRoot: project, sessionId, taskId, designId: "design" }, choice: "create", status: "draft", currentRevisionId: "r1", approvedRevisionId: null, revisions: [{ id: "r1", parentId: null, createdAt: 1, document: toNativeDocument(doc), ...renderPreview(doc), assets: [], notes: "QA" }], approvals: [] }
     function Harness() {
       const mode = useStudio(s => s.mode)
-      return h("div", { className: "workbench studio-workbench" }, h(TitleBar), h("div", { className: "workbench-main" }, mode === "code" && h("aside", { className: "sidebar", style: { width: 240 } }, h(ExplorerView)), h(WorkspaceCenter, { hasProject: true }, mode === "code" ? h(EditorArea) : h(StudioWorkspace, { mode }))))
+      return h("div", { className: "workbench studio-workbench" }, h(TitleBar), h("div", { className: "workbench-main" }, mode === "code" && h("aside", { className: "sidebar", style: { width: 240 } }, h(ExplorerView)), h(WorkspaceCenter, { hasProject: true, showPanel: mode === "code" }, mode === "code" ? h(EditorArea) : h(StudioWorkspace, { mode }))))
     }
     createRoot(document.getElementById("root")).render(h(Harness))
   })
@@ -147,17 +147,26 @@ test("changing spaces preserves terminal instances and output; the shared panel 
       return current === w.firstInstance && current.host.isConnected && current.term.buffer.active.getLine(0).translateToString(true) === "still running"
     })).toBe(true)
     const before = (await page.locator(".panel-slot").boundingBox())!.height
-    const sash = (await page.locator(".workspace-center > .sash-horizontal").boundingBox())!
+    if (label === "Código") await expect(page.locator(".workspace-center > .panel-slot")).toHaveCount(1)
+    else if (label === "Diseñar") await expect(page.locator(".studio-design-canvas > .panel-slot")).toHaveCount(1)
+    else await expect(page.locator(".studio-team-hub > .panel-slot, .studio-content > .panel-slot")).toHaveCount(1)
+    await expect(page.locator(".studio-sidebar .panel-slot, .studio-inspector .panel-slot")).toHaveCount(0)
+    const sash = (await page.locator(".sash-horizontal").boundingBox())!
     await page.mouse.move(sash.x + sash.width / 2, sash.y + sash.height / 2)
     await page.mouse.down()
     await page.mouse.move(sash.x + sash.width / 2, sash.y + sash.height / 2 - 25, { steps: 3 })
     await page.mouse.up()
     await expect.poll(async () => (await page.locator(".panel-slot").boundingBox())!.height).toBeGreaterThan(before + 20)
     await page.getByRole("button", { name: "Maximizar panel", exact: true }).click()
-    await expect(page.locator(".workspace-content")).toBeHidden()
+    if (label === "Código") {
+      await expect(page.locator(".workspace-content")).toBeHidden()
+    } else {
+      await expect(page.locator(".studio-center-main:visible")).toHaveCount(0)
+    }
     await expect(page.locator(".xterm-screen")).toBeVisible()
     await page.getByRole("button", { name: "Restaurar tamaño", exact: true }).click()
-    await expect(page.locator(".workspace-content")).toBeVisible()
+    if (label === "Código") await expect(page.locator(".workspace-content")).toBeVisible()
+    else await expect(page.locator(".studio-center-main:visible")).toHaveCount(1)
     await page.evaluate(() => (window as any).commands.executeCommand("output.show"))
     await expect(page.locator(".panel .output")).toBeVisible()
     await page.locator(".panel-tabs").getByRole("button", { name: "Terminal", exact: true }).click()
