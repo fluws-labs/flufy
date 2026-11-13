@@ -57,9 +57,10 @@ import { modelKey } from "../lib/opencode"
 import { formatUsd, percent } from "../lib/format"
 import { clockTime } from "../lib/time"
 import { Icon, IconButton } from "../components/ui"
-import { openMenuAt } from "../components/ContextMenu"
+import { openMenuAt, type MenuItem } from "../components/ContextMenu"
 import { Logo } from "../components/Logo"
 import { UpdateButton } from "../components/Updates"
+import { MODE_PRESETS } from "../state/modePresets"
 import { useStudio, type StudioMode } from "../state/studio"
 
 const VIEWS: Array<{ id: ViewId; icon: string; title: string; keys: string }> = [
@@ -155,20 +156,24 @@ export function TitleBar() {
         : []),
     ])
 
-  const layoutMenu = (el: HTMLElement) =>
-    openMenuAt(el, [
-      { label: "Equilibrado: código + agente", icon: "layout", run: () => useLayout.getState().applyPreset("balanced") },
-      { label: "Foco en el agente", icon: "hubot", run: () => useLayout.getState().applyPreset("agent") },
-      { label: "Foco en el código", icon: "code", run: () => useLayout.getState().applyPreset("code") },
-      { label: "Revisión (git + agente)", icon: "diff-multiple", run: () => useLayout.getState().applyPreset("review") },
-      { separator: true },
-      {
+  const layoutMenu = (el: HTMLElement) => {
+    const items: MenuItem[] = MODE_PRESETS[mode].map((preset) => ({
+      label: preset.label,
+      icon: preset.icon,
+      run: () => useStudio.getState().applyPreset(preset.id),
+    }))
+    items.push({ separator: true })
+    if (mode === "code") {
+      items.push({
         label: focusChat ? "Salir del foco en el chat" : "Foco en el chat (ocultar editor)",
         icon: focusChat ? "screen-normal" : "screen-full",
         keys: "ctrl+alt+m",
         run: () => useLayout.getState().toggleFocusChat(),
-      },
-    ])
+      })
+    }
+    items.push({ label: "Restablecer disposición", icon: "discard", run: () => useStudio.getState().resetModeLayout() })
+    openMenuAt(el, items)
+  }
 
   return (
     <header className="title-bar">

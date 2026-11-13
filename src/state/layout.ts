@@ -44,6 +44,7 @@ type LayoutState = LayoutData & {
   togglePanelMaximized: () => void
   toggleFocusChat: (on?: boolean) => void
   applyPreset: (preset: "balanced" | "agent" | "code" | "review") => void
+  resetLayout: () => void
   fitToViewport: () => void
 }
 
@@ -282,6 +283,10 @@ export const useLayout = create<LayoutState>((set, get) => ({
     else if (preset === "review") set({ agentVisible: true, sidebarVisible: true, activeView: "scm", agentWidth: 400, focusChat: false, agentWidthBeforeFocus: null })
     else set({ agentVisible: true, sidebarVisible: true, agentWidth: DEFAULT_PROFILE.agentWidth, sidebarWidth: DEFAULT_PROFILE.sidebarWidth, focusChat: false, agentWidthBeforeFocus: null })
     get().fitToViewport()
+  },
+  resetLayout: () => {
+    const defaults = MODE_DEFAULTS[get().mode]
+    set({ ...defaults, focusChat: false, agentWidthBeforeFocus: null, sizes: clampToViewport({ ...defaults, focusChat: false }) })
   },
   fitToViewport: () => set({ sizes: clampToViewport(get()) }),
 }))

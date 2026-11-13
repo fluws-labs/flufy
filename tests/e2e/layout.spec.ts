@@ -67,6 +67,21 @@ const readLayout = (page: Page) => page.evaluate(async () => {
 const width = (page: Page) =>
   page.evaluate(async () => (await import(/* @vite-ignore */ "/src/state/layout.ts")).useLayout.getState().agentWidth)
 
+const readStudioLayouts = (page: Page) => page.evaluate(async () => {
+  const { useStudio } = await import(/* @vite-ignore */ "/src/state/studio.ts")
+  return useStudio.getState().layouts
+})
+
+const applyStudioPreset = (page: Page, preset: string) => page.evaluate(async (preset) => {
+  const { useStudio } = await import(/* @vite-ignore */ "/src/state/studio.ts")
+  useStudio.getState().applyPreset(preset as never)
+}, preset)
+
+const resetStudioLayout = (page: Page) => page.evaluate(async () => {
+  const { useStudio } = await import(/* @vite-ignore */ "/src/state/studio.ts")
+  useStudio.getState().resetModeLayout()
+})
+
 test("la barra lateral permanece montada en Diseñar, Equipo e Investigar y Código está disponible", async ({ page }) => {
   await boot(page)
   await expect(page.getByRole("button", { name: "Continuar con Flufy" })).toBeVisible()
@@ -261,6 +276,73 @@ test("los presets solo cambian el modo activo", async ({ page }) => {
 
   await page.getByRole("button", { name: "Diseñar", exact: true }).click()
   expect(await readLayout(page)).toMatchObject({ mode: "design", sidebarVisible: true, agentVisible: true })
+})
+
+test("los presets de cada modo ajustan sus columnas y las superficies globales", async ({ page }) => {
+  await page.setViewportSize({ width: 1400, height: 900 })
+  await boot(page)
+  await prepare(page)
+
+  await page.getByRole("button", { name: "Investigar", exact: true }).click()
+  await page.evaluate(async () => {
+    const { useStudio } = await import(/* @vite-ignore */ "/src/state/studio.ts")
+    useStudio.getState().setLayout("research", { sidebarCollapsed: false, inspectorCollapsed: false, chatExpanded: false })
+  })
+  await applyStudioPreset(page, "research-sources")
+  expect(await readLayout(page)).toMatchObject({ mode: "research", sidebarVisible: false, panelVisible: false })
+  expect((await readStudioLayouts(page)).research).toMatchObject({ sidebarCollapsed: true, inspectorCollapsed: false, chatExpanded: false })
+
+  await applyStudioPreset(page, "research-chat")
+  expect((await readStudioLayouts(page)).research).toMatchObject({ sidebarCollapsed: true, inspectorCollapsed: true, chatExpanded: true })
+
+  await page.getByRole("button", { name: "Equipo", exact: true }).click()
+  await applyStudioPreset(page, "team-context")
+  expect((await readStudioLayouts(page)).team).toMatchObject({ sidebarCollapsed: true, inspectorCollapsed: false, chatExpanded: false })
+  await applyStudioPreset(page, "team-board")
+  expect((await readStudioLayouts(page)).team).toMatchObject({ sidebarCollapsed: true, inspectorCollapsed: true, chatExpanded: false })
+
+  await page.getByRole("button", { name: "Diseñar", exact: true }).click()
+  await applyStudioPreset(page, "design-chat")
+  expect((await readStudioLayouts(page)).design).toMatchObject({ chatOpen: true, chatExpanded: false })
+  await applyStudioPreset(page, "design-canvas")
+  expect((await readStudioLayouts(page)).design).toMatchObject({ chatOpen: false })
+
+  // Los presets de un modo no tocan la disposición de los demás.
+  const layouts = await readStudioLayouts(page)
+  expect(layouts.team).toMatchObject({ inspectorCollapsed: true })
+  expect(layouts.research).toMatchObject({ chatExpanded: true })
+})
+
+test("restablecer la disposición vuelve a los valores del modo activo", async ({ page }) => {
+  await page.setViewportSize({ width: 1400, height: 900 })
+  await boot(page)
+  await prepare(page)
+
+  await page.getByRole("button", { name: "Equipo", exact: true }).click()
+  await applyStudioPreset(page, "team-context")
+  await resetStudioLayout(page)
+
+  expect(await readLayout(page)).toMatchObject({ mode: "team", sidebarVisible: true, panelVisible: false, agentVisible: true })
+  expect((await readStudioLayouts(page)).team).toMatchObject({ sidebarCollapsed: false, inspectorCollapsed: false, chatExpanded: false, chatOpen: false })
+})
+
+test("el menú de presets muestra los del modo activo", async ({ page }) => {
+  await page.setViewportSize({ width: 1400, height: 900 })
+  await boot(page)
+  await prepare(page)
+
+  await page.getByRole("button", { name: "Investigar", exact: true }).click()
+  await page.getByTitle("Presets de layout").click()
+  const menu = page.locator(".context-menu")
+  await expect(menu.getByRole("button", { name: "Chat + fuentes" })).toBeVisible()
+  await expect(menu.getByRole("button", { name: "Solo conversación" })).toBeVisible()
+  await expect(menu.getByRole("button", { name: "Restablecer disposición" })).toBeVisible()
+  await expect(menu.getByRole("button", { name: "Foco en el agente" })).toHaveCount(0)
+  await page.keyboard.press("Escape")
+
+  await page.getByRole("button", { name: "Código", exact: true }).click()
+  await page.getByTitle("Presets de layout").click()
+  await expect(page.locator(".context-menu").getByRole("button", { name: "Foco en el agente" })).toBeVisible()
 })
 
 test("migra layout.v2 a cada modo sin perder la disposición existente", async ({ page }) => {

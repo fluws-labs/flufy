@@ -1,5 +1,6 @@
 import { registerCommands, type Command } from "./registry"
 import { useLayout } from "../state/layout"
+import { useStudio } from "../state/studio"
 import { openMemory } from "../state/memory"
 import { newTeamChat } from "../state/teams"
 import { openFallbackModels } from "../state/fallback"
@@ -146,10 +147,10 @@ export function registerBuiltinCommands(): void {
     { id: "agent.newTeam", title: "Nuevo chat de equipo", category: "Agente", icon: "organization", run: () => void newTeamChat() },
     { id: "agent.fallbackModels", title: "Modelos Fallback", category: "Agente", icon: "list-ordered", run: () => void openFallbackModels() },
     { id: "workbench.view.prs", title: "Pull requests", category: "Ver", icon: "git-pull-request", run: () => useLayout.getState().showView("prs", false) },
-    { id: "layout.balanced", title: "Layout equilibrado (código + agente)", category: "Layout", icon: "layout", run: () => useLayout.getState().applyPreset("balanced") },
-    { id: "layout.agent", title: "Layout con foco en el agente", category: "Layout", icon: "hubot", run: () => useLayout.getState().applyPreset("agent") },
-    { id: "layout.code", title: "Layout con foco en el código", category: "Layout", icon: "code", run: () => useLayout.getState().applyPreset("code") },
-    { id: "layout.review", title: "Layout de revisión", category: "Layout", icon: "diff-multiple", run: () => useLayout.getState().applyPreset("review") },
+    { id: "layout.balanced", title: "Layout equilibrado (código + agente)", category: "Layout", icon: "layout", when: () => useStudio.getState().mode === "code", run: () => useLayout.getState().applyPreset("balanced") },
+    { id: "layout.agent", title: "Layout con foco en el agente", category: "Layout", icon: "hubot", when: () => useStudio.getState().mode === "code", run: () => useLayout.getState().applyPreset("agent") },
+    { id: "layout.code", title: "Layout con foco en el código", category: "Layout", icon: "code", when: () => useStudio.getState().mode === "code", run: () => useLayout.getState().applyPreset("code") },
+    { id: "layout.review", title: "Layout de revisión", category: "Layout", icon: "diff-multiple", when: () => useStudio.getState().mode === "code", run: () => useLayout.getState().applyPreset("review") },
     {
       id: "layout.focusChat",
       title: "Foco en el chat (ocultar editor)",
