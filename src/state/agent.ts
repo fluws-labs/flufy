@@ -73,6 +73,7 @@ export type CommandInfo = { name: string; description?: string; source?: string;
 export type ContextItem =
   | { kind: "file"; path: string }
   | { kind: "selection"; path: string; startLine: number; endLine: number; text: string }
+  | { kind: "terminal"; terminalId: string; title: string; cwd: string; text: string }
   | { kind: "image"; mime: string; url: string; filename: string }
 
 export type SessionView = { messages: ChatMessage[]; loading: boolean; hasMore: boolean; error: string | null }
@@ -1134,12 +1135,29 @@ export function addContext(item: ContextItem) {
       if (c.kind === "selection" && item.kind === "selection")
         return c.path === item.path && c.startLine === item.startLine && c.endLine === item.endLine
       if (c.kind === "image" && item.kind === "image") return c.url === item.url
+      if (c.kind === "terminal" && item.kind === "terminal")
+        return c.terminalId === item.terminalId && c.cwd === item.cwd && c.text === item.text
       return false
     })
     const next = exists ? context : [...context, item]
     patchSessionRuntime(key, { context: next })
     return { context: next }
   })
+}
+
+export function addTerminalContext(item: Extract<ContextItem, { kind: "terminal" }>, consult = false) {
+  if (!item.text.trim()) return
+  addContext(item)
+  if (consult) {
+    const key = useAgent.getState().activeSessionId ?? draftRuntimeKey(boundProject, windowLabel())
+    const previous = sessionRuntime(key).draft ?? ""
+    const question = "¿Qué indica este error y qué debería revisar para resolverlo?"
+    if (!previous.includes(question)) {
+      const separator = !previous || previous.endsWith("\n\n") ? "" : previous.endsWith("\n") ? "\n" : "\n\n"
+      patchSessionRuntime(key, { draft: `${previous}${separator}${question}` })
+    }
+  }
+  focusComposer()
 }
 
 export function removeContext(index: number) {
@@ -1178,6 +1196,15 @@ export function contextToParts(root: string | null, items: ContextItem[], active
   for (const item of items) {
     if (item.kind === "file") addFile(item.path)
     else if (item.kind === "image") parts.push({ type: "file", mime: item.mime, url: item.url, filename: item.filename })
+    else if (item.kind === "terminal") {
+      // A log can itself contain Markdown fences. Keep the entire snapshot in
+      // one literal text block rather than turning its contents into file parts.
+      let fence = "```"
+      for (const match of item.text.matchAll(/`+/g)) {
+        if (match[0].length >= fence.length) fence = "`".repeat(match[0].length + 1)
+      }
+      parts.push({ type: "text", text: `Selección de terminal: ${item.title}\nDirectorio inicial: ${item.cwd}\n\n${fence}text\n${item.text}\n${fence}` })
+    }
     else {
       const rel = root ? relativePath(root, item.path) : item.path
       const lang = rel.split(".").pop() ?? ""

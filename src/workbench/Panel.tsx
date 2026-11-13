@@ -18,7 +18,9 @@ import {
   useTerminals,
 } from "../state/terminals"
 import { useOutput } from "../state/output"
-import { openMenuAt } from "../components/ContextMenu"
+import { openContextMenu, openMenuAt } from "../components/ContextMenu"
+import { addTerminalContext, type ContextItem } from "../state/agent"
+import { useProject } from "../state/project"
 import { Icon, IconButton } from "../components/ui"
 import { clockTime } from "../lib/time"
 
@@ -33,7 +35,31 @@ function TerminalSurface({ id }: { id: string }) {
     })
     return detach
   }, [id])
-  return <div ref={ref} className="terminal-surface" />
+  return <div ref={ref} className="terminal-surface"
+    onMouseDownCapture={e => {
+      // Keep right-click from moving xterm's selection or reporting a mouse
+      // event to the shell. Left-click/drag selection and copying stay native.
+      if (e.button === 2) { e.preventDefault(); e.stopPropagation() }
+    }}
+    onContextMenuCapture={e => {
+      const state = useTerminals.getState()
+      const info = state.terminals.find(t => t.id === id)
+      const text = getInstance(id)?.term.getSelection() ?? ""
+      const project = useProject.getState().root
+      const snapshot: Extract<ContextItem, { kind: "terminal" }> | null = info && text.trim()
+        ? { kind: "terminal", terminalId: id, title: terminalTitle(info, state.shells), cwd: info.cwd, text }
+        : null
+      const add = (consult: boolean) => {
+        if (!snapshot || useProject.getState().root !== project) return
+        useLayout.getState().toggleAgent(true)
+        addTerminalContext(snapshot, consult)
+      }
+      // Capture before xterm can prepare its hidden textarea for native paste.
+      openContextMenu(e, [
+        { label: "Agregar al chat", icon: "sparkle", disabled: !snapshot, run: () => add(false) },
+        { label: "Consultar este error", icon: "comment-discussion", disabled: !snapshot, run: () => add(true) },
+      ])
+    }} />
 }
 
 function TerminalSearch({ id }: { id: string }) {
