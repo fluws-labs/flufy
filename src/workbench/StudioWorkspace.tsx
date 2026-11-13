@@ -14,7 +14,7 @@ import { useStudio, type StudioMode } from "../state/studio"
 import { unarchivedSessions } from "../lib/sessions"
 import { notify } from "../state/toasts"
 import { TeamWorkspace } from "../team/TeamWorkspace"
-import { runStatusLabel } from "../team/types"
+import { runStatusLabel, type TeamChatRecord } from "../team/types"
 import { previewIdentityKey, type PreviewEditorContext } from "../preview"
 
 const LEAD_IMPLEMENT_PROMPT = "Implementá esto con el equipo usando el plan y el diseño aprobado."
@@ -36,25 +36,21 @@ function MemoryCards() {
   </section>
 }
 
-function ResearchSidebar() {
+function ResearchSidebar({ leadChat, continuousOn, onToggleContinuous, onImplement, implementing, onCollapse }: {
+  leadChat: TeamChatRecord | undefined
+  continuousOn: boolean
+  onToggleContinuous: () => Promise<void>
+  onImplement: () => Promise<void>
+  implementing: boolean
+  onCollapse: () => void
+}) {
   const sessionId = useAgent(s => s.activeSessionId)
-  const root = useProject(s => s.root)
   const messages = useAgent(s => sessionId ? s.views[sessionId]?.messages : undefined)
   const todos = useAgent(s => sessionId ? s.todos[sessionId] : undefined)
   const memoryEnabled = useAgent(s => sessionId ? s.memoryEnabled[sessionId] !== false : true)
-  const leadChat = useTeams(s => s.chats.find(chat => chat.origin?.sessionId === sessionId))
   const leadRun = leadChat?.runs.at(-1)
   const notes = useMemory(s => s.data.notes)
   const [sourcesOpen, setSourcesOpen] = useState(true)
-  const [implementing, setImplementing] = useState(false)
-  const [continuous, setContinuous] = useState(false)
-  const continuousPending = useRef(false)
-  const continuousOn = leadChat ? leadChat.continuousMode === true : continuous
-  useEffect(() => {
-    if (!leadChat || !continuousPending.current) return
-    continuousPending.current = false
-    if (leadChat.continuousMode !== true) void setContinuousMode(leadChat.id, true)
-  }, [leadChat])
   const sources = useMemo(() => {
     const urls = new Set<string>()
     for (const message of messages ?? []) {
@@ -69,23 +65,8 @@ function ResearchSidebar() {
     return [...urls]
   }, [messages])
   const completed = todos?.filter(todo => todo.status === "completed").length ?? 0
-  const implement = async () => {
-    if (implementing) return
-    setImplementing(true)
-    continuousPending.current = continuous
-    try { await sendPrompt(continuous ? `${LEAD_IMPLEMENT_PROMPT}${LEAD_CONTINUOUS_PROMPT}` : LEAD_IMPLEMENT_PROMPT, root, null, sessionId) }
-    catch (e) { notify.error("No se pudo pedir la implementación", e instanceof Error ? e.message : String(e)) }
-    finally { setImplementing(false) }
-  }
-  const toggleContinuous = async () => {
-    const next = !continuousOn
-    if (leadChat) { await setContinuousMode(leadChat.id, next); return }
-    if (next && !useTeams.getState().fallbackModels?.length) {
-      if (!await openFallbackModels() || !useTeams.getState().fallbackModels?.length) return
-    }
-    setContinuous(next)
-  }
   return <aside className="studio-inspector" aria-label="Contexto de investigación">
+    <div className="studio-inspector-bar"><span>Contexto</span><button type="button" className="studio-collapse" title="Ocultar contexto" aria-label="Ocultar contexto" onClick={onCollapse}><Icon name="chevron-right" /></button></div>
     <section className="studio-side-section">
       <div className="studio-side-head">
         <h3>Fuentes</h3>
@@ -107,14 +88,14 @@ function ResearchSidebar() {
       {leadChat ? <>
         <strong className="research-lead-status"><span className="studio-member-dot is-active" /> {leadRun ? runStatusLabel(leadRun.status) : "Equipo vinculado"}</strong>
         <p className="studio-muted">El plan, las tareas y las evidencias viven en el tablero de este equipo.</p>
-        <button type="button" className={`studio-continuous${continuousOn ? " is-on" : ""}`} role="switch" aria-checked={continuousOn} onClick={() => void toggleContinuous()}><Icon name={continuousOn ? "circle-filled" : "circle-outline"} /><span>Trabajo continuo</span><em>{continuousOn ? "activado" : "desactivado"}</em></button>
+        <button type="button" className={`studio-continuous${continuousOn ? " is-on" : ""}`} role="switch" aria-checked={continuousOn} onClick={() => void onToggleContinuous()}><Icon name={continuousOn ? "circle-filled" : "circle-outline"} /><span>Trabajo continuo</span><em>{continuousOn ? "activado" : "desactivado"}</em></button>
         <p className="studio-muted">Si el modelo se corta, sigue con otro y termina las correcciones.</p>
         <button type="button" className="btn btn-primary" onClick={() => selectTeamChat(leadChat.id)}>Ver tablero <Icon name="arrow-right" /></button>
       </> : <>
         <p>Si decís «vamos a implementarlo», toda esta charla pasa a ser el Lead del equipo.</p>
-        <button type="button" className={`studio-continuous${continuousOn ? " is-on" : ""}`} role="switch" aria-checked={continuousOn} onClick={() => void toggleContinuous()}><Icon name={continuousOn ? "circle-filled" : "circle-outline"} /><span>Trabajo continuo</span><em>{continuousOn ? "activado" : "desactivado"}</em></button>
+        <button type="button" className={`studio-continuous${continuousOn ? " is-on" : ""}`} role="switch" aria-checked={continuousOn} onClick={() => void onToggleContinuous()}><Icon name={continuousOn ? "circle-filled" : "circle-outline"} /><span>Trabajo continuo</span><em>{continuousOn ? "activado" : "desactivado"}</em></button>
         <p className="studio-muted">Si el modelo se corta, sigue con otro y termina las correcciones.</p>
-        <button type="button" className="btn btn-primary" disabled={implementing} onClick={() => void implement()}>{implementing ? "Enviando…" : "Implementar con el equipo"} <Icon name="arrow-right" /></button>
+        <button type="button" className="btn btn-primary" disabled={implementing} onClick={() => void onImplement()}>{implementing ? "Enviando…" : "Implementar con el equipo"} <Icon name="arrow-right" /></button>
         <small className="studio-muted">No se abre otra conversación.</small>
       </>}
     </div>
@@ -148,16 +129,44 @@ function ResearchWelcome() {
 function ResearchWorkspace() {
   const activeId = useAgent(s => s.activeSessionId)
   const sessions = useAgent(s => s.allSessions)
+  const root = useProject(s => s.root)
   const layout = useStudio(s => s.layouts.research)
   const setLayout = useStudio(s => s.setLayout)
+  const leadChat = useTeams(s => s.chats.find(chat => chat.origin?.sessionId === activeId))
+  const [continuous, setContinuous] = useState(false)
+  const [implementing, setImplementing] = useState(false)
+  const continuousPending = useRef(false)
+  const continuousOn = leadChat ? leadChat.continuousMode === true : continuous
+  useEffect(() => {
+    if (!leadChat || !continuousPending.current) return
+    continuousPending.current = false
+    if (leadChat.continuousMode !== true) void setContinuousMode(leadChat.id, true)
+  }, [leadChat])
   const recent = unarchivedSessions(sessions).filter(session => !session.parentID && sessionInProject(session)).slice(0, 12)
   const active = sessions.find(session => session.id === activeId)
-  return <div className={`studio-columns studio-research${layout.sidebarCollapsed ? " sidebar-collapsed" : ""}${layout.chatExpanded ? " chat-expanded" : ""}`}>
+  const implement = async () => {
+    if (implementing) return
+    setImplementing(true)
+    continuousPending.current = continuous
+    try { await sendPrompt(continuous ? `${LEAD_IMPLEMENT_PROMPT}${LEAD_CONTINUOUS_PROMPT}` : LEAD_IMPLEMENT_PROMPT, root, null, activeId) }
+    catch (e) { notify.error("No se pudo pedir la implementación", e instanceof Error ? e.message : String(e)) }
+    finally { setImplementing(false) }
+  }
+  const toggleContinuous = async () => {
+    const next = !continuousOn
+    if (leadChat) { await setContinuousMode(leadChat.id, next); return }
+    if (next && !useTeams.getState().fallbackModels?.length) {
+      if (!await openFallbackModels() || !useTeams.getState().fallbackModels?.length) return
+    }
+    setContinuous(next)
+  }
+  const continuousPill = <button type="button" className={`composer-pill${continuousOn ? " on" : ""}`} aria-pressed={continuousOn} aria-label="Trabajo continuo" title={continuousOn ? "Trabajo continuo activado" : "Activar trabajo continuo"} onClick={() => void toggleContinuous()}><Icon name={continuousOn ? "circle-filled" : "sync"} /><span>Trabajo continuo</span></button>
+  return <div className={`studio-columns studio-research${layout.sidebarCollapsed ? " sidebar-collapsed" : ""}${layout.inspectorCollapsed ? " inspector-collapsed" : ""}${layout.chatExpanded ? " chat-expanded" : ""}`}>
     <aside className="studio-sidebar" aria-label="Investigaciones">
       <section className="studio-side-section">
         <div className="studio-side-head"><h3>Investigación</h3><button type="button" className="studio-collapse" title="Ocultar lateral" aria-label="Ocultar lateral" onClick={() => setLayout("research", { sidebarCollapsed: true })}><Icon name="chevron-left" /></button></div>
         <button type="button" className={`studio-nav-item${activeId ? "" : " active"}`} onClick={() => { useTeams.setState({ activeChatId: null }); newSession() }}><Icon name="add" /> Nueva consulta</button>
-        <div className="studio-session-list">{recent.map(session => <button type="button" className={`studio-nav-item${session.id === activeId ? " selected" : ""}`} key={session.id} onClick={() => selectSession(session.id)}>{session.title || "Sin título"}</button>)}</div>
+        <div className="studio-session-list">{recent.map(session => <button type="button" className={`studio-nav-item${session.id === activeId ? " selected" : ""}`} key={session.id} title={session.title || "Sin título"} onClick={() => selectSession(session.id)}>{session.title || "Sin título"}</button>)}</div>
       </section>
       <MemoryCards />
     </aside>
@@ -167,11 +176,14 @@ function ResearchWorkspace() {
         <div className="research-heading-icon"><Icon name="search" /></div>
         <h1>Investigación profunda</h1>
         <span className="research-heading-session" title={active?.title}>{active?.title || "Nueva conversación"}</span>
-        <button type="button" className={`studio-chat-expand${layout.chatExpanded ? " is-expanded" : ""}`} aria-pressed={layout.chatExpanded} title={layout.chatExpanded ? "Restaurar el chat" : "Ampliar el chat"} onClick={() => setLayout("research", { chatExpanded: !layout.chatExpanded })}><Icon name={layout.chatExpanded ? "screen-normal" : "screen-full"} /><span>{layout.chatExpanded ? "Restaurar" : "Ampliar chat"}</span></button>
+        <div className="studio-heading-actions">
+          {layout.inspectorCollapsed && <button type="button" className="studio-collapse" title="Mostrar contexto" aria-label="Mostrar contexto" onClick={() => setLayout("research", { inspectorCollapsed: false })}><Icon name="layout-sidebar-right" /></button>}
+          <button type="button" className={`studio-chat-expand${layout.chatExpanded ? " is-expanded" : ""}`} aria-pressed={layout.chatExpanded} title={layout.chatExpanded ? "Restaurar el chat" : "Ampliar el chat"} onClick={() => setLayout("research", { chatExpanded: !layout.chatExpanded })}><Icon name={layout.chatExpanded ? "screen-normal" : "screen-full"} /><span>{layout.chatExpanded ? "Restaurar" : "Ampliar chat"}</span></button>
+        </div>
       </header>
-      <SessionPane sessionId={activeId} variant="panel" emptyState={<ResearchWelcome />} onPreviewOpen={() => useStudio.getState().setMode("design")} />
+      <SessionPane sessionId={activeId} variant="panel" emptyState={<ResearchWelcome />} preferences={continuousPill} onPreviewOpen={() => useStudio.getState().setMode("design")} />
     </main>
-    <ResearchSidebar />
+    <ResearchSidebar leadChat={leadChat} continuousOn={continuousOn} onToggleContinuous={toggleContinuous} onImplement={implement} implementing={implementing} onCollapse={() => setLayout("research", { inspectorCollapsed: true })} />
   </div>
 }
 

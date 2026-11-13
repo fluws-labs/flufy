@@ -161,7 +161,7 @@ function Panel({ identity, client, onApproved, onStateChange, onClose, onContext
           void apply([operation], operation.type === 'detach' ? 'Separar bloque de su contenedor' : operation.type === "move" ? "Mover bloque por arrastre" : operation.type === "offset" ? "Mover bloque en el lienzo" : "Redimensionar bloque por arrastre")
         }} />
         <aside className="preview-properties" aria-label="Propiedades del bloque" hidden={!propertiesOpen}>
-          <h3>Inspector</h3>
+          <div className="preview-properties-head"><h3>Inspector</h3><button type="button" className="preview-layers-close" aria-label="Ocultar inspector" title="Ocultar inspector" onClick={() => setPropertiesOpen(false)}>«</button></div>
           {!node && <p className="preview-note">Seleccioná un texto, botón o caja para editarlo.</p>}
           {node && <fieldset disabled={busy}><legend>{node.text?.slice(0, 42) || node.id}</legend>
             <div className="preview-selection-info"><span>{({ container: 'Contenedor', heading: 'Título', text: 'Texto', button: 'Botón', image: 'Imagen' })[node.kind]}</span><code>{node.id}</code><p>{node.layout.position === 'absolute' ? 'Libre en la pantalla · ya no sigue a su caja anterior' : parent ? `Dentro de ${parent.text || parent.id} · se mueve con ese contenedor` : 'Contenedor de la pantalla'}</p></div>

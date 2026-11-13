@@ -1341,6 +1341,14 @@ export async function sendPrompt(
   const variant = selectedVariant(s)
   const agentName = runtime.agent ?? (isBubbleWindow() ? BUBBLE_AGENT : s.agentName)
   patchSessionRuntime(id, { agent: agentName, model: s.model, variants: s.variants, previewEnabled: runtime.previewEnabled === true, submittedAt: Date.now() })
+  // Detener un turno deja la tarea de escritorio en «stopped». En un chat normal
+  // nadie la volvía a iniciar, así que toda herramienta de PC quedaba rechazada en
+  // esa conversación para siempre. Una instrucción nueva abre la generación otra vez;
+  // sin objetivo, no se inyecta estado de escritorio en chats que no lo usan.
+  if (isTauri && id && agentName !== BUBBLE_AGENT) {
+    const task = await call<{ status?: string } | null>("desktop_task_get", { session: id }).catch(() => null)
+    if (task?.status === "stopped") await call("desktop_task_begin", { session: id, instruction: "" }).catch(() => undefined)
+  }
   if (isTauri && agentName === BUBBLE_AGENT && command) {
     await call("desktop_task_begin", { session: id, instruction: trimmed }).catch(() => undefined)
   }

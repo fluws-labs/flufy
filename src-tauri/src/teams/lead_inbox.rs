@@ -12,7 +12,7 @@ pub(super) fn migrate(db: &mut Connection) -> Result<(), String> {
     let installed: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='team_lead_schema')", [], |r|r.get(0)).map_err(err)?;
     if installed {
         let version: i64 = db.query_row("SELECT version FROM team_lead_schema", [], |r|r.get(0)).map_err(err)?;
-        if version == 2 { return Ok(()); }
+        if version == 2 { super::ledger::migrate(db)?; return Ok(()); }
         if version == 1 {
             // v2 adds the durable coordination brake; existing bindings, events,
             // inbox rows and reserved turns are preserved.
@@ -23,7 +23,8 @@ pub(super) fn migrate(db: &mut Connection) -> Result<(), String> {
                     repeats INTEGER NOT NULL, next_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
                  UPDATE team_lead_schema SET version=2;"
             ).map_err(err)?;
-            return tx.commit().map_err(err);
+            tx.commit().map_err(err)?;
+            return super::ledger::migrate(db);
         }
         return Err("LEAD_SCHEMA_UNSUPPORTED: no se modificó la base del equipo".into());
     }
@@ -60,7 +61,8 @@ pub(super) fn migrate(db: &mut Connection) -> Result<(), String> {
             chat_id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL,
             repeats INTEGER NOT NULL, next_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);"
     ).map_err(err)?;
-    tx.commit().map_err(err)
+    tx.commit().map_err(err)?;
+    super::ledger::migrate(db)
 }
 
 fn err(e: rusqlite::Error) -> String { e.to_string() }
@@ -143,6 +145,25 @@ pub(super) fn enqueue(tx: &rusqlite::Transaction<'_>, chat: &str, command: &str,
     if let Some(priority) = priority {
         tx.execute("INSERT INTO team_inbox(event_id,chat_id,priority,status) VALUES(?1,?2,?3,'pending')",params![event_id,chat,priority]).map_err(err)?;
     }
+    // Observational ledger: why the Lead was queued (or why an event stayed in
+    // the UI). A ledger failure never blocks the durable event.
+    let (session_id, project) = super::ledger::context(tx, chat);
+    let (run_id, task_id) = super::ledger::ids(payload);
+    let lead_turn = priority.is_some();
+    let _ = super::ledger::record(tx, super::ledger::Entry {
+        at: now,
+        project,
+        session_id,
+        chat_id: chat.into(),
+        run_id,
+        task_id,
+        source: "event".into(),
+        reason: kind.into(),
+        kind: if lead_turn { "lead.turn" } else { "event.ui" }.into(),
+        events_preserved: 1,
+        outcome: if lead_turn { "queued" } else { "ui_only" }.into(),
+        ..Default::default()
+    });
     Ok(Receipt {event_id,sequence})
 }
 

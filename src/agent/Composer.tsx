@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import {
   abortSession,
   addContext,
@@ -119,12 +119,14 @@ export function Composer({
   compact,
   usage,
   onPreviewOpen,
+  preferences,
 }: {
   sessionId: string | null
   busy: boolean
   compact?: boolean
   usage?: ContextUsage | null
   onPreviewOpen?: () => void
+  preferences?: ReactNode
 }) {
   const root = useProject((s) => s.root)
   const runtimeKey = sessionId ?? draftRuntimeKey(root, windowLabel())
@@ -682,6 +684,7 @@ export function Composer({
           <span>Previsualización</span>
         </label>
         {previewEnabled && onPreviewOpen && sessionId && <button type="button" className="composer-preference-action" onClick={onPreviewOpen}>Ver diseño <Icon name="arrow-up-right" /></button>}
+        {preferences}
         {sessionId && <button type="button" className="composer-preference-action composer-new-task" disabled={busy || sending} title="Empezar una tarea distinta, conservando la conversación y los diseños anteriores" onClick={() => startPreviewTask(root, sessionId)}>Nueva tarea <Icon name="add" /></button>}
       </div>}
     </div>

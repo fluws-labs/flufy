@@ -14,6 +14,7 @@ pub(super) fn admit(db: &Connection, chat: &str, fingerprint: &str, has_user_mes
     if has_user_message {
         db.execute("DELETE FROM team_lead_guard WHERE chat_id=?1", [chat]).map_err(err)?;
         log::info!("[teams-lead] freno de coordinación liberado por mensaje del usuario (chat={chat})");
+        record(db, chat, "guard.released", "user_message", "released", now);
         return Ok(true);
     }
     let existing: Option<(String, i64, i64)> = db.query_row(
@@ -35,10 +36,12 @@ pub(super) fn admit(db: &Connection, chat: &str, fingerprint: &str, has_user_mes
             params![chat, fingerprint, now],
         ).map_err(err)?;
         log::info!("[teams-lead] freno de coordinación liberado por información nueva (chat={chat})");
+        record(db, chat, "guard.released", "new_information", "released", now);
         return Ok(true);
     }
     if now < next_at {
         log::info!("[teams-lead] despertar automático diferido (chat={chat}, repeticiones={repeats}, espera_ms={})", next_at.saturating_sub(now));
+        record(db, chat, "guard.deferred", fingerprint, "deferred", now);
         return Ok(false);
     }
     let repeats = (repeats + 1).clamp(1, BACKOFF_MS.len() as i64);
@@ -47,7 +50,24 @@ pub(super) fn admit(db: &Connection, chat: &str, fingerprint: &str, has_user_mes
         "UPDATE team_lead_guard SET repeats=?2,next_at=?3,updated_at=?4 WHERE chat_id=?1",
         params![chat, repeats, next, now],
     ).map_err(err)?;
+    record(db, chat, "guard.waiting", fingerprint, "waiting", now);
     Ok(true)
+}
+
+/// Best-effort ledger note for a brake decision. It never changes admission.
+fn record(db: &Connection, chat: &str, kind: &str, reason: &str, outcome: &str, now: i64) {
+    let (session_id, project) = super::ledger::context(db, chat);
+    let _ = super::ledger::record(db, super::ledger::Entry {
+        at: now,
+        project,
+        session_id,
+        chat_id: chat.into(),
+        source: "guard".into(),
+        reason: reason.into(),
+        kind: kind.into(),
+        outcome: outcome.into(),
+        ..Default::default()
+    });
 }
 
 /// Fingerprint of the pending inbox batch plus whether a real user message is

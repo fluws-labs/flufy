@@ -2,7 +2,7 @@ import { create } from "zustand"
 import { loadJson, saveJson } from "../lib/persist"
 
 export type StudioMode = "design" | "team" | "research" | "code"
-export type StudioLayout = { sidebarCollapsed: boolean; chatExpanded: boolean }
+export type StudioLayout = { sidebarCollapsed: boolean; inspectorCollapsed: boolean; chatExpanded: boolean }
 
 const MODES: StudioMode[] = ["design", "team", "research", "code"]
 const saved = loadJson<StudioMode>("studio.mode", "research")
@@ -11,6 +11,7 @@ const compact = typeof window !== "undefined" && window.innerWidth < 900
 
 const layouts = Object.fromEntries(MODES.map(mode => [mode, {
   sidebarCollapsed: savedLayouts[mode]?.sidebarCollapsed ?? compact,
+  inspectorCollapsed: savedLayouts[mode]?.inspectorCollapsed ?? false,
   chatExpanded: savedLayouts[mode]?.chatExpanded ?? false,
 }])) as Record<StudioMode, StudioLayout>
 

@@ -2,6 +2,7 @@ mod activity;
 mod lead_actor;
 mod lead_guard;
 mod lead_inbox;
+mod ledger;
 mod lead_policy;
 mod delivery_review;
 pub mod handoff;
@@ -393,8 +394,40 @@ fn canonical(path: &str) -> Result<String, String> {
 }
 
 #[tauri::command]
-pub fn teams_state(app: AppHandle) -> Result<Store, String> {
-    read(&app)
+pub fn teams_state(app: AppHandle) -> Result<serde_json::Value, String> {
+    let store = read(&app)?;
+    let db = db(&app)?;
+    let mut ledger = Vec::new();
+    for chat in &store.chats {
+        for run in &chat.runs {
+            let (tokens, cost_usd) = usage_totals(run);
+            ledger.push(ledger::run_summary(&db, &run.id, &chat.id, tokens, cost_usd)?);
+        }
+    }
+    let guards = ledger::guards(&db, now())?;
+    serde_json::to_value(serde_json::json!({
+        "schemaVersion": store.schema_version,
+        "teams": store.teams,
+        "skills": store.skills,
+        "chats": store.chats,
+        "fallbackModels": store.fallback_models,
+        "ledger": ledger,
+        "guards": guards,
+    })).map_err(|e| e.to_string())
+}
+
+/// Engine-reported totals for a run. Only values the engine actually sent are
+/// summed; a provider that omits cost leaves it unknown instead of zero.
+fn usage_totals(run: &Run) -> (Option<u64>, Option<f64>) {
+    let mut tokens = 0u64;
+    let mut tokens_known = false;
+    let mut cost = 0.0f64;
+    let mut cost_known = false;
+    for value in run.session_usage.values() {
+        if let Some(amount) = value["tokens"].as_u64() { tokens = tokens.saturating_add(amount); tokens_known = true; }
+        if let Some(amount) = value["costUsd"].as_f64() { cost += amount; cost_known = true; }
+    }
+    (tokens_known.then_some(tokens), cost_known.then_some(cost))
 }
 
 /// Native activation gateway. The caller cannot supply its session: identity

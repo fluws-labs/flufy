@@ -39,6 +39,8 @@ pub fn run_state_changed(app: &AppHandle, run_id: &str) -> Result<(), String> {
     else { return Ok(()) };
     if super::bound_chat(app, &source)?.as_deref() != Some(chat_id.as_str()) { return Ok(()); }
     let kind = if run.status == "completed" { "run.completed" } else { "run.blocked" };
+    let ledger_run = run.id.clone();
+    let ledger_status = run.status.clone();
     let payload = json!({
         "runId": run.id,
         "status": run.status,
@@ -47,7 +49,18 @@ pub fn run_state_changed(app: &AppHandle, run_id: &str) -> Result<(), String> {
     });
     update_lead(app, |_store, tx| {
         lead_inbox::enqueue(tx, &chat_id, &format!("run-state:{}:{}", run_id, run.status), kind, &payload, super::lead_policy::priority(kind), now())
-            .map(|_| ())
+            .map(|_| ())?;
+        let _ = super::ledger::record(tx, super::ledger::Entry {
+            at: now(),
+            chat_id: chat_id.clone(),
+            run_id: ledger_run.clone(),
+            source: "lead".into(),
+            reason: kind.into(),
+            kind: "run.terminal".into(),
+            outcome: ledger_status.clone(),
+            ..Default::default()
+        });
+        Ok(())
     })
 }
 
@@ -128,7 +141,17 @@ pub fn send_user(app: &AppHandle, session: &str, text: &str) -> Result<String, S
             &json!({ "messageId": message_id, "text": text }),
             super::lead_policy::priority("user.message_received"),
             now(),
-        )
+        )?;
+        let _ = super::ledger::record(tx, super::ledger::Entry {
+            at: now(),
+            chat_id: chat.clone(),
+            source: "human".into(),
+            reason: "user_message".into(),
+            kind: "human.message".into(),
+            outcome: "queued".into(),
+            ..Default::default()
+        });
+        Ok(())
     })?;
     wake(app);
     Ok(message_id)
@@ -428,6 +451,33 @@ fn run_turn(app: &AppHandle, chat_id: &str, turn: &lead_inbox::LeadTurn) -> Resu
         return Ok(());
     }
     let context = compact_notices(&events);
+    let grouped: i64 = context.iter()
+        .filter(|event| event["kind"] == "notices.grouped")
+        .map(|event| event["payload"]["count"].as_i64().unwrap_or(0))
+        .sum();
+    let (ledger_run, ledger_task) = context.iter()
+        .find_map(|event| { let (run, task) = super::ledger::ids(&event["payload"]); (!run.is_empty()).then_some((run, task)) })
+        .unwrap_or_default();
+    {
+        let db = super::db(app)?;
+        let (session_id, project) = super::ledger::context(&db, chat_id);
+        let _ = super::ledger::record(&db, super::ledger::Entry {
+            at: now(),
+            project,
+            session_id,
+            chat_id: chat_id.into(),
+            run_id: ledger_run,
+            task_id: ledger_task,
+            turn_id: turn.turn_id.clone(),
+            source: "lead".into(),
+            reason: "dispatch".into(),
+            kind: "turn.dispatch".into(),
+            notices_grouped: grouped,
+            events_preserved: events.len() as i64,
+            outcome: "dispatching".into(),
+            ..Default::default()
+        });
+    }
     let (root, session) = directory(app, chat_id)?;
     let client = runner::client(app, &root)?;
     wait_idle(&client, &session, Duration::from_secs(300))?;
@@ -516,6 +566,16 @@ fn finish(app: &AppHandle, chat_id: &str, turn: &lead_inbox::LeadTurn, error: &s
                 now(),
             )?;
         }
+        let _ = super::ledger::record(tx, super::ledger::Entry {
+            at: now(),
+            chat_id: chat_id.into(),
+            turn_id: turn.turn_id.clone(),
+            source: "lead".into(),
+            reason: if error.is_empty() { "completed" } else { error }.into(),
+            kind: "turn.finished".into(),
+            outcome: if error.is_empty() { "completed" } else { "failed" }.into(),
+            ..Default::default()
+        });
         Ok(())
     })
 }
