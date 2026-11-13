@@ -15,17 +15,29 @@ export class TerminalFileLinksAddon implements ITerminalAddon {
   constructor(options: Options) { this.options = options }
 
   activate(term: Terminal): void {
-    let hovered: { link: ILink; ref: TerminalFileReference; x: number; y: number; checked: boolean } | undefined
+    let hovered: { link: ILink; ref: TerminalFileReference; x: number; y: number; checked: boolean; available?: boolean } | undefined
     let ctrl = false
     let alive = true
     const tooltip = document.createElement("div")
     tooltip.className = "terminal-file-tooltip xterm-hover"
     tooltip.setAttribute("role", "tooltip")
-    const leave = () => { hovered = undefined; tooltip.remove() }
+    const leave = () => {
+      if (hovered?.link.decorations) {
+        hovered.link.decorations.pointerCursor = false
+        hovered.link.decorations.underline = false
+      }
+      hovered = undefined
+      tooltip.remove()
+    }
     const update = () => {
       if (!hovered) return
       const current = hovered
-      current.link.decorations = { pointerCursor: ctrl, underline: ctrl }
+      // Mutate xterm's decoration accessors; replacing the object disconnects
+      // its live cursor/underline updates after the initial hover.
+      if (current.link.decorations) {
+        current.link.decorations.pointerCursor = ctrl && current.available === true
+        current.link.decorations.underline = ctrl && current.available === true
+      }
       if (!tooltip.isConnected) {
         tooltip.textContent = `Ctrl+clic · Abrir en el editor\nReferencia: ${current.ref.path}\nBase inicial: ${this.options.cwd}`
         document.body.appendChild(tooltip)
@@ -35,9 +47,17 @@ export class TerminalFileLinksAddon implements ITerminalAddon {
       if (!ctrl || current.checked) return
       current.checked = true
       void this.options.resolve(current.ref.path).then(path => {
-        if (alive && hovered === current) tooltip.textContent = `Ctrl+clic · Abrir en el editor\n${path}:${current.ref.line}${current.ref.column ? `:${current.ref.column}` : ""}\nBase inicial: ${this.options.cwd}`
+        if (alive && hovered === current) {
+          current.available = true
+          tooltip.textContent = `Ctrl+clic · Abrir en el editor\n${path}:${current.ref.line}${current.ref.column ? `:${current.ref.column}` : ""}\nBase inicial: ${this.options.cwd}`
+          update()
+        }
       }).catch(() => {
-        if (alive && hovered === current) tooltip.textContent = `No se puede abrir esta referencia dentro del espacio de trabajo\n${current.ref.path}\nBase inicial: ${this.options.cwd}`
+        if (alive && hovered === current) {
+          current.available = false
+          tooltip.textContent = `No se puede abrir esta referencia dentro del espacio de trabajo\n${current.ref.path}\nBase inicial: ${this.options.cwd}`
+          update()
+        }
       })
     }
     const key = (event: KeyboardEvent) => { ctrl = event.ctrlKey; update() }

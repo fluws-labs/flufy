@@ -84,6 +84,33 @@ async function pointAt(page: Page, fragment: string, tooltip = true) {
 
 const calls = (page: Page, command: string) => page.evaluate(command => (window as any).__calls.filter((c: any) => c.command === command), command)
 
+test("shows the link cursor only while Ctrl hovers an allowed reference", async ({ page }) => {
+  await boot(page, "src/main.ts:12:3\r\n../outside.ts:1\r\n")
+  const screen = page.locator(".xterm-screen")
+  await pointAt(page, "main.ts")
+  await expect(screen).not.toHaveCSS("cursor", "pointer")
+  await page.keyboard.down("Control")
+  await expect(screen).toHaveCSS("cursor", "pointer")
+  await page.keyboard.up("Control")
+  await expect(screen).not.toHaveCSS("cursor", "pointer")
+
+  await page.keyboard.down("Control")
+  await expect(screen).toHaveCSS("cursor", "pointer")
+  await page.mouse.move(5, 5)
+  await expect(screen).not.toHaveCSS("cursor", "pointer")
+  await pointAt(page, "src/main.ts") // Ctrl held before entering a different cell of the reference.
+  await expect(screen).toHaveCSS("cursor", "pointer")
+  await pointAt(page, "outside.ts")
+  await expect(page.getByRole("tooltip")).toContainText("No se puede abrir")
+  await expect(screen).not.toHaveCSS("cursor", "pointer")
+  await pointAt(page, "main.ts")
+  await expect(screen).toHaveCSS("cursor", "pointer")
+  await page.evaluate(() => window.dispatchEvent(new Event("blur")))
+  await expect(screen).not.toHaveCSS("cursor", "pointer")
+  await page.keyboard.up("Control")
+  expect((await calls(page, "terminal_file_reference")).some((c: any) => c.args.read)).toBe(false)
+})
+
 test("Ctrl+click opens validated source at its location without an unchecked reread or external opener", async ({ page }, info) => {
   await boot(page, "🚨 src/main.ts:12:3\r\n")
   await pointAt(page, "main.ts")
