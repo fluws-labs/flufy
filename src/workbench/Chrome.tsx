@@ -62,7 +62,7 @@ import { Logo } from "../components/Logo"
 import { UpdateButton } from "../components/Updates"
 import { useStudio, type StudioMode } from "../state/studio"
 
-let codeLayout: { activeView: ViewId; sidebarVisible: boolean; agentVisible: boolean; panelVisible: boolean } | null = null
+let codeLayout: { activeView: ViewId; sidebarVisible: boolean; agentVisible: boolean } | null = null
 
 const VIEWS: Array<{ id: ViewId; icon: string; title: string; keys: string }> = [
   { id: "explorer", icon: "files", title: "Explorador", keys: "Ctrl+Shift+E" },
@@ -186,10 +186,10 @@ export function TitleBar() {
         {([["design", "Diseñar"], ["team", "Equipo"], ["research", "Investigar"], ["code", "Código"]] as [StudioMode, string][]).map(([id, label]) => <button key={id} type="button" aria-pressed={mode === id} className={mode === id ? "active" : ""} title={id === "code" ? "Explorar y editar los archivos del proyecto" : undefined} onClick={() => {
           if (mode === "code" && id !== "code") {
             const s = useLayout.getState()
-            codeLayout = { activeView: s.activeView, sidebarVisible: s.sidebarVisible, agentVisible: s.agentVisible, panelVisible: s.panelVisible }
+            codeLayout = { activeView: s.activeView, sidebarVisible: s.sidebarVisible, agentVisible: s.agentVisible }
           }
           if (id === "code" && mode !== "code") {
-            useLayout.setState({ ...(codeLayout ?? { activeView: "explorer", sidebarVisible: true, agentVisible: false, panelVisible: false }), focusChat: false })
+            useLayout.setState({ ...(codeLayout ?? { activeView: "explorer", sidebarVisible: true, agentVisible: false }), focusChat: false })
             const editors = useEditors.getState()
             const group = editors.groups.find(g => g.id === editors.activeGroupId)
             const active = group?.tabs.find(t => t.id === group.activeId)

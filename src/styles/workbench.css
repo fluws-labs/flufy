@@ -220,6 +220,10 @@
   display: flex;
 }
 
+.workspace-center { min-height: 0; }
+.workspace-content { display: flex; flex: 1; min-width: 0; min-height: 0; overflow: hidden; }
+.workspace-content[hidden] { display: none; }
+
 .workbench-main.focus-chat .agent-panel {
   border-left: none;
 }

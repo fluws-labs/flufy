@@ -26,7 +26,7 @@ import { closeThisWindow, closeToTray, hideToTray, hubAvailable, listenWindowClo
 import { listenBubbleDock } from "../state/bubbles"
 import { useZoom } from "../state/zoom"
 import { ActivityBar, StatusBar, TitleBar } from "./Chrome"
-import { Panel } from "./Panel"
+import { WorkspaceCenter } from "./WorkspaceCenter"
 import { EditorArea } from "../editor/EditorArea"
 import { AgentPanel } from "../agent/AgentPanel"
 import { ExplorerView } from "../views/ExplorerView"
@@ -161,9 +161,6 @@ export function Workbench() {
   const root = useProject((s) => s.root)
   const sidebarVisible = useLayout((s) => s.sidebarVisible)
   const sidebarWidth = useLayout((s) => s.sidebarWidth)
-  const panelVisible = useLayout((s) => s.panelVisible)
-  const panelHeight = useLayout((s) => s.panelHeight)
-  const panelMaximized = useLayout((s) => s.panelMaximized)
   const agentVisible = useLayout((s) => s.agentVisible)
   const agentWidth = useLayout((s) => s.agentWidth)
   const focusChat = useLayout((s) => s.focusChat)
@@ -221,39 +218,12 @@ export function Workbench() {
             />
           </>
         )}
-        {root && studioMode !== "code" ? <StudioWorkspace mode={studioMode} /> : <>
-        {!focusChat && (
-          <div className="center">
-            {root ? (
-              <>
-                {!(panelVisible && panelMaximized) && <EditorArea />}
-                {panelVisible && (
-                  <>
-                    {!panelMaximized && (
-                      <Sash
-                        orientation="horizontal"
-                        onDrag={(delta) => {
-                          if (start.current === 0) start.current = useLayout.getState().panelHeight
-                          useLayout.getState().setPanelHeight(start.current - delta)
-                        }}
-                        onDragEnd={() => {
-                          start.current = 0
-                        }}
-                        onDoubleClick={() => useLayout.getState().togglePanelMaximized()}
-                      />
-                    )}
-                    <div className="panel-slot" style={panelMaximized ? { flex: 1 } : { height: panelHeight }}>
-                      <Panel />
-                    </div>
-                  </>
-                )}
-              </>
-            ) : (
-              <NoProject />
-            )}
-          </div>
+        {((root && studioMode !== "code") || !focusChat) && (
+          <WorkspaceCenter hasProject={!!root}>
+            {root ? studioMode !== "code" ? <StudioWorkspace mode={studioMode} /> : <EditorArea /> : <NoProject />}
+          </WorkspaceCenter>
         )}
-        {agentVisible && (
+        {(!root || studioMode === "code") && agentVisible && (
           <>
             {!focusChat && (
               <Sash
@@ -273,7 +243,6 @@ export function Workbench() {
             </div>
           </>
         )}
-        </>}
       </div>
       <StatusBar />
       <QuickInput />
