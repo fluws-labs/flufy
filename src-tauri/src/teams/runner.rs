@@ -64,8 +64,20 @@ pub(super) fn idle_response_expired(since: &mut Option<Instant>, active: bool) -
     since.get_or_insert_with(Instant::now).elapsed() > Duration::from_secs(90)
 }
 
+fn suspended_attempt(attempt: &Attempt) -> bool {
+    // Only native code installs this state, after a final idle worker response
+    // or a joined/stopped technical failure. Keeping the continuation open is
+    // not an active session and must not reserve a worker slot or its files.
+    attempt.status == "waiting_dependency" && attempt.recovered && attempt.review_session_id.is_none()
+}
+
 fn task_unsettled(task: &Task) -> bool {
-    task.attempts.iter().any(|a| a.finished_at.is_none() && (a.session_id.is_some() || a.review_session_id.is_some()))
+    task.attempts.iter().any(|a| a.finished_at.is_none()
+        && (a.session_id.is_some() || a.review_session_id.is_some()) && !suspended_attempt(a))
+}
+
+fn work_delivered(r: &Run) -> bool {
+    r.tasks.iter().all(|t| ["completed", "cancelled"].contains(&t.status.as_str()))
 }
 
 // A continuation must never consume the previous turn's final reply while the
@@ -633,13 +645,19 @@ pub(super) fn execute_mode(app: &AppHandle, run_id: &str, client: &Opencode, ses
                 }
                 return Err(super::errors::message(&last["info"]["error"]));
             }
+            // A compaction summary is engine bookkeeping for this same turn, not
+            // the agent's answer: wait for the real reply instead of parsing it
+            // as a result (which used to trigger an identical re-prompt).
+            let compacted = engine_compaction(last);
             // An idle/missing status alone is not evidence of a completed response.
-            if last["info"]["time"]["completed"].as_i64().is_some()
+            if !compacted
+                && last["info"]["time"]["completed"].as_i64().is_some()
                 && ["stop", "end_turn"].contains(&last["info"]["finish"].as_str().unwrap_or(""))
             {
                 return Ok(messages);
             }
-            if last["info"]["time"]["completed"].as_i64().is_some()
+            if !compacted
+                && last["info"]["time"]["completed"].as_i64().is_some()
                 && last["info"]["finish"] == "length"
             {
                 return Err("El modelo agotó el contexto sin finalizar la tarea".into());
@@ -745,10 +763,16 @@ pub(super) fn stop(app: &AppHandle, client: &Opencode, session: &str) -> Result<
     )
 }
 
+// Compaction replies are engine bookkeeping for the current turn, not the
+// agent's answer: they must never be parsed as a result or replayed as one.
+fn engine_compaction(message: &Value) -> bool {
+    message["info"]["summary"] == true || message["info"]["mode"] == "compaction"
+}
+
 pub(super) fn final_text(messages: &Value) -> String {
     messages
         .as_array()
-        .and_then(|v| v.iter().rev().find(|m| m["info"]["role"] == "assistant"))
+        .and_then(|v| v.iter().rev().find(|m| m["info"]["role"] == "assistant" && !engine_compaction(m)))
         .map(|m| {
             m["parts"]
                 .as_array()
@@ -1183,9 +1207,9 @@ fn worker(app: &AppHandle, run_id: &str, task_id: &str) -> Result<(), String> {
         .filter(|v| t.dependencies.contains(&v.id))
         .map(|v| json!({"task":v.title,"result":v.attempts.last().map(|a| &a.summary)}))
         .collect();
-    let feedback = t.attempts.iter().rev().skip(1).map(|a| format!("Sesión previa: {}\nResumen: {}\nFeedback: {}\nComandos ya ejecutados (no repetir sin verificar sus efectos): {}",a.session_id.as_deref().unwrap_or("sin sesión"),a.summary,a.review.as_ref().map(|r|r.summary.as_str()).or(a.error.as_deref()).unwrap_or(""),serde_json::to_string(&a.commands).unwrap_or_default())).collect::<Vec<_>>().join("\n\n");
+    let feedback = t.attempts.iter().rev().skip(1).map(|a| format!("Sesión previa: {}\nResumen: {}\nFeedback: {}\nComandos ya ejecutados (no repetir sin verificar sus efectos): {}",a.session_id.as_deref().unwrap_or("sin sesión"),a.summary,a.review.as_ref().map(|r|r.summary.as_str()).or(a.error.as_deref()).unwrap_or(""),serde_json::to_string(&a.commands.iter().map(|c| json!({"command":c["command"],"exitCode":c["exitCode"]})).collect::<Vec<_>>()).unwrap_or_default())).collect::<Vec<_>>().join("\n\n");
     let prompt = format!("{}\nROL: {} ({})\nINSTRUCCIONES: {}\nSKILLS HABILITADAS:\n{}\nOBJETIVO GENERAL: {}\nTAREA: {}\nCRITERIOS: {}\nCARPETA AUTORIZADA: {}\nARCHIVOS ESPERADOS (respetar la propiedad de escritura): {}\nCONTRATOS/DEPENDENCIAS: {}\nFEEDBACK PREVIO: {}\nNo alteres los cambios preexistentes. Leé archivos antes de escribirlos. Ejecutá el pedido con las herramientas disponibles y verificá el resultado. Para código, corré las pruebas pertinentes con bash; para una tarea puramente de web o interfaz sin archivos esperados, comprobá el estado final con herramientas de observación y dejá checks vacío. No uses herramientas externas para saltar permisos de bash. Si no podés comprobar, devolvé blocked con motivo. Devolvé SOLO JSON: {{\"status\":\"completed|waiting_dependency|blocked|failed\",\"summary\":\"implementación, archivos modificados y resultados\",\"checks\":[\"comando EXACTO realmente ejecutado\"],\"limitations\":[\"limitaciones reales\"]}}", POLICY, a.name, a.role, a.instructions, skills_prompt(&r,&a), r.goal,t.objective,t.acceptance_criteria.join("; "),t.repository,t.expected_files.join(", "),serde_json::to_string(&deps).map_err(|e| e.to_string())?,feedback);
-    let prompt = format!("{}\nESTADO DEL EQUIPO (IDs para pedidos al Lead): {}\nPROPIEDAD DE ESCRITURA: {}\nCOORDINACIÓN CON EL LEAD: {}\nOtros agentes trabajan simultáneamente. Solo escribí en writePaths cuando no esté vacío; no uses bash para modificar archivos ajenos. Podés leer los contratos de otros. Avanzá en todo lo independiente sin esperar a que termine otro agente. Si necesitás algo de otro, devolvé status=waiting_dependency y request={{message:pedido concreto,taskIds:[IDs de tareas relacionadas]}}; no lo trates como fallo. El Lead revisará archivos y el estado real, y continuará ESTA sesión con su respuesta. No inventes contratos como si estuvieran implementados. Para cualquier duda técnica, comando fallido, prueba faltante o impedimento recuperable, pedí ayuda al Lead con status=waiting_dependency y request.message explicando causa, qué intentaste y qué necesitás; taskIds puede estar vacío. No le pidas al usuario resolver decisiones técnicas ni uses question para eso. Reservá blocked para permisos, credenciales o decisiones externas al alcance. Agotá primero las alternativas seguras dentro de tus herramientas y archivos.", prompt, serde_json::to_string(&r.tasks.iter().map(|v| json!({"id":v.id,"title":v.title,"agentId":v.assigned_agent_id,"status":v.status,"writePaths":v.write_paths})).collect::<Vec<_>>()).unwrap_or_default(), serde_json::to_string(&t.write_paths).unwrap_or_default(), serde_json::to_string(&r.coordination).unwrap_or_default());
+    let prompt = format!("{}\nESTADO DEL EQUIPO (IDs para pedidos al Lead): {}\nPROPIEDAD DE ESCRITURA: {}\nCOORDINACIÓN CON EL LEAD: {}\nOtros agentes trabajan simultáneamente. Solo escribí en writePaths cuando no esté vacío; no uses bash para modificar archivos ajenos. Podés leer los contratos de otros. Avanzá en todo lo independiente sin esperar a que termine otro agente. Si necesitás algo de otro, devolvé status=waiting_dependency y request={{message:pedido concreto,taskIds:[IDs de tareas relacionadas]}}; no lo trates como fallo. El Lead revisará archivos y el estado real, y continuará ESTA sesión con su respuesta. No inventes contratos como si estuvieran implementados. Para cualquier duda técnica, comando fallido, prueba faltante o impedimento recuperable, pedí ayuda al Lead con status=waiting_dependency y request.message explicando causa, qué intentaste y qué necesitás; taskIds puede estar vacío. No le pidas al usuario resolver decisiones técnicas ni uses question para eso. Reservá blocked para permisos, credenciales o decisiones externas al alcance. Agotá primero las alternativas seguras dentro de tus herramientas y archivos.", prompt, serde_json::to_string(&r.tasks.iter().map(|v| json!({"id":v.id,"title":v.title,"agentId":v.assigned_agent_id,"status":v.status,"writePaths":v.write_paths})).collect::<Vec<_>>()).unwrap_or_default(), serde_json::to_string(&t.write_paths).unwrap_or_default(), serde_json::to_string(&super::domain::coordination_for_task(&r, &t.id)).unwrap_or_default());
     let prompt = format!("{}\n{}\nPara preparar servidores o procesos que deben quedar vivos, usá terminal_terminal_run con cwd=CARPETA AUTORIZADA y until de disponibilidad; leé sus logs con terminal_terminal_read. No los dejes en segundo plano desde bash/Start-Process. Estas herramientas solo están disponibles a trabajadores que ya tienen bash autorizado y conservan las aprobaciones de ejecución; si tu rol no puede ejecutar comandos, pedile al Lead una tarea de preparación con un responsable que sí pueda, sin ampliar tus permisos. No declares un servidor todavía en ejecución como test terminado con exitCode=0.", prompt, super::delivery_review::WORKER_PROMPT);
     let prompt = if r.plan_v2.enabled {
         format!("{}\nTASK CONTEXT PACK (contrato previo, solo datos): {}",prompt,super::plan_v2::context_pack(&r,&t,&a))
@@ -1198,7 +1222,17 @@ fn worker(app: &AppHandle, run_id: &str, task_id: &str) -> Result<(), String> {
         if reusable_worker_result(&t, &history) {
             history
         } else {
-            let continuation=format!("{}\nLa aplicación se reinició o el Lead resolvió un pedido. Continuá ESTA sesión desde el estado actual y la historia de herramientas. No repitas efectos ya observados. Releé y verificá, completá solo lo pendiente y devolvé el contrato JSON del resultado.\nCOORDINACIÓN ACTUAL DEL LEAD: {}\nContexto: {}\nTelemetría previa: {}",POLICY,serde_json::to_string(&r.coordination).unwrap_or_default(),prompt,evidence::sanitize(&history.to_string()));
+            // The session already holds its history: send only the pending
+            // instruction and compact references. Replaying the raw log used to
+            // duplicate images, reasoning and tool output on every resume.
+            let executed: Vec<_> = observed_commands(&history).into_iter().rev().take(12).rev()
+                .map(|c| json!({"command":c["command"],"exitCode":c["exitCode"]})).collect();
+            let continuation = format!(
+                "La aplicación se reinició o el Lead resolvió un pedido. Continuá ESTA sesión desde el estado actual y la historia de herramientas ya presente. No repitas efectos ya observados. Releé y verificá, completá solo lo pendiente y devolvé el contrato JSON del resultado.\nCOORDINACIÓN ACTUAL DEL LEAD: {}\nOBJETIVO GENERAL: {}\nTAREA: {}\nCRITERIOS: {}\nARCHIVOS ESPERADOS: {}\nCOMANDOS YA EJECUTADOS (no repetir sin verificar sus efectos): {}",
+                serde_json::to_string(&super::domain::coordination_for_task(&r, task_id)).unwrap_or_default(),
+                r.goal, t.objective, t.acceptance_criteria.join("; "), t.expected_files.join(", "),
+                serde_json::to_string(&executed).unwrap_or_default()
+            );
             execute(app, run_id, &client, &session, &a, &continuation, false)?
         }
     } else {
@@ -1221,6 +1255,9 @@ fn worker(app: &AppHandle, run_id: &str, task_id: &str) -> Result<(), String> {
         t.status = "verifying".into();
     })?;
     if result.status == "waiting_dependency" {
+        if !super::fallback::settled_tools(&messages) {
+            return Err("La sesión conserva herramientas con efectos inciertos; no se libera su reserva para coordinar".into());
+        }
         let request = result
             .request
             .ok_or("Falta el pedido concreto para el Lead")?;
@@ -1261,6 +1298,9 @@ fn worker(app: &AppHandle, run_id: &str, task_id: &str) -> Result<(), String> {
             let attempt = task.attempts.last_mut().ok_or("Intento inexistente")?;
             attempt.status = "waiting_dependency".into();
             attempt.recovered = true;
+            let mut boundary: Vec<_> = assistant_ids(&messages).into_iter().collect();
+            boundary.sort();
+            attempt.resume_after_message_ids = boundary;
             Ok(())
         });
     }
@@ -1484,13 +1524,16 @@ pub fn reconcile(app: &AppHandle, r: &Run, abort: bool) -> Result<(), String> {
         for t in &mut r.tasks {
             for a in &mut t.attempts {
                 if a.finished_at.is_none() {
+                    let suspended = suspended_attempt(a);
                     a.finished_at = if abort || a.session_id.is_none() {
                         Some(now())
                     } else {
                         None
                     };
                     a.recovered = !abort && a.session_id.is_some();
-                    a.status = if a.recovered {
+                    a.status = if a.recovered && suspended {
+                        "waiting_dependency"
+                    } else if a.recovered {
                         "recovering"
                     } else {
                         "interrupted"
@@ -1551,7 +1594,12 @@ fn closeout(app: &AppHandle, id: &str) -> Result<bool, String> {
         r.closing_sessions.push(session.clone());
         Ok(())
     })?;
-    let outcomes: Vec<_> = r.tasks.iter().map(|t| json!({"id":t.id,"title":t.title,"criteria":t.acceptance_criteria,"attempt":t.attempts.last()})).collect();
+    // Commands travel with their exit status; full outputs stay in the evidence
+    // directory so the closeout prompt cannot grow with the session log.
+    let outcomes: Vec<_> = r.tasks.iter().map(|t| json!({"id":t.id,"title":t.title,"criteria":t.acceptance_criteria,"attempt":t.attempts.last().map(|a| json!({
+        "id":a.id,"status":a.status,"summary":a.summary,"checks":a.declared_checks,"error":a.error,"review":a.review,
+        "commands":a.commands.iter().map(|c| json!({"command":c["command"],"exitCode":c["exitCode"]})).collect::<Vec<_>>()
+    }))})).collect();
     let prompt = format!("{}\nSos el Lead de cierre. Verificá que el OBJETIVO GENERAL completo se cumplió y que hay comprobaciones suficientes de integración, incluso sin un empleado QA. Las revisiones individuales no bastan si faltan flujos o contratos. Revisá evidencia observada y archivos de lectura disponibles. No inventes verificaciones. Podés crear tareas de corrección, integración o verificación asignadas a miembros existentes.\nOBJETIVO: {}\nEQUIPO: {}\nENTREGAS Y COMANDOS REALES: {}\nDIFF: {}\nRespondé SOLO JSON: {{\"status\":\"approved|changes_requested|review_error\",\"summary\":\"resumen verificable o defectos concretos\",\"criteriaSatisfied\":true,\"tasks\":[]}}. Si pedís cambios, tasks debe contener tareas NUEVAS con IDs únicos y el mismo contrato del plan: id,title,objective,assignedAgentId,repository,dependencies,expectedFiles,acceptanceCriteria. No apruebes si hay trabajo pendiente. Si falta implementar o verificar algo del objetivo, asigná tareas de corrección al equipo; no lo delegues al usuario como QA manual pendiente. Solo después de terminar e integrar todas las tareas, pedile al usuario su QA manual: puede decir «trabajo completado» o pedir mejoras. No esperes su intervención durante el trabajo ni reemplaces sus conclusiones por una aprobación propia. Las capturas no disponibles son una limitación explícita, no prueba visual.",POLICY,r.goal,serde_json::to_string(&r.team).map_err(|e|e.to_string())?,serde_json::to_string(&outcomes).map_err(|e|e.to_string())?,evidence::changes(&r)?);
     let prompt = format!(
         "{}\nOBSERVACIONES REALES DE LOS FLUJOS (antes/después y pasos, no inferidas): {}",
@@ -1578,7 +1626,9 @@ fn closeout(app: &AppHandle, id: &str) -> Result<bool, String> {
             r.configuration_changes.push(json!({"kind":"automaticCloseoutRepair","at":now(),"sessionId":session,"attempt":attempt+1,"reason":reason}));
             Ok(())
         })?;
-        let correction = format!("{}\nTu cierre anterior no confirma la entrega y no asigna tareas para resolver lo que falta. Eso es trabajo del equipo, no QA manual del usuario. Revisá el estado y devolvé approved solo si todo está comprobado; si falta algo, devolvé changes_requested con tareas concretas y válidas para implementarlo/verificarlo. No pidas al usuario ejecutar pruebas o corregir errores técnicos. Conservá criterios, permisos, archivos y resultados previos.\nCIERRE A CORREGIR: {}", prompt, reason);
+        // The session keeps its previous turn: repeat only the role and the
+        // correction instead of the whole closeout prompt.
+        let correction = format!("Sos el Lead de cierre. Tu cierre anterior no confirma la entrega y no asigna tareas para resolver lo que falta. Eso es trabajo del equipo, no QA manual del usuario. Revisá el estado y devolvé approved solo si todo está comprobado; si falta algo, devolvé changes_requested con tareas concretas y válidas para implementarlo/verificarlo. No pidas al usuario ejecutar pruebas o corregir errores técnicos. Conservá criterios, permisos, archivos y resultados previos.\nCIERRE A CORREGIR: {}", reason);
         let response = execute(app, id, &client, &session, &a, &correction, true)?;
         verdict = parse_json(&final_text(&response))?;
     }
@@ -1951,7 +2001,7 @@ fn schedule(app: &AppHandle, id: &str) -> Result<(), String> {
                 ));
             }
         }
-        if r.tasks.iter().all(|t| t.status == "completed")
+        if work_delivered(&r)
             && workers.is_empty()
             && coordinator.is_none()
         {
@@ -2059,6 +2109,10 @@ fn schedule(app: &AppHandle, id: &str) -> Result<(), String> {
                         recovered: false,
                     });
                 }
+                // A parked continuation relinquished its slot. Reacquire both
+                // capacity and file ownership under this lock before resuming.
+                let attempt = t.attempts.last_mut().ok_or("Intento inexistente")?;
+                attempt.status = "running".into();
                 Ok(true)
             })?;
             if !started {
@@ -2250,6 +2304,73 @@ mod tests {
         assert_eq!(ready_tasks(&r, &HashSet::new()).unwrap(), vec!["independent"]);
         r.tasks[0].attempts[0].finished_at = Some(1);
         assert_eq!(ready_tasks(&r, &HashSet::new()).unwrap(), vec!["overlapping", "independent"]);
+    }
+
+    fn suspended_fixture() -> Run {
+        let mut r: Run = serde_json::from_value(json!({"id":"r","goal":"g","team":super::super::domain::tests::team(),"skills":[],"status":"running","startedAt":0,"tasks":[],"summary":"","evidenceDir":"unused","artifacts":[],"baseline":[],"notified":false})).unwrap();
+        r.team.members[0].max_concurrent_tasks = 1;
+        r.tasks = ["verify", "generator"].iter().map(|id| serde_json::from_value(json!({"id":id,"title":id,"objective":id,"assignedAgentId":"lead","repository":"D:/repo","dependencies":[],"expectedFiles":[],"writePaths":[],"acceptanceCriteria":["check"]})).unwrap()).collect();
+        r.tasks[0].status = "waiting_dependency".into();
+        r.tasks[0].attempts.push(serde_json::from_value(json!({"id":"parked","agent":r.team.members[0],"sessionId":"original-worker","startedAt":0,"status":"waiting_dependency","summary":"Espero el artefacto","commands":[],"recovered":true,"resumeAfterMessageIds":["old-answer"]})).unwrap());
+        r
+    }
+
+    #[test]
+    fn suspended_verifier_releases_its_only_slot_and_files_for_the_generator_after_restart() {
+        let r = suspended_fixture();
+        let before = serde_json::to_value(&r.tasks[0]).unwrap();
+        assert_eq!(ready_tasks(&r, &HashSet::new()).unwrap(), vec!["generator"]);
+        let restored: Run = serde_json::from_str(&serde_json::to_string(&r).unwrap()).unwrap();
+        assert_eq!(ready_tasks(&restored, &HashSet::new()).unwrap(), vec!["generator"]);
+        assert_eq!(serde_json::to_value(&restored.tasks[0]).unwrap(), before);
+        // The worker thread can still be finishing its native bookkeeping.
+        assert!(ready_tasks(&r, &HashSet::from(["verify".into()])).unwrap().is_empty());
+    }
+
+    #[test]
+    fn resumed_continuation_reacquires_capacity_and_never_ignores_active_or_uncertain_sessions() {
+        let mut r = suspended_fixture();
+        r.tasks[0].status = "pending".into();
+        r.tasks[1].status = "running".into();
+        assert!(ready_tasks(&r, &HashSet::new()).unwrap().is_empty());
+        r.tasks[1].status = "completed".into();
+        assert_eq!(ready_tasks(&r, &HashSet::new()).unwrap(), vec!["verify"]);
+        r.tasks[0].status = "running".into();
+        r.tasks[0].attempts[0].status = "running".into();
+        r.tasks[1].status = "pending".into();
+        assert!(ready_tasks(&r, &HashSet::new()).unwrap().is_empty());
+        for (status, recovered, review) in [("blocked", true, None), ("waiting_dependency", false, None), ("waiting_dependency", true, Some("uncertain-review"))] {
+            r.tasks[0].status = "waiting_dependency".into();
+            let a = &mut r.tasks[0].attempts[0];
+            a.status = status.into(); a.recovered = recovered; a.review_session_id = review.map(String::from);
+            assert!(ready_tasks(&r, &HashSet::new()).unwrap().is_empty(), "{status} {recovered} {review:?}");
+        }
+    }
+
+    #[test]
+    fn removing_a_duplicate_does_not_prevent_delivery_or_satisfy_an_unfinished_task() {
+        let mut r = suspended_fixture();
+        r.tasks[0].status = "cancelled".into();
+        assert!(!work_delivered(&r));
+        r.tasks[1].status = "completed".into();
+        assert!(work_delivered(&r));
+        r.tasks[1].status = "blocked".into();
+        assert!(!work_delivered(&r));
+    }
+    #[test]
+    fn compaction_summaries_are_never_returned_as_the_final_result() {
+        let messages = json!([
+            {"info":{"role":"user"},"parts":[{"type":"text","text":"pedido"}]},
+            {"info":{"role":"assistant","id":"a1","finish":"stop","summary":true,"mode":"compaction"},"parts":[{"type":"text","text":"resumen de compactación"}]},
+            {"info":{"role":"assistant","id":"a2","finish":"stop","mode":"build"},"parts":[{"type":"text","text":"{\"status\":\"completed\"}"}]},
+        ]);
+        assert_eq!(final_text(&messages), "{\"status\":\"completed\"}");
+        let only_summary = json!([
+            {"info":{"role":"assistant","id":"a1","finish":"stop","summary":true,"mode":"compaction"},"parts":[{"type":"text","text":"resumen de compactación"}]},
+        ]);
+        assert!(final_text(&only_summary).is_empty());
+        assert!(engine_compaction(&only_summary[0]));
+        assert!(!engine_compaction(&messages[2]));
     }
     #[test]
     fn ui_tasks_require_real_completed_observations_and_do_not_replace_code_checks() {

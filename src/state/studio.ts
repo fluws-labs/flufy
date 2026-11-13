@@ -17,12 +17,16 @@ const layouts = Object.fromEntries(MODES.map(mode => [mode, {
 
 export const useStudio = create<{
   mode: StudioMode
+  readOnly: boolean
   teamRequest: { chatId: string } | null
   layouts: Record<StudioMode, StudioLayout>
   setMode: (mode: StudioMode) => void
+  setReadOnly: (readOnly: boolean) => void
   setLayout: (mode: StudioMode, patch: Partial<StudioLayout>) => void
 }>((set) => ({
   teamRequest: null,
+  readOnly: loadJson<unknown>("studio.readOnly", false) === true,
+  setReadOnly: readOnly => { saveJson("studio.readOnly", readOnly); set({ readOnly }) },
   mode: MODES.includes(saved) ? saved : "research",
   layouts,
   setMode: mode => { saveJson("studio.mode", mode); set({ mode }) },

@@ -28,6 +28,8 @@ import { readBase64 } from "../lib/fs"
 import { relativePath } from "../lib/paths"
 import { errorMessage } from "../lib/tauri"
 import { Icon, Spinner } from "../components/ui"
+import { markdownView, useMarkdownViews } from "./markdownViews"
+import { MarkdownPreview } from "./MarkdownPreview"
 
 const DIAGNOSTIC_SEVERITY: Record<Finding["severity"], Diagnostic["severity"]> = { alta: "error", media: "warning", baja: "info" }
 
@@ -108,7 +110,7 @@ function ImagePreview({ path }: { path: string }) {
 }
 
 export function FileEditor({ groupId, path, visible }: { groupId: string; path: string | null; visible: boolean }) {
-  const reading = useStudio(s => s.mode === "code")
+  const reading = useStudio(s => s.readOnly)
   const containerRef = useRef<HTMLDivElement>(null)
   const viewRef = useRef<EditorView | null>(null)
   const currentPath = useRef<string | null>(null)
@@ -119,6 +121,12 @@ export function FileEditor({ groupId, path, visible }: { groupId: string; path: 
   const reveal = useEditors((s) => s.reveal)
   const conflict = useDocs((s) => (path ? !!s.conflicts[docKey(path)] : false))
   const image = path ? isRasterImage(path) : false
+  const root = useProject((s) => s.root)
+  useMarkdownViews((s) => s.projects)
+  const preview = !!path && markdownView(root, path) === "preview"
+  const previewRef = useRef(preview)
+  previewRef.current = preview
+  const content = useDocs(s => path ? s.content[docKey(path)] : undefined)
 
   useEffect(() => {
     const view = new EditorView({
@@ -165,14 +173,15 @@ export function FileEditor({ groupId, path, visible }: { groupId: string; path: 
         if (!state) return
         currentPath.current = path
         if (view.state !== state) view.setState(state)
-        view.dispatch({ effects: readOnlyCompartment.reconfigure(EditorState.readOnly.of(reading)) })
-        view.contentDOM.setAttribute("aria-readonly", String(reading))
+        const readOnly = useStudio.getState().readOnly
+        view.dispatch({ effects: readOnlyCompartment.reconfigure(EditorState.readOnly.of(readOnly)) })
+        view.contentDOM.setAttribute("aria-readonly", String(readOnly))
         setActiveCode(path, view)
         publishCursor(view)
         setStatus("ready")
-        const r = consumeReveal(tabId({ kind: "file", path }))
+        const r = previewRef.current ? null : consumeReveal(tabId({ kind: "file", path }))
         if (r) requestAnimationFrame(() => goToLine(view, r.line, r.column, r.endLine, r.endColumn))
-        else if (useEditors.getState().activeGroupId === groupId) requestAnimationFrame(() => view.focus())
+        else if (!previewRef.current && useEditors.getState().activeGroupId === groupId) requestAnimationFrame(() => view.focus())
       })
       .catch((e) => {
         if (cancelled) return
@@ -185,7 +194,14 @@ export function FileEditor({ groupId, path, visible }: { groupId: string; path: 
     return () => {
       cancelled = true
     }
-  }, [path, image, groupId, reading])
+  }, [path, image, groupId])
+
+  useEffect(() => {
+    const view = viewRef.current
+    if (!view || !path || status !== "ready" || currentPath.current !== path) return
+    view.dispatch({ effects: readOnlyCompartment.reconfigure(EditorState.readOnly.of(reading)) })
+    view.contentDOM.setAttribute("aria-readonly", String(reading))
+  }, [path, reading, status])
 
   const reviewRuns = useAiReview((s) => s.runs)
   const dismissedFindings = useAiReview((s) => s.dismissed)
@@ -207,25 +223,29 @@ export function FileEditor({ groupId, path, visible }: { groupId: string; path: 
 
   useEffect(() => {
     const view = viewRef.current
-    if (!view || !path || status !== "ready" || !reveal) return
+    if (!view || !path || preview || status !== "ready" || !reveal) return
     if (reveal.tabId !== tabId({ kind: "file", path })) return
     const r = consumeReveal(reveal.tabId)
     if (r) requestAnimationFrame(() => goToLine(view, r.line, r.column, r.endLine, r.endColumn))
-  }, [reveal, path, status])
+  }, [reveal, path, preview, status])
 
   useEffect(() => {
-    if (!visible || activeGroupId !== groupId || status !== "ready") return
+    if (!visible || preview || activeGroupId !== groupId || status !== "ready") return
     const view = viewRef.current
     if (view && !view.hasFocus) requestAnimationFrame(() => view.focus())
-  }, [focusNonce, visible, activeGroupId, groupId, status])
+  }, [focusNonce, visible, preview, activeGroupId, groupId, status])
 
   const repo = path ? repoForPath(path) : null
-  const root = useProject((s) => s.root)
 
   return (
     <div className="file-editor" style={{ display: visible ? "flex" : "none" }}>
       {path && <Breadcrumbs path={path} />}
-      {path && reading && <div className="file-reading-banner"><Icon name="book" /><span>Solo lectura</span><small>Explorá, buscá y copiá código sin modificar el archivo.</small></div>}
+      {path && !image && status === "ready" && <div className="file-reading-banner">
+        <button type="button" className="btn btn-xs" aria-pressed={reading} title={reading ? "Permitir edición de todos los archivos" : "Poner todos los archivos en solo lectura"} onClick={() => useStudio.getState().setReadOnly(!reading)}>
+          <Icon name={reading ? "book" : "edit"} />{reading ? "Solo lectura" : "Editable"}
+        </button>
+        <small>{reading ? "Todos los archivos están en solo lectura. Hacé clic para habilitar la edición." : "Podés editar los archivos. Hacé clic en Editable para activar solo lectura global."}</small>
+      </div>}
       {conflict && path && (
         <div className="editor-banner warning">
           <Icon name="warning" />
@@ -248,7 +268,8 @@ export function FileEditor({ groupId, path, visible }: { groupId: string; path: 
         </div>
       )}
       <div className="file-editor-body">
-        <div ref={containerRef} className="cm-host" style={{ visibility: status === "ready" ? "visible" : "hidden" }} />
+        <div ref={containerRef} className="cm-host" style={{ display: preview ? "none" : undefined, visibility: status === "ready" ? "visible" : "hidden" }} />
+        {preview && path && status === "ready" && <MarkdownPreview key={path} path={path} text={content?.toString() ?? ""} />}
         {image && path && <ImagePreview path={path} />}
         {status === "loading" && (
           <div className="editor-overlay">

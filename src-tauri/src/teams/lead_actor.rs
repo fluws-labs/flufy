@@ -126,9 +126,16 @@ pub fn start(app: AppHandle) {
 /// Enqueue a real user message for a bound conversation. It is stored before
 /// any engine effect; the actor serializes it with current Lead work.
 pub fn send_user(app: &AppHandle, session: &str, text: &str) -> Result<String, String> {
+    send_user_context(app, session, text, &[])
+}
+
+pub fn send_user_context(app: &AppHandle, session: &str, text: &str, context: &[String]) -> Result<String, String> {
     let text = text.trim();
     if text.is_empty() || text.len() > 64_000 {
         return Err("Escribí un mensaje de hasta 64 KB".into());
+    }
+    if context.iter().map(String::len).sum::<usize>() > 256_000 {
+        return Err("El contexto del mensaje supera los 256 KB; reducí la selección adjunta".into());
     }
     let chat = super::bound_chat(app, session)?.ok_or("Esta conversación no tiene un Lead vinculado")?;
     let message_id = format!("msg_{}", id());
@@ -138,7 +145,7 @@ pub fn send_user(app: &AppHandle, session: &str, text: &str) -> Result<String, S
             &chat,
             &format!("user:{}", message_id),
             "user.message_received",
-            &json!({ "messageId": message_id, "text": text }),
+            &json!({ "messageId": message_id, "text": text, "context": context }),
             super::lead_policy::priority("user.message_received"),
             now(),
         )?;
@@ -350,7 +357,17 @@ fn lead_parts(events: &[Value]) -> Vec<Value> {
 [Eventos del equipo]
 {}", serde_json::to_string_pretty(&other).unwrap_or_default()));
         }
-        return vec![json!({ "type": "text", "text": text })];
+        let mut parts = vec![json!({ "type": "text", "text": text })];
+        // Keep the visible user message intact. Preview identity, preferences
+        // and selected text are durable prompt context, not file attachments.
+        for event in events.iter().filter(|event| event["kind"] == "user.message_received") {
+            for text in event["payload"]["context"].as_array().into_iter().flatten().filter_map(Value::as_str) {
+                if !text.trim().is_empty() {
+                    parts.push(json!({ "type": "text", "text": text, "synthetic": true }));
+                }
+            }
+        }
+        return parts;
     }
     if events.len() == 1 && events[0]["kind"] == "run.attention" {
         let summary = events[0]["payload"]["summary"].as_str().unwrap_or("Hay bloqueos pendientes");
@@ -626,6 +643,20 @@ mod tests {
         let parts = lead_parts(&[json!({"kind":"user.message_received","payload":{"text":"Arreglá el login"}})]);
         assert_eq!(parts.len(), 1);
         assert_eq!(parts[0]["text"], "Arreglá el login");
+    }
+    #[test]
+    fn automatic_context_survives_the_durable_inbox_without_polluting_the_user_message() {
+        let event = json!({"kind":"user.message_received","payload":{"text":"Analizá dónde estamos y cuánto falta",
+            "context":["[FLUFY_PREVIEW_IDENTITY]{\"taskId\":\"original-task\"}","Preferencias de diseño: conservar la tarea vigente",""]}});
+        let restored: Value = serde_json::from_str(&serde_json::to_string(&event).unwrap()).unwrap();
+        let parts = lead_parts(&[restored, json!({"kind":"run.blocked","payload":{"status":"cancelled","summary":"15/21 tareas"}})]);
+        assert!(parts[0]["text"].as_str().unwrap().starts_with("Analizá dónde estamos y cuánto falta"));
+        assert!(parts[0]["text"].as_str().unwrap().contains("cancelled"));
+        assert!(!parts[0]["text"].as_str().unwrap().contains("FLUFY_PREVIEW_IDENTITY"));
+        assert_eq!(parts.len(), 3);
+        assert_eq!(parts[1]["synthetic"], true);
+        assert!(parts[1]["text"].as_str().unwrap().contains("original-task"));
+        assert_eq!(parts[2]["synthetic"], true);
     }
     #[test]
     fn mixed_events_are_framed_as_team_data() {

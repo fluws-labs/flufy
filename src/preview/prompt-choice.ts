@@ -2,11 +2,15 @@ import type { PreviewClient, PreviewIdentity } from "./types.ts"
 
 /** The checkbox decides at send time; loading a chat must never ask or choose. */
 export async function preparePreviewChoice(client: Pick<PreviewClient, "load" | "choose">, identity: PreviewIdentity, enabled: boolean): Promise<void> {
-  const state = await client.load(identity)
-  // A saved design and its approval remain attached to their original task.
-  if (state?.currentRevisionId || state?.revisions.length) return
-  if (enabled ? state?.status === "draft" : state?.status === "skipped") return
-  await client.choose(identity, enabled ? "create" : "skip")
+  try {
+    const state = await client.load(identity)
+    // A saved design and its approval remain attached to their original task.
+    if (state?.currentRevisionId || state?.revisions.length) return
+    if (enabled ? state?.status === "draft" : state?.status === "skipped") return
+    await client.choose(identity, enabled ? "create" : "skip")
+  } catch (error) {
+    if (enabled) throw error
+  }
 }
 
 export function previewPreferenceContext(enabled: boolean): string {

@@ -1,0 +1,12 @@
+Espacio de trabajo con modos
+- Diseñar, Equipo, Investigar y Código conviven en la misma ventana y conservan borradores al cambiar de modo.
+- Código abre un lector de archivos en solo lectura, con explorador y búsqueda, sin mezclarlo con la conversación.
+
+Previsualización y equipos
+- La previsualización se elige con un checkbox persistente por chat y se aplica al enviar; no vuelve a preguntar en cada mensaje.
+- Los diseños guardados conservan su tarea y su identidad de previsualización al delegar al equipo.
+- Los equipos nuevos arrancan con acceso total dentro de sus permisos scoped; el switch del chat permite desactivarlo.
+- El Lead conversacional se abre dentro de Equipo, sin duplicar el compositor ni mezclar sesiones internas.
+
+Otros
+- El rechazo regional de modelos Go explica la acción concreta: elegir Global o cambiar de modelo.

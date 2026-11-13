@@ -124,3 +124,21 @@ test("en foco-chat con ventana angosta el ancho igual se puede mover", async ({ 
   // Debe haber margen para agrandar y achicar (antes quedaba trabado con min == max).
   expect(range.hi).toBeGreaterThan(range.lo)
 })
+
+test("Código conserva el panel del agente al volver de Investigar", async ({ page }) => {
+  await boot(page)
+  await page.evaluate(async () => {
+    const { useLayout } = await import(/* @vite-ignore */ "/src/state/layout.ts")
+    const { useProject } = await import(/* @vite-ignore */ "/src/state/project.ts")
+    useProject.setState({ root: "D:/qa/studio", ready: true })
+    useLayout.setState({ agentVisible: true, panelVisible: true, activeView: "scm" })
+  })
+  await page.getByRole("button", { name: "Investigar", exact: true }).click()
+  await page.getByRole("button", { name: "Código", exact: true }).click()
+  const layout = await page.evaluate(async () => {
+    const { useLayout } = await import(/* @vite-ignore */ "/src/state/layout.ts")
+    const state = useLayout.getState()
+    return { agentVisible: state.agentVisible, panelVisible: state.panelVisible, activeView: state.activeView }
+  })
+  expect(layout).toEqual({ agentVisible: true, panelVisible: true, activeView: "scm" })
+})

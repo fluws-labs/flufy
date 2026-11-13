@@ -304,6 +304,67 @@ fn precommitted_tests_cannot_be_replaced_by_a_workers_success_claim() {
 }
 
 #[test]
+fn renamed_and_reassigned_duplicates_are_rejected_in_initial_plans_and_atomic_patches() {
+    let mut run = run();
+    let mut duplicate = run.tasks[0].clone();
+    duplicate.id = "replacement-generator".into();
+    duplicate.title = "Otro nombre para la misma entrega".into();
+    duplicate.dependencies = vec!["a".into()]; // Serializing duplicates is still waste.
+    duplicate.objective = format!("  {}  ", duplicate.objective.to_uppercase());
+    let mut other = run.team.members[0].clone(); other.id = "other".into();
+    run.team.members.push(other);
+    duplicate.assigned_agent_id = "other".into();
+    let mut proposed = plan(&run);
+    proposed.tasks.push(duplicate.clone());
+    assert!(validate(&proposed, &run.team, true).issues.iter().any(|i| i.code == PlanErrorCode::DuplicateDeliverable));
+    assert!(validate_plan(&proposed, &run.team).unwrap_err().contains("DUPLICATE_DELIVERABLE"));
+    let mut new_task = draft("replacement-generator", &["a"]);
+    new_task.expected_files = duplicate.expected_files;
+    new_task.write_paths = duplicate.write_paths;
+    let before = serde_json::to_value(&run).unwrap();
+    let request = patch(&run, PlanOperation::AddTask { task: new_task.clone() });
+    assert!(simulate_patch(&run, &request, "user").unwrap_err().contains("DUPLICATE_DELIVERABLE"));
+    assert_eq!(serde_json::to_value(&run).unwrap(), before);
+    // A named correction keeps its dependency and evidence, rather than hiding
+    // another ordinary task behind a new ID.
+    let request = patch(&run, PlanOperation::AddCorrection { for_task_id: "a".into(), task: new_task });
+    assert!(simulate_patch(&run, &request, "user").is_ok());
+}
+
+#[test]
+fn independent_reviews_and_cancelled_replacements_are_not_duplicate_deliverables() {
+    let mut run = run();
+    let mut review = run.tasks[0].clone();
+    review.id = "review".into();
+    review.objective = "Revisar el contrato y los casos negativos de la entrega".into();
+    review.acceptance_criteria = vec!["Las comprobaciones cubren el contrato original".into()];
+    review.dependencies = vec!["a".into()];
+    run.tasks.push(review);
+    assert!(validate(&plan(&run), &run.team, true).valid);
+    run.tasks.pop();
+    let mut replacement = run.tasks[0].clone(); replacement.id = "replacement".into();
+    run.tasks[0].status = "cancelled".into();
+    run.tasks.push(replacement);
+    assert!(validate(&plan(&run), &run.team, true).valid);
+    run.tasks[1].dependencies = vec!["a".into()];
+    assert!(validate(&plan(&run), &run.team, true).issues.iter().any(|i| i.code == PlanErrorCode::UnknownDependency));
+    assert!(validate_plan(&plan(&run), &run.team).is_err());
+}
+
+#[test]
+fn plan_patches_cannot_create_a_cycle_through_a_suspended_workers_runtime_wait() {
+    let mut run = run();
+    run.tasks[0].status = "waiting_dependency".into();
+    run.coordination.push(serde_json::from_value(json!({"id":"req","fromTaskId":"a","message":"Verificar entrega b","taskIds":["b"],"status":"waiting","summary":"Esperar generador","createdAt":1})).unwrap());
+    let before = serde_json::to_value(&run).unwrap();
+    let request = patch(&run, PlanOperation::UpdatePendingDependencies { task_id: "b".into(), dependencies: vec!["a".into()] });
+    assert!(simulate_patch(&run, &request, "user").unwrap_err().contains("espera circular"));
+    assert_eq!(serde_json::to_value(&run).unwrap(), before);
+    let request = patch(&run, PlanOperation::ReprioritizePending { task_id: "b".into(), priority: 5 });
+    assert!(simulate_patch(&run, &request, "user").is_ok());
+}
+
+#[test]
 fn native_discovery_observes_files_and_scripts_without_reading_secrets_or_creating_git() {
     let root = std::env::temp_dir().join(format!("flufy-plan-v2-{}", id()));
     std::fs::create_dir_all(&root).unwrap();

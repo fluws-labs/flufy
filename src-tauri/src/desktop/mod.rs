@@ -227,7 +227,31 @@ pub fn opencode_config(app: &AppHandle) -> Option<String> {
         config["plugin"].as_array_mut().unwrap().push(plugin);
     }
     crate::memory::extend_config(app, &mut config);
+    apply_small_model(app, &mut config);
     Some(config.to_string())
+}
+
+/// El motor usa `small_model` para tareas chicas como titular sesiones. Sin
+/// configurarlo elige `opencode/gpt-5.4-nano`, que puede estar deshabilitado
+/// para la cuenta y deja las sesiones como "New session - <fecha>". Apuntamos
+/// al modelo que el usuario ya eligió para chatear: tiene acceso demostrado.
+fn apply_small_model(app: &AppHandle, config: &mut Value) {
+    let prefs = app_data_file(app, "remote_prefs.json")
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        .unwrap_or(Value::Null);
+    if let Some(model) = small_model_from_prefs(&prefs) {
+        config["small_model"] = json!(model);
+    }
+}
+
+fn small_model_from_prefs(prefs: &Value) -> Option<String> {
+    let provider = prefs["model"]["providerID"].as_str()?.trim();
+    let model = prefs["model"]["modelID"].as_str()?.trim();
+    if provider.is_empty() || model.is_empty() {
+        return None;
+    }
+    Some(format!("{provider}/{model}"))
 }
 
 fn agent_config(state: &DesktopState) -> Value {
@@ -664,6 +688,20 @@ mod tests {
         ] {
             assert!(AGENT_POLICY.contains(phrase), "Falta en la política: {phrase}");
         }
+    }
+
+    #[test]
+    fn small_model_uses_the_model_the_user_selected() {
+        let prefs = json!({ "model": { "providerID": "opencode", "modelID": "deepseek-v4.1-flash-free" } });
+        assert_eq!(
+            small_model_from_prefs(&prefs).as_deref(),
+            Some("opencode/deepseek-v4.1-flash-free")
+        );
+        assert_eq!(small_model_from_prefs(&json!({})), None);
+        assert_eq!(
+            small_model_from_prefs(&json!({ "model": { "providerID": "", "modelID": "x" } })),
+            None
+        );
     }
 
     #[test]

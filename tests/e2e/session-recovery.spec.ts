@@ -36,6 +36,7 @@ async function setup(page: Page, restart = false) {
     readGate: null as Promise<void> | null,
   }
   await page.addInitScript(({ root, sessionID, restart }) => {
+    localStorage.setItem("guillecode:studio.mode", JSON.stringify("code"))
     localStorage.setItem(`guillecode:agent.openSessions@${root.toLowerCase()}`, JSON.stringify([sessionID]))
     localStorage.setItem(`guillecode:agent.activeSession@${root.toLowerCase()}`, JSON.stringify(sessionID))
     let callback = 0
