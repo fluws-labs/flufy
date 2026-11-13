@@ -12,16 +12,29 @@ pub(super) fn migrate(db: &mut Connection) -> Result<(), String> {
     let installed: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='team_lead_schema')", [], |r|r.get(0)).map_err(err)?;
     if installed {
         let version: i64 = db.query_row("SELECT version FROM team_lead_schema", [], |r|r.get(0)).map_err(err)?;
-        if version == 1 { return Ok(()); }
+        if version == 2 { super::ledger::migrate(db)?; return Ok(()); }
+        if version == 1 {
+            // v2 adds the durable coordination brake; existing bindings, events,
+            // inbox rows and reserved turns are preserved.
+            let tx = db.transaction_with_behavior(TransactionBehavior::Immediate).map_err(err)?;
+            tx.execute_batch(
+                "CREATE TABLE IF NOT EXISTS team_lead_guard(
+                    chat_id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL,
+                    repeats INTEGER NOT NULL, next_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+                 UPDATE team_lead_schema SET version=2;"
+            ).map_err(err)?;
+            tx.commit().map_err(err)?;
+            return super::ledger::migrate(db);
+        }
         return Err("LEAD_SCHEMA_UNSUPPORTED: no se modificó la base del equipo".into());
     }
     let tx = db.transaction_with_behavior(TransactionBehavior::Immediate).map_err(err)?;
     tx.execute_batch(
         "CREATE TABLE IF NOT EXISTS team_lead_schema(version INTEGER NOT NULL);
-         INSERT INTO team_lead_schema(version) SELECT 1 WHERE NOT EXISTS(SELECT 1 FROM team_lead_schema);"
+         INSERT INTO team_lead_schema(version) SELECT 2 WHERE NOT EXISTS(SELECT 1 FROM team_lead_schema);"
     ).map_err(err)?;
     let version: i64 = tx.query_row("SELECT version FROM team_lead_schema", [], |row| row.get(0)).map_err(err)?;
-    if version != 1 { return Err("LEAD_SCHEMA_UNSUPPORTED: no se modificó la base del equipo".into()); }
+    if version != 2 { return Err("LEAD_SCHEMA_UNSUPPORTED: no se modificó la base del equipo".into()); }
     tx.execute_batch(
         "CREATE TABLE IF NOT EXISTS team_conversation_bindings(
             source_session_id TEXT PRIMARY KEY, team_chat_id TEXT NOT NULL UNIQUE,
@@ -43,9 +56,13 @@ pub(super) fn migrate(db: &mut Connection) -> Result<(), String> {
                 CHECK(status IN ('prepared','dispatching','uncertain','completed')),
             created_at INTEGER NOT NULL, finished_at INTEGER);
          CREATE UNIQUE INDEX IF NOT EXISTS team_lead_one_active
-            ON team_lead_turns(chat_id) WHERE status != 'completed';"
+            ON team_lead_turns(chat_id) WHERE status != 'completed';
+         CREATE TABLE IF NOT EXISTS team_lead_guard(
+            chat_id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL,
+            repeats INTEGER NOT NULL, next_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);"
     ).map_err(err)?;
-    tx.commit().map_err(err)
+    tx.commit().map_err(err)?;
+    super::ledger::migrate(db)
 }
 
 fn err(e: rusqlite::Error) -> String { e.to_string() }
@@ -128,6 +145,25 @@ pub(super) fn enqueue(tx: &rusqlite::Transaction<'_>, chat: &str, command: &str,
     if let Some(priority) = priority {
         tx.execute("INSERT INTO team_inbox(event_id,chat_id,priority,status) VALUES(?1,?2,?3,'pending')",params![event_id,chat,priority]).map_err(err)?;
     }
+    // Observational ledger: why the Lead was queued (or why an event stayed in
+    // the UI). A ledger failure never blocks the durable event.
+    let (session_id, project) = super::ledger::context(tx, chat);
+    let (run_id, task_id) = super::ledger::ids(payload);
+    let lead_turn = priority.is_some();
+    let _ = super::ledger::record(tx, super::ledger::Entry {
+        at: now,
+        project,
+        session_id,
+        chat_id: chat.into(),
+        run_id,
+        task_id,
+        source: "event".into(),
+        reason: kind.into(),
+        kind: if lead_turn { "lead.turn" } else { "event.ui" }.into(),
+        events_preserved: 1,
+        outcome: if lead_turn { "queued" } else { "ui_only" }.into(),
+        ..Default::default()
+    });
     Ok(Receipt {event_id,sequence})
 }
 
@@ -157,6 +193,15 @@ pub(super) fn current(db: &Connection, chat: &str) -> Result<Option<LeadTurn>,St
 pub(super) fn claim(db: &mut Connection, chat: &str, now: i64) -> Result<Option<LeadTurn>,String> {
     let tx = db.transaction_with_behavior(TransactionBehavior::Immediate).map_err(err)?;
     if current(&tx,chat)?.is_some() { return Ok(None); }
+    // Repeated automatic wakes for the same material situation wait instead of
+    // producing a new turn. Pending events stay pending; a user message clears
+    // the brake and any newly arrived information changes the fingerprint.
+    if let Some((fingerprint, has_user_message)) = super::lead_guard::pending_signature(&tx, chat)? {
+        if !super::lead_guard::admit(&tx, chat, &fingerprint, has_user_message, now)? {
+            tx.commit().map_err(err)?;
+            return Ok(None);
+        }
+    }
     let session: Option<String> = tx.query_row("SELECT source_session_id FROM team_conversation_bindings WHERE team_chat_id=?1",[chat],|r|r.get(0)).optional().map_err(err)?;
     let session_id = session.ok_or("CONVERSATION_NOT_BOUND")?;
     let rows = {
@@ -356,5 +401,51 @@ mod tests {
         complete(&tx, "chat", &turn.turn_id, 7).unwrap();
         tx.commit().unwrap();
         assert_eq!(claim(&mut db, "chat", 8).unwrap().unwrap().event_ids.len(), 1);
+    }
+    fn notice(db: &mut Connection, command: &str, task: &str) -> Receipt {
+        let tx = db.transaction().unwrap();
+        let receipt = enqueue(&tx, "chat", command, "run.attention", &json!({
+            "runId": "r1", "taskId": task, "status": "blocked", "error": "timeout",
+        }), super::super::lead_policy::priority("run.attention"), 2).unwrap();
+        tx.commit().unwrap();
+        receipt
+    }
+    fn finish_turn(db: &mut Connection, at: i64) {
+        let turn = claim(db, "chat", at).unwrap().unwrap();
+        dispatching(db, &turn.turn_id).unwrap();
+        let tx = db.transaction().unwrap();
+        complete(&tx, "chat", &turn.turn_id, at + 1).unwrap();
+        tx.commit().unwrap();
+    }
+    #[test]
+    fn repeated_notices_wait_before_another_wake_and_new_information_releases() {
+        let mut db = database();
+        notice(&mut db, "n1", "T1");
+        finish_turn(&mut db, 1_000);
+        notice(&mut db, "n2", "T1");
+        finish_turn(&mut db, 2_000);
+        notice(&mut db, "n3", "T1");
+        assert!(claim(&mut db, "chat", 3_000).unwrap().is_none(), "the third identical wake waits");
+        finish_turn(&mut db, 17_000);
+        notice(&mut db, "n4", "T2");
+        assert!(claim(&mut db, "chat", 17_100).unwrap().is_some(), "a different task is materially new information");
+    }
+    #[test]
+    fn a_pending_user_message_always_wakes_and_clears_the_brake() {
+        let mut db = database();
+        notice(&mut db, "n1", "T1");
+        finish_turn(&mut db, 1_000);
+        notice(&mut db, "n2", "T1");
+        finish_turn(&mut db, 2_000);
+        notice(&mut db, "n3", "T1");
+        assert!(claim(&mut db, "chat", 3_000).unwrap().is_none());
+        let tx = db.transaction().unwrap();
+        enqueue(&tx, "chat", "user", "user.message_received", &json!({"messageId":"msg_1","text":"Seguí"}), Some(50), 3_100).unwrap();
+        tx.commit().unwrap();
+        let turn = claim(&mut db, "chat", 3_100).unwrap().unwrap();
+        assert_eq!(turn.prompt_message_id, "msg_1");
+        assert_eq!(turn.event_ids.len(), 1, "the user message is dispatched alone");
+        let exists: Option<String> = db.query_row("SELECT chat_id FROM team_lead_guard WHERE chat_id='chat'", [], |r| r.get(0)).optional().unwrap();
+        assert!(exists.is_none(), "the user instruction releases the brake");
     }
 }

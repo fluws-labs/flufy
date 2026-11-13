@@ -447,6 +447,13 @@ export function registerBuiltinCommands(): void {
       run: () => openEditor({ kind: "resources" }),
     },
     {
+      id: "localModels.open",
+      title: "Modelos locales: qué puedo correr, descargar y usar",
+      category: "Flufy",
+      icon: "server",
+      run: () => openEditor({ kind: "localModels" }),
+    },
+    {
       id: "routines.new",
       title: "Nueva rutina programada",
       category: "Flufy",

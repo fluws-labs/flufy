@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import {
   abortSession,
   addContext,
@@ -21,6 +21,7 @@ import {
   type ContextUsage,
 } from "../state/agent"
 import { setApprovalForSession, useApprovals } from "../state/approvals"
+import { bubbleDraft, bubbleOut } from "../state/bubbles"
 import { isTeamSession } from "../team/session-index"
 import { openEditor, useEditors } from "../state/editors"
 import { CHATGPT } from "../state/accounts"
@@ -31,6 +32,7 @@ import { notify } from "../state/toasts"
 import { rankFuzzy } from "../lib/fuzzy"
 import { basename, joinPath, relativePath } from "../lib/paths"
 import { modelKey } from "../lib/opencode"
+import { localModelUsesAgent } from "../lib/localModels"
 import { isBubbleWindow, windowLabel } from "../lib/windows"
 import { clock, formatTokens, percent } from "../lib/format"
 import { FileIcon, Highlighted, Icon, Kbd } from "../components/ui"
@@ -123,12 +125,14 @@ export function Composer({
   compact,
   usage,
   onPreviewOpen,
+  preferences,
 }: {
   sessionId: string | null
   busy: boolean
   compact?: boolean
   usage?: ContextUsage | null
   onPreviewOpen?: () => void
+  preferences?: ReactNode
 }) {
   const root = useProject((s) => s.root)
   const runtimeKey = sessionId ?? draftRuntimeKey(root, windowLabel())
@@ -148,7 +152,12 @@ export function Composer({
   const globalAgent = useAgent((s) => s.agentName)
   const agents = useAgent((s) => s.agents)
   const isBubble = isBubbleWindow()
-  const agentName = runtime.agent ?? (isBubble ? BUBBLE_AGENT : globalAgent)
+  const localModel = model.providerID === "ollama"
+  const simpleLocal = localModel && !localModelUsesAgent(model.modelID)
+  // La burbuja siempre es el chat de la PC: ve la pantalla y maneja la ventana
+  // elegida. Si se conservara el agente de la conversación de origen, el chat
+  // quedaría sin herramientas de escritorio y sin escena observada.
+  const agentName = simpleLocal ? "local" : isBubble ? BUBBLE_AGENT : runtime.agent ?? globalAgent
   const shownAgent = agentName
   const commands = useAgent((s) => s.commands)
   const composerFocus = useAgent((s) => s.composerFocus)
@@ -372,8 +381,13 @@ export function Composer({
     const connectItem = models.some((m) => m.providerID === CHATGPT)
       ? []
       : [{ id: CONNECT_CHATGPT, label: "Conectar ChatGPT…", description: "Usá los modelos de tu suscripción Plus o Pro", icon: "account", group: "Cuentas" }]
-    const item = await pickOne([...items, ...connectItem], { title: "Modelo del agente", placeholder: "Buscar modelo", favorites: true })
+    const localItem = [{ id: "localModels", label: "¿Qué puedo correr?", description: "Modelos locales: descargar y usar", icon: "server", group: "Modelos locales" }]
+    const item = await pickOne([...items, ...localItem, ...connectItem], { title: "Modelo del agente", placeholder: "Buscar modelo", favorites: true })
     if (!item) return
+    if (item.id === "localModels") {
+      openEditor({ kind: "localModels" })
+      return
+    }
     if (item.id === CONNECT_CHATGPT) {
       openEditor({ kind: "accounts" })
       return
@@ -562,7 +576,7 @@ export function Composer({
       <BrowserWorkspace key={sessionId ?? "draft"} sessionId={sessionId} />
       <div className="composer-footer">
         <div className="composer-options">
-          {!isBubble && (
+          {!isBubble && !simpleLocal && (
             <button type="button" className="composer-pill agent-pill" onClick={() => void chooseAgent()} title="Modo del agente">
               <Icon name={shownAgent === "plan" ? "checklist" : "hubot"} />
               <span>{shownAgent}</span>
@@ -683,11 +697,17 @@ export function Composer({
         </div>
       </div>
       {root && <div className="composer-preferences">
-        <label className={`composer-preview-toggle${previewEnabled ? " enabled" : ""}`} title="Si está marcado, el agente prepara una previsualización antes de implementar. No vuelve a preguntarte.">
-          <input type="checkbox" checked={previewEnabled} onChange={e => patchSessionRuntime(draftKey, { previewEnabled: e.target.checked })} />
-          <span>Previsualización</span>
-        </label>
-        {previewEnabled && onPreviewOpen && sessionId && <button type="button" className="composer-preference-action" onClick={onPreviewOpen}>Ver diseño <Icon name="arrow-up-right" /></button>}
+        {!simpleLocal && <>
+          <label className={`composer-preview-toggle${previewEnabled ? " enabled" : ""}`} title="Si está marcado, el agente prepara una previsualización antes de implementar. No vuelve a preguntarte.">
+            <input type="checkbox" checked={previewEnabled} onChange={e => patchSessionRuntime(draftKey, { previewEnabled: e.target.checked })} />
+            <span>Previsualización</span>
+          </label>
+          {previewEnabled && onPreviewOpen && sessionId && <button type="button" className="composer-preference-action" onClick={onPreviewOpen}>Ver diseño <Icon name="arrow-up-right" /></button>}
+        </>}
+        {!isBubble && !isTeamSession(approveKey) && <button type="button" className="composer-preference-action" title="Abrir esta conversación en una burbuja flotante" onClick={() => void (sessionId ? bubbleOut(sessionId) : bubbleDraft())}>
+          <Icon name="multiple-windows" /> Burbuja
+        </button>}
+        {preferences}
         {sessionId && <button type="button" className="composer-preference-action composer-new-task" disabled={busy || sending} title="Empezar una tarea distinta, conservando la conversación y los diseños anteriores" onClick={() => startPreviewTask(root, sessionId)}>Nueva tarea <Icon name="add" /></button>}
       </div>}
     </div>
