@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test"
 
-// Real xterm selection, context menu, Composer and session runtime; native shell
-// IPC is mocked and no model request is sent by these actions.
+// Real xterm selection, floating actions, Composer and session runtime; native
+// shell IPC is mocked and no model request is sent by these actions.
 async function boot(page: Page) {
   await page.addInitScript(() => {
     localStorage.clear()
@@ -58,24 +58,47 @@ async function select(page: Page) {
   await page.evaluate(() => (window as any).terminals.getInstance("chat-term").term.select(0, 0, 25))
 }
 
-async function menu(page: Page) {
-  await page.locator(".xterm-screen").click({ button: "right", position: { x: 8, y: 8 } })
+async function dragSelect(page: Page) {
+  const metrics = await page.evaluate(() => {
+    const term = (window as any).terminals.getInstance("chat-term").term
+    return { cols: term.cols, rows: term.rows }
+  })
+  const box = (await page.locator(".xterm-screen").boundingBox())!
+  const w = box.width / metrics.cols, y = box.y + box.height / metrics.rows / 2
+  await page.mouse.move(box.x + w / 4, y)
+  await page.mouse.down()
+  await page.mouse.move(box.x + 25.25 * w, y, { steps: 8 })
+  await page.mouse.up()
 }
 
+const floating = (page: Page) => page.locator(".terminal-selection-actions")
 const context = (page: Page) => page.evaluate(() => (window as any).agent.useAgent.getState().context)
+const calls = (page: Page) => page.evaluate(() => (window as any).__calls as { command: string }[])
 
-test("disables actions without selection and preserves selection without pasting on right click", async ({ page }) => {
+test("restores the native context menu and keeps the xterm selection and clipboard native", async ({ page }) => {
   await boot(page)
-  await menu(page)
-  await expect(page.getByRole("button", { name: "Agregar al chat", exact: true })).toBeDisabled()
-  await expect(page.getByRole("button", { name: "Consultar este error", exact: true })).toBeDisabled()
-  await page.keyboard.press("Escape")
-  await select(page)
+  await expect(floating(page)).toHaveCount(0)
+
+  // The surface no longer cancels contextmenu: WebView2 can show its own menu.
+  const prevented = await page.evaluate(() => {
+    const el = document.querySelector(".terminal-surface") as HTMLElement
+    const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true })
+    el.dispatchEvent(event)
+    return event.defaultPrevented
+  })
+  expect(prevented).toBe(false)
+  await expect(page.locator(".context-menu")).toHaveCount(0)
+
+  await dragSelect(page)
+  await expect(floating(page)).toBeVisible()
   const before = await page.evaluate(() => (window as any).terminals.getInstance("chat-term").term.getSelection())
-  await menu(page)
+  expect(before).toBe("Error: connection refused")
+  await page.locator(".xterm-screen").click({ button: "right", position: { x: 8, y: 8 } })
   expect(await page.evaluate(() => (window as any).terminals.getInstance("chat-term").term.getSelection())).toBe(before)
-  await expect(page.getByRole("button", { name: "Agregar al chat", exact: true })).toBeEnabled()
-  expect(await page.evaluate(() => (window as any).__calls.filter((c: any) => c.command === "terminal_write"))).toEqual([])
+  await expect(page.locator(".context-menu")).toHaveCount(0)
+  await page.keyboard.press("Escape")
+  await expect(floating(page)).toHaveCount(0)
+  expect((await calls(page)).filter(c => c.command === "terminal_write")).toEqual([])
 })
 
 test("captures a fixed selection, preserves the draft, appends a question without duplicate context and allows removal", async ({ page }, info) => {
@@ -86,24 +109,25 @@ test("captures a fixed selection, preserves the draft, appends a question withou
   })
   const composer = page.locator(".composer textarea")
   await composer.fill("Me falla solamente en desarrollo.")
-  await select(page)
-  await menu(page)
-  // A live terminal change after opening the menu must not alter the snapshot.
-  await page.evaluate(() => (window as any).terminals.getInstance("chat-term").term.clearSelection())
-  await page.getByRole("button", { name: "Agregar al chat", exact: true }).click()
+  await dragSelect(page)
+  await expect(floating(page)).toBeVisible()
+  // A live terminal change after the snapshot must not alter the captured text.
+  await page.evaluate(() => new Promise<void>(done => (window as any).terminals.getInstance("chat-term").term.write("\r\nnew output", done)))
+  await floating(page).getByRole("button", { name: "Agregar al chat", exact: true }).click()
+  await expect(floating(page)).toHaveCount(0)
   await expect(composer).toHaveValue("Me falla solamente en desarrollo.")
   await expect(composer).toBeFocused()
   await expect(page.locator(".context-chip.terminal")).toContainText("Terminal")
   await expect.poll(() => context(page)).toMatchObject([{ kind: "terminal", text: "Error: connection refused", cwd: "C:/project" }])
   expect(await page.evaluate(() => (window as any).useLayout.getState().agentVisible)).toBe(true)
-  await select(page)
-  await menu(page)
-  await page.getByRole("button", { name: "Consultar este error", exact: true }).click()
+  await dragSelect(page)
+  await expect(floating(page)).toBeVisible()
+  await floating(page).getByRole("button", { name: "Consultar este error", exact: true }).click()
   await expect(composer).toHaveValue("Me falla solamente en desarrollo.\n\n¿Qué indica este error y qué debería revisar para resolverlo?")
   expect(await context(page)).toHaveLength(1)
-  await select(page)
-  await menu(page)
-  await page.getByRole("button", { name: "Consultar este error", exact: true }).click()
+  await dragSelect(page)
+  await expect(floating(page)).toBeVisible()
+  await floating(page).getByRole("button", { name: "Consultar este error", exact: true }).click()
   await expect(composer).toHaveValue("Me falla solamente en desarrollo.\n\n¿Qué indica este error y qué debería revisar para resolverlo?")
   expect(await context(page)).toHaveLength(1)
   await page.evaluate(() => (window as any).terminals.getInstance("chat-term").term.clear())
@@ -111,7 +135,7 @@ test("captures a fixed selection, preserves the draft, appends a question withou
   await page.screenshot({ path: info.outputPath("terminal-context-composer.png") })
   await page.locator(".context-chip.terminal").getByRole("button", { name: "Quitar" }).click()
   await expect(page.locator(".context-chip.terminal")).toHaveCount(0)
-  expect(await page.evaluate(() => (window as any).__calls.filter((c: any) => /terminal_write|open_url|fs_read_file/.test(c.command)))).toEqual([])
+  expect((await calls(page)).filter(c => /terminal_write|open_url|fs_read_file/.test(c.command))).toEqual([])
   expect(chatRequests).toEqual([])
 })
 
@@ -124,8 +148,10 @@ test("keeps snapshots per session and serializes terminal output as text alongsi
     w.agent.addContext({ kind: "selection", path: "C:/project/src/main.ts", startLine: 10, endLine: 12, text: "const n = 1" })
   })
   await select(page)
-  await menu(page)
-  await page.getByRole("button", { name: "Consultar este error", exact: true }).click()
+  const header = page.getByRole("button", { name: "Acciones de la selección" })
+  await expect(header).toBeEnabled()
+  await header.click()
+  await page.locator(".context-menu").getByRole("button", { name: "Consultar este error", exact: true }).click()
   expect(await context(page)).toHaveLength(2)
   const parts = await page.evaluate(() => (window as any).agent.contextToParts("C:/project", (window as any).agent.useAgent.getState().context, null))
   expect(parts).toHaveLength(2)
@@ -148,18 +174,9 @@ test("keeps snapshots per session and serializes terminal output as text alongsi
   await expect(page.locator(".composer textarea")).toHaveValue("borrador A\n\n¿Qué indica este error y qué debería revisar para resolverlo?")
 })
 
-test("keeps mouse selection and copying native and handles menu keyboard actions without writing to the shell", async ({ page }) => {
+test("keeps mouse selection and copying native and never writes selection actions to the shell", async ({ page }) => {
   await boot(page)
-  const metrics = await page.evaluate(() => {
-    const term = (window as any).terminals.getInstance("chat-term").term
-    return { cols: term.cols, rows: term.rows }
-  })
-  const box = (await page.locator(".xterm-screen").boundingBox())!
-  const w = box.width / metrics.cols, y = box.y + box.height / metrics.rows / 2
-  await page.mouse.move(box.x + w / 4, y)
-  await page.mouse.down()
-  await page.mouse.move(box.x + 25.25 * w, y, { steps: 8 })
-  await page.mouse.up()
+  await dragSelect(page)
   const copied = await page.evaluate(() => {
     const term = (window as any).terminals.getInstance("chat-term").term
     const data = new DataTransfer()
@@ -167,16 +184,13 @@ test("keeps mouse selection and copying native and handles menu keyboard actions
     return { selected: term.getSelection(), copied: data.getData("text/plain") }
   })
   expect(copied).toEqual({ selected: "Error: connection refused", copied: "Error: connection refused" })
-  await menu(page)
-  await page.keyboard.press("Enter") // No focused action: must not submit to the shell.
-  await expect(page.locator(".context-menu")).toBeVisible()
+  await expect(floating(page)).toBeVisible()
   await page.keyboard.press("Escape")
-  await expect(page.locator(".context-menu")).toHaveCount(0)
-  await menu(page)
-  await page.keyboard.press("ArrowDown")
-  await page.keyboard.press("ArrowDown")
-  await page.keyboard.press("Enter")
+  await expect(floating(page)).toHaveCount(0)
+  await dragSelect(page)
+  await expect(floating(page)).toBeVisible()
+  await floating(page).getByRole("button", { name: "Consultar este error", exact: true }).click()
   await expect(page.locator(".context-chip.terminal")).toHaveCount(1)
   await expect(page.locator(".composer textarea")).toHaveValue("¿Qué indica este error y qué debería revisar para resolverlo?")
-  expect(await page.evaluate(() => (window as any).__calls.filter((c: any) => c.command === "terminal_write"))).toEqual([])
+  expect((await calls(page)).filter(c => c.command === "terminal_write")).toEqual([])
 })

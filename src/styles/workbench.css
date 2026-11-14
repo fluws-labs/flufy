@@ -569,6 +569,35 @@ body.resizing-y * {
   min-height: 0;
   position: relative;
 }
+.terminal-selection-actions {
+  position: absolute;
+  z-index: 30;
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  background: var(--bg-overlay);
+  border-radius: 8px;
+  box-shadow: var(--shadow-md), 0 0 0 1px var(--border-strong);
+  font-family: var(--font);
+  animation: fade-in 0.12s;
+}
+.terminal-selection-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--fg);
+}
+.terminal-selection-actions button:hover {
+  background: var(--accent-bg-strong);
+}
+.terminal-selection-actions .codicon {
+  font-size: 13px;
+  color: var(--accent-strong);
+}
 .terminal-host {
   position: absolute;
   inset: 0;

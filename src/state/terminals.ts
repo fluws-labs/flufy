@@ -42,6 +42,7 @@ type TerminalsState = {
   shells: ShellInfo[]
   defaultShell: string | null
   searches: Record<string, { open: boolean; query: string; resultIndex: number; resultCount: number }>
+  selections: Record<string, string>
 }
 
 const DEFAULT_SHELL_KEY = "terminal.defaultShell"
@@ -52,6 +53,7 @@ export const useTerminals = create<TerminalsState>(() => ({
   shells: [],
   defaultShell: loadJson<string | null>(DEFAULT_SHELL_KEY, null),
   searches: {},
+  selections: {},
 }))
 
 export function setDefaultShell(shell: string | null): void {
@@ -150,6 +152,16 @@ function patchSearch(id: string, patch: Partial<TerminalsState["searches"][strin
   useTerminals.setState(s => ({ searches: { ...s.searches, [id]: {
     ...(s.searches[id] ?? { open: false, query: "", resultIndex: -1, resultCount: 0 }), ...patch,
   } } }))
+}
+
+export function setTerminalSelection(id: string, text: string): void {
+  if ((useTerminals.getState().selections[id] ?? "") === text) return
+  useTerminals.setState((s) => {
+    const selections = { ...s.selections }
+    if (!text) delete selections[id]
+    else selections[id] = text
+    return { selections }
+  })
 }
 
 export function openTerminalSearch(id: string): void {
@@ -251,6 +263,7 @@ export function createTerminal(
   term.onResize(({ cols, rows }) => {
     void terminalResize(id, cols, rows).catch(() => undefined)
   })
+  term.onSelectionChange(() => setTerminalSelection(id, term.getSelection()))
   instances.set(id, { term, fit, search, host, ready, opened: false })
   useTerminals.setState((s) => ({ terminals: [...s.terminals, info], activeId: id }))
   if (opts.show !== false) useLayout.getState().showPanel("terminal")
@@ -321,9 +334,11 @@ export async function killTerminal(id: string): Promise<void> {
   useTerminals.setState((s) => {
     const searches = { ...s.searches }
     delete searches[id]
+    const selections = { ...s.selections }
+    delete selections[id]
     const terminals = s.terminals.filter((t) => t.id !== id)
     const activeId = s.activeId === id ? (terminals[terminals.length - 1]?.id ?? null) : s.activeId
-    return { terminals, activeId, searches }
+    return { terminals, activeId, searches, selections }
   })
 }
 
@@ -374,6 +389,7 @@ export function clearTerminal(id: string | null): void {
   if (!inst) return
   inst.search.clearDecorations()
   patchSearch(id, { resultIndex: -1, resultCount: 0 })
+  setTerminalSelection(id, "")
   inst.term.clear()
   void terminalWrite(id, "\x0c").catch(() => undefined)
 }

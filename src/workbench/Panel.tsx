@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react"
+import { useEffect, useRef, useState } from "react"
 import { useLayout } from "../state/layout"
 import {
   attachTerminal,
@@ -18,14 +18,31 @@ import {
   useTerminals,
 } from "../state/terminals"
 import { useOutput } from "../state/output"
-import { openContextMenu, openMenuAt } from "../components/ContextMenu"
+import { openMenuAt } from "../components/ContextMenu"
 import { addTerminalContext, type ContextItem } from "../state/agent"
-import { useProject } from "../state/project"
 import { Icon, IconButton } from "../components/ui"
 import { clockTime } from "../lib/time"
 
+type TerminalSelectionSnapshot = Extract<ContextItem, { kind: "terminal" }>
+
+function terminalSelectionSnapshot(id: string, text: string): TerminalSelectionSnapshot | null {
+  const state = useTerminals.getState()
+  const info = state.terminals.find((t) => t.id === id)
+  if (!info || !text.trim()) return null
+  return { kind: "terminal", terminalId: id, title: terminalTitle(info, state.shells), cwd: info.cwd, text }
+}
+
+function addSelectionToChat(id: string, text: string, consult: boolean): void {
+  const snapshot = terminalSelectionSnapshot(id, text)
+  if (!snapshot) return
+  useLayout.getState().toggleAgent(true)
+  addTerminalContext(snapshot, consult)
+}
+
 function TerminalSurface({ id }: { id: string }) {
   const ref = useRef<HTMLDivElement>(null)
+  const [floating, setFloating] = useState<{ x: number; y: number; text: string } | null>(null)
+  const selection = useTerminals((s) => s.selections[id] ?? "")
   useEffect(() => {
     const el = ref.current
     if (!el) return
@@ -35,31 +52,60 @@ function TerminalSurface({ id }: { id: string }) {
     })
     return detach
   }, [id])
+  useEffect(() => {
+    if (!selection.trim()) setFloating(null)
+  }, [selection])
+  useEffect(() => {
+    if (!floating) return
+    const hide = () => setFloating(null)
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return
+      e.preventDefault()
+      e.stopPropagation()
+      hide()
+    }
+    window.addEventListener("resize", hide)
+    window.addEventListener("wheel", hide, { passive: true, capture: true })
+    window.addEventListener("keydown", onKey, true)
+    return () => {
+      window.removeEventListener("resize", hide)
+      window.removeEventListener("wheel", hide, { capture: true })
+      window.removeEventListener("keydown", onKey, true)
+    }
+  }, [floating])
   return <div ref={ref} className="terminal-surface"
     onMouseDownCapture={e => {
       // Keep right-click from moving xterm's selection or reporting a mouse
       // event to the shell. Left-click/drag selection and copying stay native.
       if (e.button === 2) { e.preventDefault(); e.stopPropagation() }
     }}
-    onContextMenuCapture={e => {
-      const state = useTerminals.getState()
-      const info = state.terminals.find(t => t.id === id)
+    onMouseUp={e => {
+      if (e.button !== 0) return
       const text = getInstance(id)?.term.getSelection() ?? ""
-      const project = useProject.getState().root
-      const snapshot: Extract<ContextItem, { kind: "terminal" }> | null = info && text.trim()
-        ? { kind: "terminal", terminalId: id, title: terminalTitle(info, state.shells), cwd: info.cwd, text }
-        : null
-      const add = (consult: boolean) => {
-        if (!snapshot || useProject.getState().root !== project) return
-        useLayout.getState().toggleAgent(true)
-        addTerminalContext(snapshot, consult)
-      }
-      // Capture before xterm can prepare its hidden textarea for native paste.
-      openContextMenu(e, [
-        { label: "Agregar al chat", icon: "sparkle", disabled: !snapshot, run: () => add(false) },
-        { label: "Consultar este error", icon: "comment-discussion", disabled: !snapshot, run: () => add(true) },
-      ])
-    }} />
+      if (!text.trim()) { setFloating(null); return }
+      const rect = e.currentTarget.getBoundingClientRect()
+      const x = Math.min(Math.max(8, e.clientX - rect.left + 8), Math.max(8, rect.width - 200))
+      const y = Math.min(Math.max(8, e.clientY - rect.top + 8), Math.max(8, rect.height - 44))
+      setFloating({ x, y, text })
+    }}>
+    {floating && (
+      <div className="terminal-selection-actions" role="toolbar" aria-label="Acciones de la selección"
+        style={{ left: floating.x, top: floating.y }} onMouseUp={e => e.stopPropagation()}>
+        <button type="button" onMouseDown={e => { e.preventDefault(); e.stopPropagation() }} onClick={() => {
+          addSelectionToChat(id, floating.text, false)
+          setFloating(null)
+        }}>
+          <Icon name="sparkle" /><span>Agregar al chat</span>
+        </button>
+        <button type="button" onMouseDown={e => { e.preventDefault(); e.stopPropagation() }} onClick={() => {
+          addSelectionToChat(id, floating.text, true)
+          setFloating(null)
+        }}>
+          <Icon name="comment-discussion" /><span>Consultar este error</span>
+        </button>
+      </div>
+    )}
+  </div>
 }
 
 function TerminalSearch({ id }: { id: string }) {
@@ -96,6 +142,7 @@ function TerminalsPanel() {
   const shells = useTerminals((s) => s.shells)
   const defaultShell = useTerminals((s) => s.defaultShell)
   const searchOpen = useTerminals(s => !!(s.activeId && s.searches[s.activeId]?.open))
+  const selection = useTerminals(s => (s.activeId ? s.selections[s.activeId] ?? "" : ""))
 
   useEffect(() => {
     let cancelled = false
@@ -136,6 +183,16 @@ function TerminalsPanel() {
                 if (searchOpen) closeTerminalSearch(activeId)
                 else openTerminalSearch(activeId)
               }
+            }} />
+            <IconButton icon="sparkle" title="Acciones de la selección" disabled={!selection.trim()} onClick={(e) => {
+              const state = useTerminals.getState()
+              const id = state.activeId
+              const text = id ? state.selections[id] ?? "" : ""
+              if (!id || !text.trim()) return
+              openMenuAt(e.currentTarget, [
+                { label: "Agregar al chat", icon: "sparkle", run: () => addSelectionToChat(id, text, false) },
+                { label: "Consultar este error", icon: "comment-discussion", run: () => addSelectionToChat(id, text, true) },
+              ])
             }} />
             <IconButton icon="add" title={defaultName ? `Nueva terminal (${defaultName})` : "Nueva terminal"} onClick={() => createTerminal()} />
             <IconButton icon="chevron-down" title="Elegir shell predeterminado" onClick={(e) => newMenu(e.currentTarget)} />
