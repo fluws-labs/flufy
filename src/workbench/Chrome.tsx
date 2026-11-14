@@ -57,12 +57,12 @@ import { modelKey } from "../lib/opencode"
 import { formatUsd, percent } from "../lib/format"
 import { clockTime } from "../lib/time"
 import { Icon, IconButton } from "../components/ui"
-import { openMenuAt } from "../components/ContextMenu"
+import { openMenuAt, type MenuItem } from "../components/ContextMenu"
 import { Logo } from "../components/Logo"
 import { UpdateButton } from "../components/Updates"
+import { MODE_PRESETS } from "../state/modePresets"
 import { useStudio, type StudioMode } from "../state/studio"
-
-let codeLayout: { activeView: ViewId; sidebarVisible: boolean; agentVisible: boolean; panelVisible: boolean } | null = null
+import { usePreviewTaskId } from "../agent/preview-identity"
 
 const VIEWS: Array<{ id: ViewId; icon: string; title: string; keys: string }> = [
   { id: "explorer", icon: "files", title: "Explorador", keys: "Ctrl+Shift+E" },
@@ -140,7 +140,11 @@ export function TitleBar() {
   const panel = useLayout((s) => s.panelVisible)
   const agent = useLayout((s) => s.agentVisible)
   const focusChat = useLayout((s) => s.focusChat)
-
+  const modeLayout = useStudio(s => s.layouts[mode])
+  const setStudioLayout = useStudio(s => s.setLayout)
+  const activeSessionId = useAgent(s => s.activeSessionId)
+  const designTaskId = usePreviewTaskId(activeSessionId)
+  const designReady = !!root && !!activeSessionId && !!designTaskId
   const projectMenu = (el: HTMLElement) =>
     openMenuAt(el, [
       { label: "Abrir carpeta…", icon: "folder-opened", keys: "ctrl+o", run: () => void pickProject() },
@@ -157,20 +161,24 @@ export function TitleBar() {
         : []),
     ])
 
-  const layoutMenu = (el: HTMLElement) =>
-    openMenuAt(el, [
-      { label: "Equilibrado: código + agente", icon: "layout", run: () => useLayout.getState().applyPreset("balanced") },
-      { label: "Foco en el agente", icon: "hubot", run: () => useLayout.getState().applyPreset("agent") },
-      { label: "Foco en el código", icon: "code", run: () => useLayout.getState().applyPreset("code") },
-      { label: "Revisión (git + agente)", icon: "diff-multiple", run: () => useLayout.getState().applyPreset("review") },
-      { separator: true },
-      {
+  const layoutMenu = (el: HTMLElement) => {
+    const items: MenuItem[] = MODE_PRESETS[mode].map((preset) => ({
+      label: preset.label,
+      icon: preset.icon,
+      run: () => useStudio.getState().applyPreset(preset.id),
+    }))
+    items.push({ separator: true })
+    if (mode === "code") {
+      items.push({
         label: focusChat ? "Salir del foco en el chat" : "Foco en el chat (ocultar editor)",
         icon: focusChat ? "screen-normal" : "screen-full",
         keys: "ctrl+alt+m",
         run: () => useLayout.getState().toggleFocusChat(),
-      },
-    ])
+      })
+    }
+    items.push({ label: "Restablecer disposición", icon: "discard", run: () => useStudio.getState().resetModeLayout() })
+    openMenuAt(el, items)
+  }
 
   return (
     <header className="title-bar">
@@ -184,12 +192,7 @@ export function TitleBar() {
       </div>
       <nav className="studio-mode-switch" aria-label="Modo de trabajo">
         {([["design", "Diseñar"], ["team", "Equipo"], ["research", "Investigar"], ["code", "Código"]] as [StudioMode, string][]).map(([id, label]) => <button key={id} type="button" aria-pressed={mode === id} className={mode === id ? "active" : ""} title={id === "code" ? "Explorar y editar los archivos del proyecto" : undefined} onClick={() => {
-          if (mode === "code" && id !== "code") {
-            const s = useLayout.getState()
-            codeLayout = { activeView: s.activeView, sidebarVisible: s.sidebarVisible, agentVisible: s.agentVisible, panelVisible: s.panelVisible }
-          }
           if (id === "code" && mode !== "code") {
-            useLayout.setState({ ...(codeLayout ?? { activeView: "explorer", sidebarVisible: true, agentVisible: false, panelVisible: false }), focusChat: false })
             const editors = useEditors.getState()
             const group = editors.groups.find(g => g.id === editors.activeGroupId)
             const active = group?.tabs.find(t => t.id === group.activeId)
@@ -207,12 +210,22 @@ export function TitleBar() {
         <IconButton icon="layout" title="Presets de layout" onClick={(e) => layoutMenu(e.currentTarget)} />
         <IconButton icon={sidebar ? "layout-sidebar-left" : "layout-sidebar-left-off"} title="Barra lateral (Ctrl+B)" active={sidebar} onClick={() => useLayout.getState().toggleSidebar()} />
         <IconButton icon={panel ? "layout-panel" : "layout-panel-off"} title="Panel inferior (Ctrl+J)" active={panel} onClick={() => useLayout.getState().togglePanel()} />
-        <IconButton icon={agent ? "layout-sidebar-right" : "layout-sidebar-right-off"} title="Agente (Ctrl+Alt+B)" active={agent} onClick={() => useLayout.getState().toggleAgent()} />
+        {mode === "code"
+          ? <IconButton icon={agent ? "layout-sidebar-right" : "layout-sidebar-right-off"} title="Agente (Ctrl+Alt+B)" active={agent} onClick={() => useLayout.getState().toggleAgent()} />
+          : mode === "design"
+            ? <IconButton icon="comment-discussion" title={designReady ? "Chat del diseño" : "Abrí un diseño para usar el chat"} active={designReady && modeLayout.chatOpen} disabled={!designReady} onClick={() => {
+              const next = !modeLayout.chatOpen
+              setStudioLayout("design", { chatOpen: next })
+              if (!next) useLayout.getState().toggleChatExpanded(false)
+            }} />
+            : <IconButton icon={modeLayout.inspectorCollapsed ? "layout-sidebar-right-off" : "layout-sidebar-right"} title="Contexto" active={!modeLayout.inspectorCollapsed} onClick={() => {
+              useLayout.getState().toggleChatExpanded(false)
+              setStudioLayout(mode, { inspectorCollapsed: !modeLayout.inspectorCollapsed })
+            }} />}
       </div>
     </header>
   )
 }
-
 function StatusItem({ icon, label, title, onClick, tone, spin, expanded }: { icon?: string; label?: string; title: string; onClick?: (e: React.MouseEvent<HTMLButtonElement>) => void; tone?: string; spin?: boolean; expanded?: boolean }) {
   return (
     <button type="button" className={`status-item${tone ? ` ${tone}` : ""}`} title={title} onClick={onClick} disabled={!onClick} aria-expanded={expanded}>
@@ -534,6 +547,7 @@ function goSection(go: GoUsage | null, usage: ProviderUsage | null, limits: Usag
 }
 
 export function StatusBar() {
+  const mode = useStudio(s => s.mode)
   const repo = useGit((s) => s.activeRepo)
   const status = useGit((s) => (s.activeRepo ? s.byRepo[s.activeRepo]?.status : null))
   const gitBusy = useGit((s) => s.busy)
@@ -645,14 +659,14 @@ export function StatusBar() {
             }}
           />
         )}
-        <StatusItem
+        {(!activeRoot || mode === "code") && <StatusItem
           icon={busyCount > 0 ? "loading" : "hubot"}
           spin={busyCount > 0}
           label={busyCount > 0 ? `${busyCount} trabajando` : sessionStatus(useAgent.getState().activeSessionId) === "idle" ? "agente listo" : ""}
           title="Panel del agente (Ctrl+Alt+B)"
           onClick={() => useLayout.getState().toggleAgent()}
           tone={busyCount > 0 ? "busy" : undefined}
-        />
+        />}
         <ResourceStatusItem />
         <DesktopStatusItem />
         <QuotaStatus />

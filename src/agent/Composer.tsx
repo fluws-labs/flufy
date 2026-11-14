@@ -75,6 +75,10 @@ function detectPopover(text: string, caret: number): Popover {
 
 function contextLabel(item: ContextItem, root: string | null): string {
   if (item.kind === "image") return item.filename
+  if (item.kind === "terminal") {
+    const lines = item.text.split(/\r?\n/).length
+    return `Terminal · ${item.title} · ${lines} ${lines === 1 ? "línea" : "líneas"}`
+  }
   const rel = root ? relativePath(root, item.path) : item.path
   if (item.kind === "selection") return `${basename(rel)}:${item.startLine}-${item.endLine}`
   return basename(rel)
@@ -423,7 +427,7 @@ export function Composer({
   }
 
   const modelName = models.find((m) => m.providerID === model.providerID && m.modelID === model.modelID)?.name ?? "Conectá un proveedor"
-  const showActive = includeActiveFile && activeFile && !context.some((c) => c.kind !== "image" && c.path === activeFile)
+  const showActive = includeActiveFile && activeFile && !context.some((c) => (c.kind === "file" || c.kind === "selection") && c.path === activeFile)
 
   return (
     <div
@@ -486,9 +490,11 @@ export function Composer({
             </span>
           )}
           {context.map((item, i) => (
-            <span key={i} className={`context-chip ${item.kind}`} title={item.kind === "image" ? item.filename : item.path}>
+            <span key={i} className={`context-chip ${item.kind}`} title={item.kind === "terminal" ? `${item.title}\nDirectorio inicial: ${item.cwd}\n\n${item.text}` : item.kind === "image" ? item.filename : item.path}>
               {item.kind === "image" ? (
                 <img src={item.url} alt="" title="Ver imagen" onClick={() => openImage(item.url, item.filename)} />
+              ) : item.kind === "terminal" ? (
+                <Icon name="terminal" />
               ) : item.kind === "selection" ? (
                 <Icon name="selection" />
               ) : (

@@ -26,7 +26,7 @@ import { closeThisWindow, closeToTray, hideToTray, hubAvailable, listenWindowClo
 import { listenBubbleDock } from "../state/bubbles"
 import { useZoom } from "../state/zoom"
 import { ActivityBar, StatusBar, TitleBar } from "./Chrome"
-import { Panel } from "./Panel"
+import { WorkspaceCenter } from "./WorkspaceCenter"
 import { EditorArea } from "../editor/EditorArea"
 import { AgentPanel } from "../agent/AgentPanel"
 import { ExplorerView } from "../views/ExplorerView"
@@ -160,13 +160,12 @@ export function Workbench() {
   const ready = useProject((s) => s.ready)
   const root = useProject((s) => s.root)
   const sidebarVisible = useLayout((s) => s.sidebarVisible)
-  const sidebarWidth = useLayout((s) => s.sidebarWidth)
-  const panelVisible = useLayout((s) => s.panelVisible)
-  const panelHeight = useLayout((s) => s.panelHeight)
-  const panelMaximized = useLayout((s) => s.panelMaximized)
+  const sidebarWidth = useLayout((s) => s.sizes.sidebarWidth)
   const agentVisible = useLayout((s) => s.agentVisible)
-  const agentWidth = useLayout((s) => s.agentWidth)
+  const agentWidth = useLayout((s) => s.sizes.agentWidth)
   const focusChat = useLayout((s) => s.focusChat)
+  const chatExpanded = useLayout(s => s.chatExpanded)
+  const focusStudioChat = chatExpanded && (studioMode === "research" || studioMode === "team")
   const start = useRef(0)
 
   useEffect(() => {
@@ -204,7 +203,7 @@ export function Workbench() {
       <TitleBar />
       <div className={`workbench-main${focusChat ? " focus-chat" : ""}`}>
         <ActivityBar />
-        {sidebarVisible && (
+        {sidebarVisible && !focusStudioChat && (
           <>
             <div className="side-bar-slot" style={{ width: sidebarWidth }}>
               <SideBar />
@@ -212,7 +211,7 @@ export function Workbench() {
             <Sash
               orientation="vertical"
               onDrag={(delta) => {
-                if (start.current === 0) start.current = useLayout.getState().sidebarWidth
+                if (start.current === 0) start.current = useLayout.getState().sizes.sidebarWidth
                 useLayout.getState().setSidebarWidth(start.current + delta)
               }}
               onDragEnd={() => {
@@ -221,45 +220,18 @@ export function Workbench() {
             />
           </>
         )}
-        {root && studioMode !== "code" ? <StudioWorkspace mode={studioMode} /> : <>
-        {!focusChat && (
-          <div className="center">
-            {root ? (
-              <>
-                {!(panelVisible && panelMaximized) && <EditorArea />}
-                {panelVisible && (
-                  <>
-                    {!panelMaximized && (
-                      <Sash
-                        orientation="horizontal"
-                        onDrag={(delta) => {
-                          if (start.current === 0) start.current = useLayout.getState().panelHeight
-                          useLayout.getState().setPanelHeight(start.current - delta)
-                        }}
-                        onDragEnd={() => {
-                          start.current = 0
-                        }}
-                        onDoubleClick={() => useLayout.getState().togglePanelMaximized()}
-                      />
-                    )}
-                    <div className="panel-slot" style={panelMaximized ? { flex: 1 } : { height: panelHeight }}>
-                      <Panel />
-                    </div>
-                  </>
-                )}
-              </>
-            ) : (
-              <NoProject />
-            )}
-          </div>
+        {((root && studioMode !== "code") || !focusChat) && (
+          <WorkspaceCenter hasProject={!!root} showPanel={studioMode === "code"}>
+            {root ? studioMode !== "code" ? <StudioWorkspace mode={studioMode} /> : <EditorArea /> : <NoProject />}
+          </WorkspaceCenter>
         )}
-        {agentVisible && (
+        {(!root || studioMode === "code") && agentVisible && (
           <>
             {!focusChat && (
               <Sash
                 orientation="vertical"
                 onDrag={(delta) => {
-                  if (start.current === 0) start.current = useLayout.getState().agentWidth
+                  if (start.current === 0) start.current = useLayout.getState().sizes.agentWidth
                   useLayout.getState().setAgentWidth(start.current - delta)
                 }}
                 onDragEnd={() => {
@@ -273,7 +245,6 @@ export function Workbench() {
             </div>
           </>
         )}
-        </>}
       </div>
       <StatusBar />
       <QuickInput />
