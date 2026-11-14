@@ -37,6 +37,7 @@ async function setup(page: Page, restart = false) {
   }
   await page.addInitScript(({ root, sessionID, restart }) => {
     localStorage.setItem("guillecode:studio.mode", JSON.stringify("code"))
+    if (!localStorage.getItem("guillecode:layout.v3")) localStorage.setItem("guillecode:layout.v3", JSON.stringify({ profiles: { code: { agentVisible: true } } }))
     localStorage.setItem(`guillecode:agent.openSessions@${root.toLowerCase()}`, JSON.stringify([sessionID]))
     localStorage.setItem(`guillecode:agent.activeSession@${root.toLowerCase()}`, JSON.stringify(sessionID))
     let callback = 0

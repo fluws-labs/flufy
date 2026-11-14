@@ -17,6 +17,7 @@ async function setup(page: Page) {
   const state: { status: Record<string, { type: string }> } = { status: { s2: { type: "busy" }, s3: { type: "busy" }, c3: { type: "busy" } } }
   await page.addInitScript(() => {
     localStorage.setItem("guillecode:studio.mode", JSON.stringify("code"))
+    if (!localStorage.getItem("guillecode:layout.v3")) localStorage.setItem("guillecode:layout.v3", JSON.stringify({ profiles: { code: { agentVisible: true } } }))
     localStorage.setItem("guillecode:agent.openSessions@c:/qa/demo", JSON.stringify(["s1", "s2", "s3"]))
     localStorage.setItem("guillecode:agent.activeSession@c:/qa/demo", JSON.stringify("s1"))
     if (!sessionStorage.getItem("qa-booted")) localStorage.removeItem("guillecode:agent.unseen")

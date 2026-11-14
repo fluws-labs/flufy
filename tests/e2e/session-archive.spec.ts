@@ -17,6 +17,7 @@ async function setup(page: Page, open = ["s1", "c1", "s2"]) {
   }
   await page.addInitScript(({ root, open }) => {
     localStorage.setItem("guillecode:studio.mode", JSON.stringify("code"))
+    if (!localStorage.getItem("guillecode:layout.v3")) localStorage.setItem("guillecode:layout.v3", JSON.stringify({ profiles: { code: { agentVisible: true } } }))
     const key = root.toLowerCase()
     if (!sessionStorage.getItem("qa-archive-booted")) {
       localStorage.setItem(`guillecode:agent.openSessions@${key}`, JSON.stringify(open))

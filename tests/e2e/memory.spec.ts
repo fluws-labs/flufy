@@ -15,6 +15,7 @@ const overview = {
 async function setup(page: Page) {
   await page.addInitScript(({ root, overview }) => {
     localStorage.setItem("guillecode:studio.mode", JSON.stringify("code"))
+    localStorage.setItem("guillecode:layout.v3", JSON.stringify({ profiles: { code: { agentVisible: true } } }))
     const key = root.toLowerCase()
     localStorage.setItem(`guillecode:agent.openSessions@${key}`, JSON.stringify(["s1"]))
     localStorage.setItem(`guillecode:agent.activeSession@${key}`, JSON.stringify("s1"))

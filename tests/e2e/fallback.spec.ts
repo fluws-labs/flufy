@@ -167,7 +167,7 @@ async function showTeamPanel(page: Page) {
   // full-width workspace has dedicated coverage in studio.spec.ts.
   await expect(page.getByRole("button", { name: "Equipo", exact: true })).toHaveAttribute("aria-pressed", "true")
   await page.getByRole("button", { name: "Código", exact: true }).click()
-  await page.getByRole("button", { name: "Agente (Ctrl+Alt+B)", exact: true }).click()
+  if (!await page.locator(".agent-panel").isVisible()) await page.getByRole("button", { name: "Agente (Ctrl+Alt+B)", exact: true }).click()
 }
 
 test.describe("fallback · IPC simulado", () => {
