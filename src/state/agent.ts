@@ -21,6 +21,7 @@ import { chooseAvailableModel, hasAccount, modelAvailable, modelVisible } from "
 import { localModelUsesAgent } from "../lib/localModels"
 import { isArchivedSession, sessionTreeIds } from "../lib/sessions"
 import { CONTINUE_INTERRUPTED_TURN, isRetryableProviderError, latestFailedAssistant, providerErrorMessage, retryContext, retryMessageID, retryPromptParts } from "../lib/autoretry"
+import { CONTINUITY_PROMPT, prematureCompletion } from "../lib/continuity"
 import { reconcileHistory } from "../lib/history"
 import { isBubbleWindow, windowLabel } from "../lib/windows"
 import { draftRuntimeKey, patchSessionRuntime, sessionRuntime } from "./session-runtime"
@@ -719,6 +720,7 @@ function applyStatus(sessionID: string, st: SessionStatus) {
     }, DONE_FLASH_MS)
     if (useAgent.getState().views[sessionID]) void ensureSessionView(sessionID, true)
     onSessionFinished(sessionID)
+    void superviseCompletion(sessionID)
   }
 }
 
@@ -739,6 +741,51 @@ export function syncStatuses(map: Record<string, SessionStatus>) {
 }
 
 const retryInFlight = new Set<string>()
+const continuityEpoch = new Map<string, number>()
+function invalidateContinuity(id: string) { continuityEpoch.set(id, (continuityEpoch.get(id) ?? 0) + 1) }
+
+async function superviseCompletion(sessionID: string): Promise<void> {
+  // Web Locks serialize separate windows sharing an engine. If unavailable,
+  // fail closed instead of risking duplicate tool execution.
+  if (!navigator.locks) return
+  const epoch = continuityEpoch.get(sessionID) ?? 0
+  await navigator.locks.request(`flufy-continuity:${sessionID}`, { ifAvailable: true }, async (lock) => {
+    if (!lock || epoch !== (continuityEpoch.get(sessionID) ?? 0)) return
+    try {
+      const opts = directoryOf(sessionID)
+      const session = await api<Session>("GET", `/session/${sessionID}`, undefined, undefined, opts)
+      if (session.parentID || session.title.startsWith("Equipo · ")) return
+      if (isTauri && await call<boolean>("teams_lead_bound", { session: sessionID }).catch(() => true)) return
+      const [history, states, permissions, questions, todos] = await Promise.all([
+        messagesForRetry(sessionID), api<Record<string, SessionStatus>>("GET", "/session/status", undefined, undefined, opts),
+        api<PermissionRequest[]>("GET", "/permission", undefined, undefined, opts), api<QuestionRequest[]>("GET", "/question", undefined, undefined, opts),
+        api<Todo[]>("GET", `/session/${sessionID}/todo`, undefined, undefined, opts),
+      ])
+      if (!history || !Array.isArray(permissions) || !Array.isArray(questions) || !Array.isArray(todos) || states[sessionID]?.type && states[sessionID].type !== "idle") return
+      if (permissions.some(p => p.sessionID === sessionID) || questions.some(q => q.sessionID === sessionID)) return
+      const candidate = prematureCompletion(history, todos)
+      if (!candidate || epoch !== (continuityEpoch.get(sessionID) ?? 0)) return
+      const admissionKey = `flufy.continuity.admission.${sessionID}`
+      if (localStorage.getItem(admissionKey) === candidate.answer) return
+      const failed = history.at(-1)!
+      const context = retryContext(history, failed)
+      // Re-read immediately before admission; never resend an uncertain POST.
+      const [latest, status] = await Promise.all([messagesForRetry(sessionID), api<Record<string, SessionStatus>>("GET", "/session/status", undefined, undefined, opts)])
+      if (epoch !== (continuityEpoch.get(sessionID) ?? 0) || !latest || prematureCompletion(latest, todos)?.answer !== candidate.answer || status[sessionID]?.type && status[sessionID].type !== "idle") return
+      // Persist before POST: another window or a lost acknowledgement must not
+      // replay a turn that may already have executed tools.
+      localStorage.setItem(admissionKey, candidate.answer)
+      await api("POST", `/session/${sessionID}/prompt_async`, {
+        messageID: retryMessageID(), model: context.model, agent: context.agent,
+        ...(context.variant ? { variant: context.variant } : {}),
+        parts: [{ type: "text", text: CONTINUITY_PROMPT, synthetic: true }],
+      }, undefined, { directory: context.directory })
+      notify.info("El agente continúa el trabajo pendiente", "Se detectó un cierre con trabajo sin terminar.")
+    } catch (error) {
+      console.warn("No se pudo comprobar la continuidad del chat", error)
+    }
+  })
+}
 
 async function messagesForRetry(sessionID: string): Promise<ChatMessage[] | null> {
   try {
@@ -1312,6 +1359,7 @@ export async function sendPrompt(
   sessionId: string | null,
   previewAdjustment?: PreviewAdjustment,
 ): Promise<string | null> {
+  if (sessionId) invalidateContinuity(sessionId)
   if (previewAdjustment && (!root || !sessionId || previewTaskKey(root, sessionId) !== previewTaskKey(previewAdjustment.identity.project, previewAdjustment.identity.conversationId))) {
     throw new Error("El editor de diseño no pertenece a esta conversación y proyecto.")
   }
@@ -1446,6 +1494,7 @@ export async function sendPrompt(
 
 export async function abortSession(id: string | null) {
   if (!id) return
+  invalidateContinuity(id)
   if (isTauri) await call("desktop_task_cancel", { session: id }).catch(() => undefined)
   await client.session.abort({ path: { id } }).catch(() => undefined)
 }
