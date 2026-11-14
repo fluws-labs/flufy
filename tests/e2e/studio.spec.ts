@@ -19,7 +19,8 @@ async function boot(page: Page) {
           if (command === "memory_overview") return { scope: "D:/qa/studio", slug: "studio", preferences: "", overview: "", tasks: [], notes: [{ id: "costs", title: "Costos Argentina", kind: "decision", preview: "Comparar comisiones", updated: "", source: "user" }] }
           if (command === "preview_get") return w.__studioDesign
           if (command === "preview_identity") return { provenance: [], approximations: [], assets: [] }
-          if (command === "browser_internal_pages") return []
+           if (command === "browser_internal_pages") return []
+           if (command === "terminal_shells") return [{ id: "pwsh", name: "PowerShell", path: "pwsh" }]
           if (command === "fs_read_dir") return [{ name: "reader.ts", path: "D:/qa/studio/reader.ts", is_dir: false, heavy: false, size: 26, repo: null }]
           if (command === "fs_read_file") return { content: "export const answer = 42;\n", bom: false, size: 26, mtime: 1 }
           return null
@@ -42,7 +43,8 @@ window.__vite_plugin_react_preamble_installed__ = true;
     const { useAgent } = await import("/src/state/agent.ts")
     const { useTeams } = await import("/src/state/teams.ts")
     const { useStudio } = await import("/src/state/studio.ts")
-    const { StudioWorkspace } = await import("/src/workbench/StudioWorkspace.tsx")
+     const { StudioWorkspace } = await import("/src/workbench/StudioWorkspace.tsx")
+     const { WorkspaceCenter } = await import("/src/workbench/WorkspaceCenter.tsx")
     const { TitleBar } = await import("/src/workbench/Chrome.tsx")
     const { ExplorerView } = await import("/src/views/ExplorerView.tsx")
     const { EditorArea } = await import("/src/editor/EditorArea.tsx")
@@ -50,7 +52,8 @@ window.__vite_plugin_react_preamble_installed__ = true;
     const { renderPreview } = await import("/src/preview/renderer.ts")
     const { previewTaskKey } = await import("/src/preview/task-identity.ts")
     await Promise.all(["base", "workbench", "agent", "teams", "studio", "views", "editor"].map(name => import(`/src/styles/${name}.css`)))
-    await import("/node_modules/@vscode/codicons/dist/codicon.css")
+     await import("/node_modules/@vscode/codicons/dist/codicon.css")
+     await import("/node_modules/@xterm/xterm/css/xterm.css")
     const h = React.createElement
     const project = "D:/qa/studio", sessionId = "studio-session", taskId = "visual-task"
     useProject.setState({ root: project, ready: true })
@@ -72,11 +75,124 @@ window.__vite_plugin_react_preamble_installed__ = true;
     w.__studioDesign = { identity: { projectRoot: project, sessionId, taskId, designId: "design" }, choice: "create", status: "draft", currentRevisionId: "r1", approvedRevisionId: null, revisions: [{ id: "r1", parentId: null, createdAt: 1, document: toNativeDocument(doc), ...renderPreview(doc), assets: [], notes: "QA" }], approvals: [] }
     function Harness() {
       const mode = useStudio(s => s.mode)
-      return h("div", { className: "workbench studio-workbench" }, h(TitleBar), mode === "code" ? h("div", { className: "workbench-main" }, h("aside", { className: "sidebar", style: { width: 240 } }, h(ExplorerView)), h("div", { className: "center" }, h(EditorArea))) : h(StudioWorkspace, { mode }))
+      return h("div", { className: "workbench studio-workbench" }, h(TitleBar), h("div", { className: "workbench-main" }, mode === "code" && h("aside", { className: "sidebar", style: { width: 240 } }, h(ExplorerView)), h(WorkspaceCenter, { hasProject: true, showPanel: mode === "code" }, mode === "code" ? h(EditorArea) : h(StudioWorkspace, { mode }))))
     }
     createRoot(document.getElementById("root")).render(h(Harness))
   })
 }
+
+async function terminalCommands(page: Page) {
+  await page.evaluate(async () => {
+    const commands = await import("/src/commands/registry.ts")
+    const { registerBuiltinCommands } = await import("/src/commands/builtin.ts")
+    const terminals = await import("/src/state/terminals.ts")
+    registerBuiltinCommands()
+    commands.installKeybindings()
+    await terminals.ensureShells()
+    Object.assign(window, { terminalTest: terminals, commands })
+  })
+}
+
+test("terminal commands reveal and focus the shared terminal in all four spaces without changing mode", async ({ page }, info) => {
+  await page.setViewportSize({ width: 1400, height: 900 })
+  await boot(page)
+  await terminalCommands(page)
+  for (const [label, mode] of [["Investigar", "research"], ["Diseñar", "design"], ["Equipo", "team"], ["Código", "code"]]) {
+    await page.getByRole("button", { name: label, exact: true }).click()
+    await page.evaluate(() => (window as any).commands.executeCommand("terminal.new"))
+    await expect(page.locator(".xterm-screen:visible")).toHaveCount(1)
+    await expect(page.locator(".panel-slot .xterm-helper-textarea")).toBeFocused()
+    await expect(page.getByRole("button", { name: label, exact: true })).toHaveAttribute("aria-pressed", "true")
+    await page.screenshot({ path: info.outputPath(`terminal-${mode}.png`) })
+    await page.keyboard.press("Control+j")
+    await expect(page.locator(".panel-slot")).toHaveCount(0)
+    await page.evaluate(() => (window as any).commands.executeCommand("terminal.toggle"))
+    await expect(page.locator(".panel-slot .xterm-helper-textarea")).toBeFocused()
+    await page.getByRole("button", { name: "Panel inferior (Ctrl+J)", exact: true }).click()
+    await expect(page.locator(".panel-slot")).toHaveCount(0)
+    await page.keyboard.press("Control+Backquote")
+    await expect(page.locator(".panel-slot .xterm-helper-textarea")).toBeFocused()
+    await expect(page.getByRole("button", { name: label, exact: true })).toHaveAttribute("aria-pressed", "true")
+  }
+  const calls = await page.evaluate(() => (window as any).__studioCalls)
+  expect(calls.filter((c: any) => c.command === "terminal_spawn")).toHaveLength(4)
+  expect(calls.filter((c: any) => c.command === "terminal_kill")).toHaveLength(0)
+  expect(calls.filter((c: any) => c.command === "terminal_write")).toHaveLength(0)
+})
+
+test("changing spaces preserves terminal instances and output; the shared panel resizes, maximizes and shows git output", async ({ page }) => {
+  await page.setViewportSize({ width: 1400, height: 900 })
+  await boot(page)
+  await terminalCommands(page)
+  // Showing the terminal before one exists must create a single default shell.
+  await page.evaluate(() => (window as any).commands.executeCommand("terminal.toggle"))
+  await expect(page.locator(".panel-slot .xterm-helper-textarea")).toBeFocused()
+  await page.evaluate(async () => {
+    const w = window as any
+    w.firstId = w.terminalTest.useTerminals.getState().activeId
+    w.firstInstance = w.terminalTest.getInstance(w.firstId)
+    await new Promise<void>(done => w.firstInstance.term.write("still running\r\n", done))
+  })
+  for (const label of ["Código", "Equipo", "Diseñar", "Investigar", "Código"]) {
+    await page.getByRole("button", { name: label, exact: true }).click()
+    // Cada espacio recuerda si su panel inferior está abierto; abrirlo acá no
+    // crea otra terminal, solo muestra la instancia compartida en este modo.
+    await page.evaluate(async () => {
+      const { useLayout } = await import(/* @vite-ignore */ "/src/state/layout.ts")
+      if (!useLayout.getState().panelVisible) useLayout.getState().showPanel("terminal")
+    })
+    await expect(page.locator(".xterm-screen:visible")).toHaveCount(1)
+    expect(await page.evaluate(() => {
+      const w = window as any, current = w.terminalTest.getInstance(w.firstId)
+      return current === w.firstInstance && current.host.isConnected && current.term.buffer.active.getLine(0).translateToString(true) === "still running"
+    })).toBe(true)
+    const before = (await page.locator(".panel-slot").boundingBox())!.height
+    if (label === "Código") await expect(page.locator(".workspace-center > .panel-slot")).toHaveCount(1)
+    else if (label === "Diseñar") await expect(page.locator(".studio-design-canvas > .panel-slot")).toHaveCount(1)
+    else await expect(page.locator(".studio-team-hub > .panel-slot, .studio-content > .panel-slot")).toHaveCount(1)
+    await expect(page.locator(".studio-sidebar .panel-slot, .studio-inspector .panel-slot")).toHaveCount(0)
+    const sash = (await page.locator(".sash-horizontal").boundingBox())!
+    await page.mouse.move(sash.x + sash.width / 2, sash.y + sash.height / 2)
+    await page.mouse.down()
+    await page.mouse.move(sash.x + sash.width / 2, sash.y + sash.height / 2 - 25, { steps: 3 })
+    await page.mouse.up()
+    await expect.poll(async () => (await page.locator(".panel-slot").boundingBox())!.height).toBeGreaterThan(before + 20)
+    await page.getByRole("button", { name: "Maximizar panel", exact: true }).click()
+    if (label === "Código") {
+      await expect(page.locator(".workspace-content")).toBeHidden()
+    } else {
+      await expect(page.locator(".studio-center-main:visible")).toHaveCount(0)
+    }
+    await expect(page.locator(".xterm-screen")).toBeVisible()
+    await page.getByRole("button", { name: "Restaurar tamaño", exact: true }).click()
+    if (label === "Código") await expect(page.locator(".workspace-content")).toBeVisible()
+    else await expect(page.locator(".studio-center-main:visible")).toHaveCount(1)
+    await page.evaluate(() => (window as any).commands.executeCommand("output.show"))
+    await expect(page.locator(".panel .output")).toBeVisible()
+    await page.locator(".panel-tabs").getByRole("button", { name: "Terminal", exact: true }).click()
+    await expect(page.locator(".xterm-screen")).toBeVisible()
+  }
+  await page.getByRole("button", { name: "Ocultar panel (Ctrl+J)", exact: true }).click()
+  await expect(page.locator(".panel-slot")).toHaveCount(0)
+  const calls = await page.evaluate(() => (window as any).__studioCalls)
+  expect(calls.filter((c: any) => c.command === "terminal_spawn")).toHaveLength(1)
+  expect(calls.filter((c: any) => c.command === "terminal_kill")).toHaveLength(0)
+})
+
+test("new-terminal shortcut reveals the panel in every space without forwarding the shortcut to the shell", async ({ page }) => {
+  await boot(page)
+  await terminalCommands(page)
+  for (const label of ["Diseñar", "Equipo", "Investigar", "Código"]) {
+    await page.getByRole("button", { name: label, exact: true }).click()
+    await page.keyboard.press("Control+Shift+Backquote")
+    await expect(page.locator(".panel-slot .xterm-helper-textarea")).toBeFocused()
+    await expect(page.getByRole("button", { name: label, exact: true })).toHaveAttribute("aria-pressed", "true")
+    await page.getByRole("button", { name: "Ocultar panel (Ctrl+J)", exact: true }).click()
+  }
+  const calls = await page.evaluate(() => (window as any).__studioCalls)
+  expect(calls.filter((c: any) => c.command === "terminal_spawn")).toHaveLength(4)
+  expect(calls.filter((c: any) => c.command === "terminal_write")).toHaveLength(0)
+})
 
 test("los tres modos usan datos reales del estado y conservan la tarea del diseño", async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1280, height: 800 })

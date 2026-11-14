@@ -2,7 +2,10 @@ import { create } from "zustand"
 import { Terminal } from "@xterm/xterm"
 import { FitAddon } from "@xterm/addon-fit"
 import { WebLinksAddon } from "@xterm/addon-web-links"
+import { SearchAddon } from "@xterm/addon-search"
 import { openUrl } from "@tauri-apps/plugin-opener"
+import { TerminalFileLinksAddon } from "../lib/terminalFileLinks"
+import type { TerminalFileReference } from "../lib/terminalFileReferences"
 import {
   terminalKill,
   terminalKillAll,
@@ -10,6 +13,7 @@ import {
   terminalShells,
   terminalSpawn,
   terminalWrite,
+  terminalFileReference,
   type ShellInfo,
 } from "../lib/term"
 import { basename, samePath } from "../lib/paths"
@@ -37,6 +41,8 @@ type TerminalsState = {
   activeId: string | null
   shells: ShellInfo[]
   defaultShell: string | null
+  searches: Record<string, { open: boolean; query: string; resultIndex: number; resultCount: number }>
+  selections: Record<string, string>
 }
 
 const DEFAULT_SHELL_KEY = "terminal.defaultShell"
@@ -46,6 +52,8 @@ export const useTerminals = create<TerminalsState>(() => ({
   activeId: null,
   shells: [],
   defaultShell: loadJson<string | null>(DEFAULT_SHELL_KEY, null),
+  searches: {},
+  selections: {},
 }))
 
 export function setDefaultShell(shell: string | null): void {
@@ -56,6 +64,7 @@ export function setDefaultShell(shell: string | null): void {
 type Instance = {
   term: Terminal
   fit: FitAddon
+  search: SearchAddon
   host: HTMLDivElement
   ready: Promise<void>
   opened: boolean
@@ -117,6 +126,71 @@ export function getInstance(id: string): Instance | undefined {
   return instances.get(id)
 }
 
+async function openTerminalReference(id: string, reference: TerminalFileReference): Promise<void> {
+  const { useFeatures } = await import("./features")
+  const root = useProject.getState().root
+  const workspace = useFeatures.getState().activeWorkspace
+  try {
+    const resolved = await terminalFileReference(id, reference.path, workspace, true)
+    if (!resolved.file) throw new Error("no se recibió un archivo de texto validado")
+    const [{ loadDocument }, { openFile }, { setMarkdownView }] = await Promise.all([
+      import("../editor/documents"), import("./editors"), import("../editor/markdownViews"),
+    ])
+    if (!instances.has(id) || useProject.getState().root !== root || useFeatures.getState().activeWorkspace !== workspace) return
+    // Seed from the guarded native read; do not reopen an unchecked path to display it.
+    await loadDocument(resolved.path, resolved.file)
+    if (!instances.has(id) || useProject.getState().root !== root || useFeatures.getState().activeWorkspace !== workspace) return
+    setMarkdownView(root, resolved.path, "code")
+    openFile(resolved.path, { line: reference.line, column: reference.column })
+  } catch (error) {
+    notify.warning("No se pudo abrir la referencia de la terminal", errorMessage(error))
+  }
+}
+
+function patchSearch(id: string, patch: Partial<TerminalsState["searches"][string]>): void {
+  if (!instances.has(id)) return
+  useTerminals.setState(s => ({ searches: { ...s.searches, [id]: {
+    ...(s.searches[id] ?? { open: false, query: "", resultIndex: -1, resultCount: 0 }), ...patch,
+  } } }))
+}
+
+export function setTerminalSelection(id: string, text: string): void {
+  if ((useTerminals.getState().selections[id] ?? "") === text) return
+  useTerminals.setState((s) => {
+    const selections = { ...s.selections }
+    if (!text) delete selections[id]
+    else selections[id] = text
+    return { selections }
+  })
+}
+
+export function openTerminalSearch(id: string): void {
+  patchSearch(id, { open: true })
+}
+
+export function closeTerminalSearch(id: string): void {
+  instances.get(id)?.search.clearDecorations()
+  patchSearch(id, { open: false, resultIndex: -1, resultCount: 0 })
+  focusTerminal(id)
+}
+
+export function searchTerminal(id: string, query: string, direction: "next" | "previous" = "next", incremental = false): void {
+  const instance = instances.get(id)
+  if (!instance?.opened) return
+  patchSearch(id, { query })
+  if (!query) {
+    instance.search.clearDecorations()
+    patchSearch(id, { resultIndex: -1, resultCount: 0 })
+    return
+  }
+  const options = { incremental, decorations: {
+    matchBackground: "#5c481b", matchOverviewRuler: "#e3b341",
+    activeMatchBackground: "#725c25", activeMatchBorder: "#e3b341", activeMatchColorOverviewRuler: "#e3b341",
+  } }
+  if (direction === "previous") instance.search.findPrevious(query, options)
+  else instance.search.findNext(query, options)
+}
+
 function patchInfo(id: string, patch: Partial<TerminalInfo>) {
   useTerminals.setState((s) => ({ terminals: s.terminals.map((t) => (t.id === id ? { ...t, ...patch } : t)) }))
 }
@@ -143,7 +217,19 @@ export function createTerminal(
   })
   const fit = new FitAddon()
   term.loadAddon(fit)
-  term.loadAddon(new WebLinksAddon((_event, uri) => void openUrl(uri)))
+  term.loadAddon(new TerminalFileLinksAddon({
+    cwd,
+    resolve: async path => {
+      const { useFeatures } = await import("./features")
+      return (await terminalFileReference(id, path, useFeatures.getState().activeWorkspace, false)).path
+    },
+    open: reference => { void openTerminalReference(id, reference) },
+  }))
+  // Ctrl+click is reserved for guarded source navigation, never an external fallback.
+  term.loadAddon(new WebLinksAddon((event, uri) => { if (!event.ctrlKey) void openUrl(uri) }))
+  const search = new SearchAddon()
+  term.loadAddon(search)
+  search.onDidChangeResults(result => patchSearch(id, result))
   const host = document.createElement("div")
   host.className = "terminal-host"
   const info: TerminalInfo = {
@@ -177,7 +263,8 @@ export function createTerminal(
   term.onResize(({ cols, rows }) => {
     void terminalResize(id, cols, rows).catch(() => undefined)
   })
-  instances.set(id, { term, fit, host, ready, opened: false })
+  term.onSelectionChange(() => setTerminalSelection(id, term.getSelection()))
+  instances.set(id, { term, fit, search, host, ready, opened: false })
   useTerminals.setState((s) => ({ terminals: [...s.terminals, info], activeId: id }))
   if (opts.show !== false) useLayout.getState().showPanel("terminal")
   return id
@@ -245,9 +332,13 @@ export async function killTerminal(id: string): Promise<void> {
   await terminalKill(id).catch(() => undefined)
   inst?.term.dispose()
   useTerminals.setState((s) => {
+    const searches = { ...s.searches }
+    delete searches[id]
+    const selections = { ...s.selections }
+    delete selections[id]
     const terminals = s.terminals.filter((t) => t.id !== id)
     const activeId = s.activeId === id ? (terminals[terminals.length - 1]?.id ?? null) : s.activeId
-    return { terminals, activeId }
+    return { terminals, activeId, searches, selections }
   })
 }
 
@@ -296,6 +387,9 @@ export function clearTerminal(id: string | null): void {
   if (!id) return
   const inst = instances.get(id)
   if (!inst) return
+  inst.search.clearDecorations()
+  patchSearch(id, { resultIndex: -1, resultCount: 0 })
+  setTerminalSelection(id, "")
   inst.term.clear()
   void terminalWrite(id, "\x0c").catch(() => undefined)
 }

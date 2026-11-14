@@ -46,6 +46,11 @@
 .studio-workspace { flex: 1; min-height: 0; min-width: 0; display: flex; container-type: inline-size; }
 .studio-mode-page { display: flex; flex: 1; min-height: 0; min-width: 0; }
 .studio-mode-page[hidden] { display: none; }
+.studio-center-main { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
+.studio-center-main[hidden] { display: none; }
+.studio-content > .studio-center-main > .session-pane { flex: 1; min-height: 0; }
+.studio-design-canvas { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
+.studio-team-hub { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
 @container (max-width: 1050px) {
   .studio-workspace .studio-columns { grid-template-columns: 180px minmax(0, 1fr) 200px; }
 }
@@ -258,7 +263,7 @@
 .studio-columns.chat-expanded > .studio-sidebar, .studio-columns.chat-expanded > .studio-inspector { display: none; }
 .studio-heading-actions .studio-chat-expand { margin-left: 0; }
 @media (max-width: 1150px) { .studio-columns.sidebar-collapsed { grid-template-columns: minmax(0, 1fr) 210px; } }
-@media (max-width: 900px) { .studio-columns.sidebar-collapsed { grid-template-columns: minmax(0, 1fr); } .studio-heading-actions .studio-chat-expand span { display: none; } }
+@media (max-width: 900px) { .studio-columns.sidebar-collapsed { grid-template-columns: minmax(0, 1fr); } .studio-heading-actions .studio-chat-expand span { display: none; } .studio-heading-actions .studio-show-context { display: none; } }
 @media (max-width: 650px) { .studio-columns.sidebar-collapsed { grid-template-columns: minmax(0, 1fr); } }
 
 /* Disenar: el chat ampliado no desmonta el canvas. */
