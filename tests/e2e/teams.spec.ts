@@ -177,14 +177,19 @@ async function createTeam(page: Page) {
   await expect(page.locator(".team-chat-header")).toContainText("Team Backend")
 }
 
+async function showAgentPanel(page: Page) {
+  const agentVisible = await page.evaluate(async () => (await import(/* @vite-ignore */ "/src/state/layout.ts")).useLayout.getState().agentVisible)
+  if (!agentVisible) await page.getByRole("button", { name: "Agente (Ctrl+Alt+B)", exact: true }).click()
+  await expect(page.locator(".agent-panel")).toBeVisible()
+}
+
 // Legacy side-panel coverage uses the actual Código + Agente controls. The
 // full-width team workspace and its navigation are covered in studio.spec.ts.
 async function openTeamPanel(page: Page) {
   await expect(page.getByRole("button", { name: "Equipo", exact: true })).toHaveAttribute("aria-pressed", "true")
   await page.getByRole("button", { name: "Código", exact: true }).click()
   await expect(page.getByRole("button", { name: "Código", exact: true })).toHaveAttribute("aria-pressed", "true")
-  const agentVisible = await page.evaluate(async () => (await import(/* @vite-ignore */ "/src/state/layout.ts")).useLayout.getState().agentVisible)
-  if (!agentVisible) await page.getByRole("button", { name: "Agente (Ctrl+Alt+B)", exact: true }).click()
+  await showAgentPanel(page)
   await expect(page.locator(".agent-panel .team-chat")).toBeVisible()
 }
 
@@ -287,10 +292,12 @@ test("equipo con modelos distintos y skills combinables persiste; chat normal si
   await page.getByTitle("Equipos IA", { exact: true }).click()
   await page.locator(".team-sidebar-card").first().getByRole("button", { name: "Configurar", exact: true }).click()
   await expect(page.locator(".team-employee").nth(2).getByLabel("Nombre del integrante")).toHaveValue("Ana Backend")
+  await showAgentPanel(page)
   await page.getByRole("button", { name: "Nuevo chat (Ctrl+Alt+N)", exact: true }).click()
   await page.getByText("Chat normal", { exact: true }).click()
   await expect(page.locator(".team-chat:visible")).toHaveCount(0)
   await expect(page.locator(".composer")).toBeVisible()
+  await page.evaluate(async () => (await import(/* @vite-ignore */ "/src/state/layout.ts")).useLayout.getState().showView("teams", false))
   await page.locator(".team-sidebar-card").last().getByRole("button", { name: "Team Backend", exact: true }).click()
   await openTeamPanel(page)
   await expect(page.locator(".team-chat")).toBeVisible()
@@ -927,7 +934,7 @@ test("el historial pliega cada equipo completo y conserva los chats normales al 
   await expect(group.getByRole("button", { name: "Hablar con el Lead" })).toBeVisible()
   await group.getByRole("button", { name: "Hablar con el Lead" }).click()
   await openTeamPanel(page)
-  await page.getByTitle(/Sesiones del agente/).click()
+  await page.evaluate(async () => (await import(/* @vite-ignore */ "/src/state/layout.ts")).useLayout.getState().showView("agents", false))
   await expect(page.locator(".team-chat-header")).toContainText("Listo para tu revisión")
   await page.getByPlaceholder("Filtrar sesiones").fill("Subagente anidado")
   await expect(group).toHaveCount(1)
