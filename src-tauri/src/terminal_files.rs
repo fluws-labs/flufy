@@ -175,7 +175,12 @@ mod safe_windows {
             actual_roots.push(final_path(&handle)?);
             guards.push(handle);
         }
-        let mut handle = walk(&path, &roots, read, &mut guards, 0)?;
+        // A previous resolution returns the handle-normalized path, which can
+        // differ from the supplied root (for example Windows 8.3 short names).
+        // Both forms are authorized only after resolving and pinning the roots.
+        let mut allowed_roots = roots.clone();
+        allowed_roots.extend(actual_roots.iter().cloned());
+        let mut handle = walk(&path, &allowed_roots, read, &mut guards, 0)?;
         let actual = final_path(&handle)?;
         // Final normalized names come from open handles, not string canonicalization.
         // Exact component checks also fail closed for case-sensitive Windows folders.
