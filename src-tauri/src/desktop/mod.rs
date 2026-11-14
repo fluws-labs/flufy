@@ -239,10 +239,8 @@ pub fn opencode_config(app: &AppHandle) -> Option<String> {
     Some(config.to_string())
 }
 
-/// El motor usa `small_model` para tareas chicas como titular sesiones. Sin
-/// configurarlo elige `opencode/gpt-5.4-nano`, que puede estar deshabilitado
-/// para la cuenta y deja las sesiones como "New session - <fecha>". Apuntamos
-/// al modelo que el usuario ya eligió para chatear: tiene acceso demostrado.
+/// Conserva el modelo elegido para las demás tareas pequeñas del motor. El
+/// agente de títulos tiene su propio modelo gratuito en `agent_config`.
 fn apply_small_model(app: &AppHandle, config: &mut Value) {
     let prefs = app_data_file(app, "remote_prefs.json")
         .and_then(|path| std::fs::read_to_string(path).ok())
@@ -284,6 +282,9 @@ fn agent_config(state: &DesktopState) -> Value {
         "mcp": mcp,
         "permission": { "desktop_*": "allow", "browser_*": "allow", "teams_preview_*": "allow" },
         "agent": {
+            "title": {
+                "model": "opencode/glm-5.3-flash-free",
+            },
             "escritorio": {
                 "mode": "primary",
                 "description": PC_DESCRIPTION,
@@ -681,6 +682,7 @@ mod tests {
         assert_eq!(esc["mode"], "primary");
         assert_eq!(esc["permission"]["desktop_*"], "allow");
         assert_eq!(esc["permission"]["browser_*"], "allow");
+        assert_eq!(config["agent"]["title"]["model"], "opencode/glm-5.3-flash-free");
         let prompt = esc["prompt"].as_str().unwrap();
         assert!(prompt.starts_with("Sos el agente"));
         assert!(prompt.contains("# Manejar la PC del usuario"));
