@@ -521,6 +521,7 @@ pub fn run() {
             desktop::context::desktop_context_get,
             desktop::context::desktop_context_select,
             desktop::context::desktop_context_prepare,
+            desktop::browse::browse_status,
             desktop::browser::browser_workspace,
             desktop::browser::browser_chrome_workspace,
             desktop::internal_browser::browser_internal_open,
