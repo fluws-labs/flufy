@@ -33,6 +33,8 @@ import { rankFuzzy } from "../lib/fuzzy"
 import { basename, joinPath, relativePath } from "../lib/paths"
 import { modelKey } from "../lib/opencode"
 import { localModelUsesAgent } from "../lib/localModels"
+import { parseVoiceCommand } from "../lib/voice-text"
+import { applyVoiceCommand } from "../state/auto-speech"
 import { isBubbleWindow, windowLabel } from "../lib/windows"
 import { clock, formatTokens, percent } from "../lib/format"
 import { FileIcon, Highlighted, Icon, Kbd } from "../components/ui"
@@ -134,6 +136,7 @@ export function Composer({
   const runtimeKey = sessionId ?? draftRuntimeKey(root, windowLabel())
   const runtime = useSessionRuntime(runtimeKey)
   const previewEnabled = runtime.previewEnabled === true
+  const autoSpeech = runtime.autoSpeech === true
   const globalContext = useAgent((s) => s.context)
   const context = runtime.context ?? globalContext
   const includeActiveFile = useAgent((s) => s.includeActiveFile)
@@ -294,13 +297,16 @@ export function Composer({
         file: item,
       }))
     }
-    return rankFuzzy(commands, popover.query, (c) => c.name, 10).map(({ item, match }) => ({
+    const local = "tts".startsWith(popover.query.toLowerCase())
+      ? [{ id: "tts", label: "/tts", description: "Leer las respuestas en voz alta al terminar", positions: [1, 2, 3], file: null as string | null }]
+      : []
+    return [...local, ...rankFuzzy(commands, popover.query, (c) => c.name, 10).map(({ item, match }) => ({
       id: item.name,
       label: `/${item.name}`,
       description: item.description ?? "",
       positions: match.positions.map((p) => p + 1),
       file: null as string | null,
-    }))
+    }))]
   }, [popover, files, commands])
 
   const updateText = (value: string, caret: number) => {
@@ -328,6 +334,12 @@ export function Composer({
   const submit = async (now = false, override?: string) => {
     const value = (override ?? text).trim()
     if (!value && context.length === 0) return
+    const voice = parseVoiceCommand(value)
+    if (voice) {
+      const applied = await applyVoiceCommand(draftKey, voice)
+      if (applied && (sessionRuntime(draftKey).draft ?? "").trim() === value) patchSessionRuntime(draftKey, { draft: "" })
+      return
+    }
     if (pendingSubmit.current) return pendingSubmit.current
     if (useAgent.getState().statuses[sessionId ?? ""]?.type === "busy" && findCommand(value, commands)) {
       notify.info("El agente está trabajando", "Los comandos se mandan cuando termina. Detenelo con Esc si no querés esperar.")
@@ -338,6 +350,10 @@ export function Composer({
       try {
         if (busy && now) await abortSession(sessionId)
         const sentSessionId = await sendPrompt(value, root, activeFile, sessionId)
+        // Una conversación nueva hereda la voz que se activó en el borrador.
+        if (sentSessionId && !sessionId && sessionRuntime(draftKey).autoSpeech === true) {
+          patchSessionRuntime(sentSessionId, { autoSpeech: true })
+        }
         // Keep whatever was typed while the message was in flight.
         if ((sessionRuntime(draftKey).draft ?? "").trim() === value) patchSessionRuntime(draftKey, { draft: "", submittedAt: Date.now() })
         if (sentSessionId && sentSessionId !== draftKey && (sessionRuntime(sentSessionId).draft ?? "").trim() === value) {
@@ -633,6 +649,16 @@ export function Composer({
           >
             <Icon name="library" />
             <span>{memoryOn ? "Memoria" : "Sin memoria"}</span>
+          </button>
+          <button
+            type="button"
+            className={`composer-pill voice-pill${autoSpeech ? " on" : ""}`}
+            aria-pressed={autoSpeech}
+            title={autoSpeech ? "Voz activada: las respuestas se leen solas al terminar. Clic para silenciar esta conversación." : "Leer las respuestas en voz alta al terminar, con la voz local de Flufy."}
+            onClick={() => void applyVoiceCommand(draftKey, "toggle")}
+          >
+            <Icon name={autoSpeech ? "unmute" : "mute"} />
+            <span>{autoSpeech ? "Voz" : "Sin voz"}</span>
           </button>
         </div>
         <div className="composer-actions">

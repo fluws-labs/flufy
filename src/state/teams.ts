@@ -15,6 +15,7 @@ import { chatFallback } from "../team/types"
 import { indexTeamSessions } from "../team/session-index"
 import { readableTeamError } from "../lib/provider-error"
 import { startTeamActivity } from "./team-activity"
+import { speakTeamRun } from "./auto-speech"
 import { useStudio } from "./studio"
 
 type State = TeamStore & { loaded: boolean; error: string | null; activeChatId: string | null; openChatIds: string[]; selectedRunIds: Record<string,string|null> }
@@ -133,7 +134,10 @@ export function startTeams() {
   onEvent<{ runId: string }>("team://run-completed", ({ runId }) => {
     void refreshTeams().then(() => {
       const chat = useTeams.getState().chats.find((c) => c.runs.some((r) => r.id === runId))
-      if (chat) notify.success(`${chat.team.name}: Terminamos`, "Trabajo y pruebas terminados. Revisá la entrega: podés aceptarla o pedir mejoras.")
+      if (chat) {
+        notify.success(`${chat.team.name}: Terminamos`, "Trabajo y pruebas terminados. Revisá la entrega: podés aceptarla o pedir mejoras.")
+        void speakTeamRun(chat, runId)
+      }
     })
   })
   useProject.subscribe((s, prev) => { if (s.root !== prev.root) useTeams.setState({ activeChatId: null }) })

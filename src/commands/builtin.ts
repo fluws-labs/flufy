@@ -412,6 +412,16 @@ export function registerBuiltinCommands(): void {
       run: () => openEditor({ kind: "remote" }),
     },
     {
+      id: "voice.open",
+      title: "Lectura y voz",
+      category: "Flufy",
+      icon: "unmute",
+      run: () => {
+        openEditor({ kind: "remote" })
+        window.setTimeout(() => document.getElementById("voice-settings")?.scrollIntoView({ block: "start", behavior: "smooth" }), 150)
+      },
+    },
+    {
       id: "desktop.control",
       title: "Control de la PC (el agente usa apps y tu Chrome)",
       category: "Flufy",

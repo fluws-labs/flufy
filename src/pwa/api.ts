@@ -39,6 +39,13 @@ export type SpeechStatus = {
   voicesDir: string | null
   worker: boolean
   workerRunning: boolean
+  engine?: "piper" | "server"
+  serverUrl?: string
+  serverModel?: string
+  serverVoice?: string
+  serverLanguage?: string
+  serverApiKeySet?: boolean
+  serverReady?: boolean
   voices: SpeechVoice[]
 }
 

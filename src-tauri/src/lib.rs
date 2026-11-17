@@ -425,6 +425,7 @@ pub fn run() {
             whisper::whisper_delete_model,
             speech::speech_get,
             speech::speech_set,
+            speech::speech_server_set,
             speech::speech_download_voice,
             speech::speech_cancel_download,
             speech::speech_delete_voice,
