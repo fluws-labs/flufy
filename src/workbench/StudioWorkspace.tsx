@@ -1,5 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { Icon } from "../components/ui"
+import { useLayout } from "../state/layout"
+import { StudioCenterMain } from "./StudioCenterMain"
+import { WorkspacePanel } from "./WorkspacePanel"
 import { SessionPane } from "../agent/AgentPanel"
 import { PreviewPane } from "../agent/PreviewHost"
 import { PreviewConversation } from "../agent/PreviewConversation"
@@ -126,12 +129,13 @@ function ResearchWelcome() {
   </div>
 }
 
-function ResearchWorkspace() {
+function ResearchWorkspace({ panel }: { panel?: ReactNode }) {
   const activeId = useAgent(s => s.activeSessionId)
   const sessions = useAgent(s => s.allSessions)
   const root = useProject(s => s.root)
   const layout = useStudio(s => s.layouts.research)
   const setLayout = useStudio(s => s.setLayout)
+  const chatExpanded = useLayout(s => s.chatExpanded)
   const leadChat = useTeams(s => s.chats.find(chat => chat.origin?.sessionId === activeId))
   const [continuous, setContinuous] = useState(false)
   const [implementing, setImplementing] = useState(false)
@@ -161,7 +165,7 @@ function ResearchWorkspace() {
     setContinuous(next)
   }
   const continuousPill = <button type="button" className={`composer-pill${continuousOn ? " on" : ""}`} aria-pressed={continuousOn} aria-label="Trabajo continuo" title={continuousOn ? "Trabajo continuo activado" : "Activar trabajo continuo"} onClick={() => void toggleContinuous()}><Icon name={continuousOn ? "circle-filled" : "sync"} /><span>Trabajo continuo</span></button>
-  return <div className={`studio-columns studio-research${layout.sidebarCollapsed ? " sidebar-collapsed" : ""}${layout.inspectorCollapsed ? " inspector-collapsed" : ""}${layout.chatExpanded ? " chat-expanded" : ""}`}>
+  return <div className={`studio-columns studio-research${layout.sidebarCollapsed ? " sidebar-collapsed" : ""}${layout.inspectorCollapsed ? " inspector-collapsed" : ""}${chatExpanded ? " chat-expanded" : ""}`}>
     <aside className="studio-sidebar" aria-label="Investigaciones">
       <section className="studio-side-section">
         <div className="studio-side-head"><h3>Investigación</h3><button type="button" className="studio-collapse" title="Ocultar lateral" aria-label="Ocultar lateral" onClick={() => setLayout("research", { sidebarCollapsed: true })}><Icon name="chevron-left" /></button></div>
@@ -171,37 +175,46 @@ function ResearchWorkspace() {
       <MemoryCards />
     </aside>
     <main className="studio-content">
+      <StudioCenterMain>
       <header className="studio-page-heading research-heading">
         {layout.sidebarCollapsed && <button type="button" className="studio-collapse" title="Mostrar lateral" aria-label="Mostrar lateral" onClick={() => setLayout("research", { sidebarCollapsed: false })}><Icon name="chevron-right" /></button>}
         <div className="research-heading-icon"><Icon name="search" /></div>
         <h1>Investigación profunda</h1>
         <span className="research-heading-session" title={active?.title}>{active?.title || "Nueva conversación"}</span>
         <div className="studio-heading-actions">
-          {layout.inspectorCollapsed && <button type="button" className="studio-collapse" title="Mostrar contexto" aria-label="Mostrar contexto" onClick={() => setLayout("research", { inspectorCollapsed: false })}><Icon name="layout-sidebar-right" /></button>}
-          <button type="button" className={`studio-chat-expand${layout.chatExpanded ? " is-expanded" : ""}`} aria-pressed={layout.chatExpanded} title={layout.chatExpanded ? "Restaurar el chat" : "Ampliar el chat"} onClick={() => setLayout("research", { chatExpanded: !layout.chatExpanded })}><Icon name={layout.chatExpanded ? "screen-normal" : "screen-full"} /><span>{layout.chatExpanded ? "Restaurar" : "Ampliar chat"}</span></button>
+          {layout.inspectorCollapsed && <button type="button" className="studio-collapse studio-show-context" title="Mostrar contexto" aria-label="Mostrar contexto" onClick={() => setLayout("research", { inspectorCollapsed: false })}><Icon name="layout-sidebar-right" /></button>}
+          <button type="button" className={`studio-chat-expand${chatExpanded ? " is-expanded" : ""}`} aria-pressed={chatExpanded} title={chatExpanded ? "Restaurar el chat" : "Ampliar el chat"} onClick={() => useLayout.getState().toggleChatExpanded()}><Icon name={chatExpanded ? "screen-normal" : "screen-full"} /><span>{chatExpanded ? "Restaurar" : "Ampliar chat"}</span></button>
         </div>
       </header>
       <SessionPane sessionId={activeId} variant="panel" emptyState={<ResearchWelcome />} preferences={continuousPill} onPreviewOpen={() => useStudio.getState().setMode("design")} />
+      </StudioCenterMain>
+      {panel}
     </main>
     <ResearchSidebar leadChat={leadChat} continuousOn={continuousOn} onToggleContinuous={toggleContinuous} onImplement={implement} implementing={implementing} onCollapse={() => setLayout("research", { inspectorCollapsed: true })} />
   </div>
 }
 
-function DesignWorkspace() {
+function DesignWorkspace({ panel }: { panel?: ReactNode }) {
   const root = useProject(s => s.root)
   const activeId = useAgent(s => s.activeSessionId)
   const taskId = usePreviewTaskId(activeId)
   const identity = taskId ? previewIdentityFor(root, activeId, taskId) : null
   const layout = useStudio(s => s.layouts.design)
   const setLayout = useStudio(s => s.setLayout)
+  const chatExpanded = useLayout(s => s.chatExpanded)
   const [library, setLibrary] = useState(false)
-  const [chatOpen, setChatOpen] = useState(false)
   const [context, setContext] = useState<PreviewEditorContext>({ saving: true })
-  const expanded = chatOpen && layout.chatExpanded
-  return <main className="studio-design"><header className="studio-design-toolbar"><div><Icon name="paintcan" /><strong>Diseño del proyecto</strong><span>/ Editor visual</span></div><div><button type="button" className="btn btn-sm" onClick={() => setLibrary(true)}><Icon name="library" /> Diseños guardados</button><button type="button" className="btn btn-sm" aria-pressed={chatOpen} disabled={!identity} onClick={() => setChatOpen(value => !value)}><Icon name="comment-discussion" /> Chat del diseño</button>{chatOpen && <button type="button" className="btn btn-sm" aria-pressed={layout.chatExpanded} onClick={() => setLayout("design", { chatExpanded: !layout.chatExpanded })}><Icon name={layout.chatExpanded ? "screen-normal" : "screen-full"} /> {layout.chatExpanded ? "Restaurar" : "Ampliar chat"}</button>}{expanded && <span className="studio-chip">Ampliado</span>}</div></header>
+  const chatOpen = layout.chatOpen
+  const expanded = chatOpen && chatExpanded
+  return <main className="studio-design"><header className="studio-design-toolbar"><div><Icon name="paintcan" /><strong>Diseño del proyecto</strong><span>/ Editor visual</span></div><div><button type="button" className="btn btn-sm" onClick={() => setLibrary(true)}><Icon name="library" /> Diseños guardados</button><button type="button" className="btn btn-sm" aria-pressed={chatOpen} disabled={!identity} onClick={() => { const next = !chatOpen; setLayout("design", { chatOpen: next }); if (!next) useLayout.getState().toggleChatExpanded(false) }}><Icon name="comment-discussion" /> Chat del diseño</button>{chatOpen && <button type="button" className="btn btn-sm" aria-pressed={chatExpanded} onClick={() => useLayout.getState().toggleChatExpanded()}><Icon name={chatExpanded ? "screen-normal" : "screen-full"} /> {chatExpanded ? "Restaurar" : "Ampliar chat"}</button>}{expanded && <span className="studio-chip">Ampliado</span>}</div></header>
     <div className={`studio-design-body${chatOpen && identity ? " with-conversation" : ""}${expanded ? " chat-expanded" : ""}`}>
-      {identity ? <PreviewPane key={previewIdentityKey(identity)} identity={identity} onClose={() => useStudio.getState().setMode("research")} onContextChange={setContext} /> : <div className="studio-empty"><Icon name="paintcan" /><h1>Tu próxima idea empieza acá</h1><p>Abrí un diseño guardado o iniciá una conversación para crear y ajustar sus pantallas.</p><button type="button" className="btn btn-primary" onClick={() => setLibrary(true)}>Abrir diseños guardados</button><button type="button" className="btn" onClick={() => useStudio.getState().setMode("research")}>Ir a la conversación</button></div>}
-      {chatOpen && identity && <PreviewConversation key={previewIdentityKey(identity)} identity={identity} context={context} expanded={layout.chatExpanded} />}
+      <div className="studio-design-canvas">
+        <StudioCenterMain>
+          {identity ? <PreviewPane key={previewIdentityKey(identity)} identity={identity} onClose={() => useStudio.getState().setMode("research")} onContextChange={setContext} /> : <div className="studio-empty"><Icon name="paintcan" /><h1>Tu próxima idea empieza acá</h1><p>Abrí un diseño guardado o iniciá una conversación para crear y ajustar sus pantallas.</p><button type="button" className="btn btn-primary" onClick={() => setLibrary(true)}>Abrir diseños guardados</button><button type="button" className="btn" onClick={() => useStudio.getState().setMode("research")}>Ir a la conversación</button></div>}
+        </StudioCenterMain>
+        {panel}
+      </div>
+      {chatOpen && identity && <PreviewConversation key={previewIdentityKey(identity)} identity={identity} context={context} expanded={expanded} />}
     </div>
     {library && root && <PreviewLibrary projectRoot={root} onClose={() => setLibrary(false)} onOpen={design => { rememberPreviewTask(root, design.identity.sessionId, design.identity.taskId); selectSession(design.identity.sessionId); setContext({ saving: true }); setLibrary(false) }} />}
   </main>
@@ -209,8 +222,10 @@ function DesignWorkspace() {
 
 export function StudioWorkspace({ mode }: { mode: Exclude<StudioMode, "code"> }) {
   const root = useProject(s => s.root)
+  const panelVisible = useLayout(s => s.panelVisible)
+  const chatExpanded = useLayout(s => s.chatExpanded)
+  const showPanel = panelVisible && (mode === "design" || !chatExpanded)
   const [visited, setVisited] = useState([mode])
   if (!visited.includes(mode)) setVisited([...visited, mode])
   useEffect(() => { if (root) void loadMemory(root) }, [root])
-  return <div className={`studio-workspace mode-${mode}`}>{visited.map(view => <div className="studio-mode-page" key={view} hidden={view !== mode}>{view === "design" ? <DesignWorkspace /> : view === "team" ? <TeamWorkspace /> : <ResearchWorkspace />}</div>)}</div>
-}
+  return <div className={`studio-workspace mode-${mode}`}>{visited.map(view => <div className="studio-mode-page" key={view} hidden={view !== mode}>{view === "design" ? <DesignWorkspace panel={view === mode && showPanel ? <WorkspacePanel /> : null} /> : view === "team" ? <TeamWorkspace panel={view === mode && showPanel ? <WorkspacePanel /> : null} /> : <ResearchWorkspace panel={view === mode && showPanel ? <WorkspacePanel /> : null} />}</div>)}</div>}

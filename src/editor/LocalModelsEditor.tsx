@@ -174,7 +174,7 @@ export function LocalModelsEditor() {
     }
   }
 
-  const useModel = async (model: ModelEntry) => {
+  const selectModel = async (model: ModelEntry) => {
     try {
       setBusy(true)
       let available = useAgent.getState().models.some((item) => item.providerID === "ollama" && item.modelID === model.id)
@@ -329,7 +329,7 @@ export function LocalModelsEditor() {
                       <Icon name="close" /> Cancelar
                     </button>
                   ) : model.installed ? (
-                    <button type="button" className="btn btn-sm btn-primary" disabled={busy} onClick={() => void useModel(model)}>
+                    <button type="button" className="btn btn-sm btn-primary" disabled={busy} onClick={() => void selectModel(model)}>
                       <Icon name="play" /> Usar
                     </button>
                   ) : model.grade === "F" ? (

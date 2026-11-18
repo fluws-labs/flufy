@@ -803,7 +803,7 @@ mod tests {
         with_session("ses_test", |state| { state.by_tab.insert("11".into(), 1); state.pages.insert(1, "11".into()); });
         let (tool, args) = page_tool("ses_test", "click", &json!({ "pageId": 1, "uid": "e12", "dblClick": true })).unwrap();
         assert_eq!(tool, "click");
-        assert_eq!(args["tab"], "11");
+        assert_eq!(args["tab"], 11);
         assert_eq!(args["ref"], "e12");
         assert_eq!(args["clickCount"], 2);
         let (tool, args) = page_tool("ses_test", "fill_form", &json!({ "pageId": 1, "elements": [{ "uid": "e1", "value": "Ana" }] })).unwrap();

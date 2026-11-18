@@ -17,6 +17,7 @@ async function setup(page: Page) {
   const state: { status: Record<string, { type: string }> } = { status: { s2: { type: "busy" }, s3: { type: "busy" }, c3: { type: "busy" } } }
   await page.addInitScript(() => {
     localStorage.setItem("guillecode:studio.mode", JSON.stringify("code"))
+    if (!localStorage.getItem("guillecode:layout.v3")) localStorage.setItem("guillecode:layout.v3", JSON.stringify({ profiles: { code: { agentVisible: true } } }))
     localStorage.setItem("guillecode:agent.openSessions@c:/qa/demo", JSON.stringify(["s1", "s2", "s3"]))
     localStorage.setItem("guillecode:agent.activeSession@c:/qa/demo", JSON.stringify("s1"))
     if (!sessionStorage.getItem("qa-booted")) localStorage.removeItem("guillecode:agent.unseen")
@@ -55,6 +56,7 @@ const row = (page: Page, title: string) => page.locator(".session-row", { hasTex
 test("amarillo cuando espera respuesta (aunque siga trabajando) y verde cuando terminó sin mirar hasta abrirla", async ({ page }) => {
   const state = await setup(page)
   await page.getByTitle("Sesiones del agente (Ctrl+Shift+A)").click()
+  await page.locator(".session-filters").getByRole("button", { name: /^Todas/ }).click()
 
   await expect(tab(page, "Espera permiso")).toHaveClass(/state-attention/)
   await expect(row(page, "Espera permiso")).toContainText("espera tu respuesta")
@@ -69,6 +71,7 @@ test("amarillo cuando espera respuesta (aunque siga trabajando) y verde cuando t
   await page.reload()
   await page.evaluate(() => window.focus())
   await expect(tab(page, "Termina sin mirar")).toHaveClass(/state-unseen/)
+  await page.locator(".session-filters").getByRole("button", { name: /^Todas/ }).click()
 
   await tab(page, "Termina sin mirar").click()
   await expect(tab(page, "Termina sin mirar")).toHaveClass(/state-idle/)

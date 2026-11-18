@@ -37,6 +37,7 @@ async function setup(page: Page, restart = false) {
   }
   await page.addInitScript(({ root, sessionID, restart }) => {
     localStorage.setItem("guillecode:studio.mode", JSON.stringify("code"))
+    if (!localStorage.getItem("guillecode:layout.v3")) localStorage.setItem("guillecode:layout.v3", JSON.stringify({ profiles: { code: { agentVisible: true } } }))
     localStorage.setItem(`guillecode:agent.openSessions@${root.toLowerCase()}`, JSON.stringify([sessionID]))
     localStorage.setItem(`guillecode:agent.activeSession@${root.toLowerCase()}`, JSON.stringify(sessionID))
     let callback = 0
@@ -81,6 +82,7 @@ async function setup(page: Page, restart = false) {
     if (path === "/agent") return route.fulfill({ json: [{ name: "build", mode: "primary" }, { name: "plan", mode: "primary" }] })
     if (path === "/session" && route.request().method() === "POST") state.created++
     if (path === "/session") return route.fulfill({ json: [{ id: sessionID, title: "Conversación recuperable", directory: root, projectID: "qa", version: "1", time: { created: now, updated: now } }] })
+    if (path === `/session/${sessionID}`) return route.fulfill({ json: { id: sessionID, title: "Conversación recuperable", directory: root, projectID: "qa", version: "1", time: { created: now, updated: now } } })
     if (path === "/session/status") return route.fulfill({ json: state.status })
     if (path === `/session/${sessionID}/message`) {
       state.reads++
@@ -129,6 +131,41 @@ async function setup(page: Page, restart = false) {
   await expect(page.locator(".retry-banner")).toContainText("Reintentando (1)")
   return state
 }
+
+test("reanuda una admisión de trabajo incompleto sin repetir el pedido", async ({ page }) => {
+  const state = await setup(page)
+  state.history = messages()
+  Object.assign(state.history[1].info, { finish: "stop", time: { created: now + 1, completed: now + 2 } })
+  state.history[1].parts = [{ type: "text", id: "p-incomplete", messageID: "m-assistant", sessionID, text: "No la implementé. No encontré un bloqueo que justificara detenerme." }]
+  state.status = {}
+  await page.evaluate(sessionID => (window as unknown as { __qaPush: (event: unknown) => void }).__qaPush({ type: "session.status", properties: { sessionID, status: { type: "idle" } } }), sessionID)
+  await expect.poll(() => state.prompts.length).toBe(1)
+  const parts = state.prompts[0].body.parts as { text: string; synthetic?: boolean }[]
+  expect(parts[0].text).toContain("[FLUFY_CONTINUIDAD_INTERNA]")
+  expect(parts[0].synthetic).toBe(true)
+  expect(parts[0].text).not.toBe("Continuá con el trabajo pendiente")
+  await expect(page.getByText("El agente continúa el trabajo pendiente")).toBeVisible()
+  await page.screenshot({ path: "test-results/continuidad-chat.png" })
+  await page.evaluate(sessionID => {
+    const push = (window as unknown as { __qaPush: (event: unknown) => void }).__qaPush
+    push({ type: "session.status", properties: { sessionID, status: { type: "busy" } } })
+    push({ type: "session.status", properties: { sessionID, status: { type: "idle" } } })
+  }, sessionID)
+  await page.waitForTimeout(500)
+  expect(state.prompts).toHaveLength(1)
+})
+
+test("no reanuda ante una pregunta o bloqueo", async ({ page }) => {
+  const state = await setup(page)
+  state.history = messages()
+  Object.assign(state.history[1].info, { finish: "stop", time: { created: now + 1, completed: now + 2 } })
+  state.history[1].parts = [{ type: "text", id: "p-blocked", messageID: "m-assistant", sessionID, text: "No la implementé: falta acceso al servidor." }]
+  state.status = {}
+  await page.evaluate(sessionID => (window as unknown as { __qaPush: (event: unknown) => void }).__qaPush({ type: "session.status", properties: { sessionID, status: { type: "idle" } } }), sessionID)
+  await expect(page.locator(".msg-assistant")).toContainText("falta acceso al servidor")
+  await page.waitForTimeout(500)
+  expect(state.prompts).toHaveLength(0)
+})
 
 test("las sesiones del Lead presentan respuestas humanas al cargar, transmitir y recargar", async ({ page }) => {
   const state = await setup(page)

@@ -5,7 +5,7 @@ import { createServer } from "node:http"
 import { DesktopSession } from "../src-tauri/src/desktop/session_plugin.js"
 
 test("desktop plugin binds actual session identity, overwrites model arguments and restores checkpoints", async () => {
-  const requests: { session: string; peek: boolean }[] = []
+  const requests: { session: string; peek: boolean; begin: boolean }[] = []
   const server = createServer(async (req, res) => {
     assert.equal(req.headers.authorization, "Bearer test-capability")
     let body = ""
@@ -39,7 +39,7 @@ test("desktop plugin binds actual session identity, overwrites model arguments a
     await assert.rejects(plugin["tool.execute.before"]({ tool: "desktop_type" }, { args: {} }), /conversación/)
     const system = { system: [] as string[] }
     await plugin["experimental.chat.system.transform"]({ sessionID: "s1" }, system)
-    assert.equal(requests.at(-1)?.peek, true)
+    assert.equal(requests.at(-1)?.begin, true)
     assert.match(system.system[0], /Guardar/)
     assert.match(system.system[0], /Paso 99/)
     assert.doesNotMatch(system.system[0], /Paso 0"/)

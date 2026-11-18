@@ -59,14 +59,17 @@ export function ContextMenuHost() {
         .filter((x) => !("separator" in x.item) && !x.item.disabled)
       if (e.key === "Escape") {
         e.preventDefault()
+        e.stopPropagation()
         close()
       } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
         e.preventDefault()
+        e.stopPropagation()
         const idx = actionable.findIndex((x) => x.i === focus)
         const next = e.key === "ArrowDown" ? (idx + 1) % actionable.length : (idx - 1 + actionable.length) % actionable.length
         setFocus(actionable[next]?.i ?? -1)
-      } else if (e.key === "Enter" && focus >= 0) {
+      } else if (e.key === "Enter") {
         e.preventDefault()
+        e.stopPropagation()
         const item = menu.items[focus]
         if (item && !("separator" in item)) {
           close()

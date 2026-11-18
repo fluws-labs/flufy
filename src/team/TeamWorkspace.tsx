@@ -1,11 +1,13 @@
-import { useEffect, useState } from "react"
+import { useEffect, useState, type ReactNode } from "react"
 import { Icon } from "../components/ui"
+import { StudioCenterMain } from "../workbench/StudioCenterMain"
 import { TeamChat } from "../agent/TeamChat"
 import { samePath } from "../lib/paths"
 import { pendingRequests, useAgent } from "../state/agent"
 import { useApprovals } from "../state/approvals"
 import { useProject } from "../state/project"
 import { useStudio } from "../state/studio"
+import { useLayout } from "../state/layout"
 import { teamAttention } from "./attention"
 import { memberSession } from "./session-index"
 import { newTeamChat, selectTeamChat, startTeams, teamCall, useTeams } from "../state/teams"
@@ -15,7 +17,7 @@ import { runStatusLabel, type TeamChatRecord } from "./types"
 import { formatDateTime } from "../lib/time"
 import "./workspace.css"
 
-export function TeamWorkspace() {
+export function TeamWorkspace({ panel }: { panel?: ReactNode }) {
   const root = useProject(s => s.root)
   const chats = useTeams(s => s.chats)
   const error = useTeams(s => s.error)
@@ -39,8 +41,10 @@ export function TeamWorkspace() {
       if (id && id !== previousId) setOpenedId(id)
     } finally { setCreating(false) }
   }
-  if (opened) return <TeamSpace key={opened.id} chat={opened} onBack={() => setOpenedId(null)} onCreate={() => void create()} creating={creating} />
-  return <main className="team-hub" aria-label="Mis equipos">
+  if (opened) return <TeamSpace key={opened.id} chat={opened} onBack={() => setOpenedId(null)} onCreate={() => void create()} creating={creating} panel={panel} />
+  return <div className="studio-team-hub">
+    <StudioCenterMain>
+    <main className="team-hub" aria-label="Mis equipos">
     <header className="team-hub-heading"><div><span className="team-workspace-eyebrow">TU ESPACIO DE TRABAJO</span><h1>Equipos</h1><p>Elegí un equipo para entrar a su tablero, agentes y evidencias.</p></div><button type="button" className="btn btn-primary" disabled={creating} onClick={() => void create()}><Icon name="add" /> {creating ? "Creando…" : "Nuevo equipo"}</button></header>
     {error && <p role="alert" className="team-error">{error}</p>}
     {mine.length ? <div className="team-hub-grid">{mine.slice().reverse().map(chat => {
@@ -54,15 +58,18 @@ export function TeamWorkspace() {
       </button>
     })}</div> : <section className="studio-empty team-hub-empty"><Icon name="organization" /><h2>Un objetivo. Todo un equipo.</h2><p>Contale al Lead qué querés conseguir. Acá vas a encontrar cada equipo y su espacio de trabajo.</p><button type="button" className="btn btn-primary" disabled={creating} onClick={() => void create()}>Crear mi primer equipo</button></section>}
     <details className="team-hub-manage"><summary>Plantillas e historial archivado</summary><TeamsView /></details>
-  </main>
+    </main>
+    </StudioCenterMain>
+    {panel}
+  </div>
 }
-
-function TeamSpace({ chat, onBack, onCreate, creating }: { chat: TeamChatRecord; onBack: () => void; onCreate: () => void; creating: boolean }) {
+function TeamSpace({ chat, onBack, onCreate, creating, panel }: { chat: TeamChatRecord; onBack: () => void; onCreate: () => void; creating: boolean; panel?: ReactNode }) {
   const [view, setView] = useState("Tablero")
   const [agentSession, setAgentSession] = useState<{ sessionId: string; memberId: string } | null>(null)
   const [actionPending, setActionPending] = useState(false)
   const layout = useStudio(s => s.layouts.team)
   const setLayout = useStudio(s => s.setLayout)
+  const chatExpanded = useLayout(s => s.chatExpanded)
   const run = chat.runs.at(-1)
   const team = run?.team ?? chat.team
   const lead = team.members.find(member => member.id === team.leadAgentId)
@@ -87,7 +94,7 @@ function TeamSpace({ chat, onBack, onCreate, creating }: { chat: TeamChatRecord;
     try { await teamCall("team_runs_control", { action: "start_plan", runId: run.id }) }
     finally { setActionPending(false) }
   }
-  return <div className={`studio-columns studio-team team-space${layout.sidebarCollapsed ? " sidebar-collapsed" : ""}${layout.inspectorCollapsed ? " inspector-collapsed" : ""}${layout.chatExpanded ? " chat-expanded" : ""}`} aria-label={`Espacio de ${chat.title}`}>
+  return <div className={`studio-columns studio-team team-space${layout.sidebarCollapsed ? " sidebar-collapsed" : ""}${layout.inspectorCollapsed ? " inspector-collapsed" : ""}${chatExpanded ? " chat-expanded" : ""}`} aria-label={`Espacio de ${chat.title}`}>
     <aside className="studio-sidebar" aria-label="Equipo y agentes">
       <button type="button" className="team-space-back" onClick={onBack}><Icon name="arrow-left" /> Todos los equipos</button>
       <section className="studio-side-section"><div className="studio-side-head"><h3>Tablero</h3><button type="button" className="studio-collapse" title="Ocultar lateral" aria-label="Ocultar lateral" onClick={() => setLayout("team", { sidebarCollapsed: true })}><Icon name="chevron-left" /></button></div><nav aria-label="Navegación del equipo">{nav.map(([id, icon, label]) => <button type="button" className={`studio-nav-item${view === id ? " active" : ""}`} aria-current={view === id ? "page" : undefined} key={id} onClick={() => { setAgentSession(null); setView(id) }}><Icon name={icon} /> {label}{id === "Alertas" && alertCount > 0 && <span className="team-nav-badge">{alertCount}</span>}</button>)}</nav></section>
@@ -99,9 +106,13 @@ function TeamSpace({ chat, onBack, onCreate, creating }: { chat: TeamChatRecord;
       <section className="studio-side-section"><h3>Sesión</h3><div className="studio-summary-card"><strong>{run ? runStatusLabel(run.status) : "Esperando tu objetivo"}</strong><p>{team.members.length} agentes · {run?.tasks.length ?? 0} tareas</p>{run && <p>Iniciada {formatDateTime(run.startedAt)}</p>}</div></section>
       <div className="team-space-sidebar-bottom"><button type="button" className="studio-text-button" onClick={() => setView("Configuración")}><Icon name="settings-gear" /> Configuración</button><button type="button" className="btn" disabled={creating} onClick={onCreate}>+ Nuevo tablero</button></div>
     </aside>
-    <main className="studio-content"><header className="studio-page-heading"><div><h1>{({ Tablero: "Tablero del equipo", Alertas: "Alertas", Plan: "Plan detallado", Agentes: "Agentes del equipo", Navegador: "Navegador interno", Chat: "Chat del equipo", Entrega: "Entrega y evidencias", Ahora: "Actividad del equipo", Configuración: "Configuración del equipo" } as Record<string, string>)[view] ?? view}</h1><p>{view === "Alertas" ? "Lo que necesita tu atención, en texto claro." : "El Lead reparte el trabajo y revisa las evidencias."}</p></div><div className="studio-heading-actions">{layout.inspectorCollapsed && <button type="button" className="studio-collapse" title="Mostrar contexto" aria-label="Mostrar contexto" onClick={() => setLayout("team", { inspectorCollapsed: false })}><Icon name="layout-sidebar-right" /></button>}{layout.sidebarCollapsed && <button type="button" className="studio-collapse" title="Mostrar lateral" aria-label="Mostrar lateral" onClick={() => setLayout("team", { sidebarCollapsed: false })}><Icon name="chevron-right" /></button>}<button type="button" className={`studio-chat-expand${layout.chatExpanded ? " is-expanded" : ""}`} aria-pressed={layout.chatExpanded} title={layout.chatExpanded ? "Restaurar el chat" : "Ampliar el chat"} onClick={() => setLayout("team", { chatExpanded: !layout.chatExpanded })}><Icon name={layout.chatExpanded ? "screen-normal" : "screen-full"} /><span>{layout.chatExpanded ? "Restaurar" : "Ampliar chat"}</span></button><button type="button" className="team-space-mobile-back" onClick={onBack}><Icon name="arrow-left" /> Equipos</button></div></header>
+    <main className="studio-content">
+      <StudioCenterMain>
+        <header className="studio-page-heading"><div><h1>{({ Tablero: "Tablero del equipo", Alertas: "Alertas", Plan: "Plan detallado", Agentes: "Agentes del equipo", Navegador: "Navegador interno", Chat: "Chat del equipo", Entrega: "Entrega y evidencias", Ahora: "Actividad del equipo", Configuración: "Configuración del equipo" } as Record<string, string>)[view] ?? view}</h1><p>{view === "Alertas" ? "Lo que necesita tu atención, en texto claro." : "El Lead reparte el trabajo y revisa las evidencias."}</p></div><div className="studio-heading-actions">{layout.inspectorCollapsed && <button type="button" className="studio-collapse studio-show-context" title="Mostrar contexto" aria-label="Mostrar contexto" onClick={() => setLayout("team", { inspectorCollapsed: false })}><Icon name="layout-sidebar-right" /></button>}{layout.sidebarCollapsed && <button type="button" className="studio-collapse" title="Mostrar lateral" aria-label="Mostrar lateral" onClick={() => setLayout("team", { sidebarCollapsed: false })}><Icon name="chevron-right" /></button>}<button type="button" className={`studio-chat-expand${chatExpanded ? " is-expanded" : ""}`} aria-pressed={chatExpanded} title={chatExpanded ? "Restaurar el chat" : "Ampliar el chat"} onClick={() => useLayout.getState().toggleChatExpanded()}><Icon name={chatExpanded ? "screen-normal" : "screen-full"} /><span>{chatExpanded ? "Restaurar" : "Ampliar chat"}</span></button><button type="button" className="team-space-mobile-back" onClick={onBack}><Icon name="arrow-left" /> Equipos</button></div></header>
       <div className="team-sprint"><div><strong>{chat.title}</strong><small>{run ? `${verified} de ${run.tasks.length} tareas verificadas` : "Listo para recibir tu objetivo"}</small></div><progress className="studio-progress team-progress" max={Math.max(run?.tasks.length ?? 0, 1)} value={verified} /><div><strong>{lead?.name ?? "Lead"}</strong><small>{run ? runStatusLabel(run.status) : "Coordinación del equipo"}</small></div><span className={`studio-member-dot${running ? " is-active" : ""}`} /></div>
-      <TeamChat chatId={chat.id} workspace currentView={view} onViewChange={setView} agentSession={agentSession} onAgentSession={setAgentSession} />
+        <TeamChat chatId={chat.id} workspace currentView={view} onViewChange={setView} agentSession={agentSession} onAgentSession={setAgentSession} />
+      </StudioCenterMain>
+      {panel}
     </main>
     <aside className="studio-inspector" aria-label="Plan y evidencias">
       <div className="studio-inspector-bar"><span>Contexto</span><button type="button" className="studio-collapse" title="Ocultar contexto" aria-label="Ocultar contexto" onClick={() => setLayout("team", { inspectorCollapsed: true })}><Icon name="chevron-right" /></button></div>

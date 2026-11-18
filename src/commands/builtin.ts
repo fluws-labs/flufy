@@ -1,5 +1,6 @@
 import { registerCommands, type Command } from "./registry"
 import { useLayout } from "../state/layout"
+import { useStudio } from "../state/studio"
 import { openMemory } from "../state/memory"
 import { newTeamChat } from "../state/teams"
 import { openFallbackModels } from "../state/fallback"
@@ -121,7 +122,7 @@ export function registerBuiltinCommands(): void {
     },
     { id: "workbench.toggleSidebar", title: "Mostrar/ocultar barra lateral", category: "Ver", icon: "layout-sidebar-left", keys: ["ctrl+b"], global: true, run: () => useLayout.getState().toggleSidebar() },
     { id: "workbench.togglePanel", title: "Mostrar/ocultar panel inferior", category: "Ver", icon: "layout-panel", keys: ["ctrl+j"], global: true, run: () => useLayout.getState().togglePanel() },
-    { id: "workbench.toggleAgent", title: "Mostrar/ocultar panel del agente", category: "Ver", icon: "layout-sidebar-right", keys: ["ctrl+alt+b"], global: true, run: () => useLayout.getState().toggleAgent() },
+    { id: "workbench.toggleAgent", title: "Mostrar/ocultar panel del agente", category: "Ver", icon: "layout-sidebar-right", keys: ["ctrl+alt+b"], global: true, when: () => !useProject.getState().root || useStudio.getState().mode === "code", run: () => useLayout.getState().toggleAgent() },
     { id: "workbench.zoomIn", title: "Aumentar zoom", category: "Ver", icon: "zoom-in", keys: ["ctrl+=", "ctrl+shift+="], global: true, run: () => useZoom.getState().zoomIn() },
     { id: "workbench.zoomOut", title: "Reducir zoom", category: "Ver", icon: "zoom-out", keys: ["ctrl+-"], global: true, run: () => useZoom.getState().zoomOut() },
     { id: "workbench.zoomReset", title: "Restablecer zoom", category: "Ver", icon: "screen-normal", keys: ["ctrl+0"], global: true, run: () => useZoom.getState().reset() },
@@ -146,10 +147,10 @@ export function registerBuiltinCommands(): void {
     { id: "agent.newTeam", title: "Nuevo chat de equipo", category: "Agente", icon: "organization", run: () => void newTeamChat() },
     { id: "agent.fallbackModels", title: "Modelos Fallback", category: "Agente", icon: "list-ordered", run: () => void openFallbackModels() },
     { id: "workbench.view.prs", title: "Pull requests", category: "Ver", icon: "git-pull-request", run: () => useLayout.getState().showView("prs", false) },
-    { id: "layout.balanced", title: "Layout equilibrado (código + agente)", category: "Layout", icon: "layout", run: () => useLayout.getState().applyPreset("balanced") },
-    { id: "layout.agent", title: "Layout con foco en el agente", category: "Layout", icon: "hubot", run: () => useLayout.getState().applyPreset("agent") },
-    { id: "layout.code", title: "Layout con foco en el código", category: "Layout", icon: "code", run: () => useLayout.getState().applyPreset("code") },
-    { id: "layout.review", title: "Layout de revisión", category: "Layout", icon: "diff-multiple", run: () => useLayout.getState().applyPreset("review") },
+    { id: "layout.balanced", title: "Layout equilibrado (código + agente)", category: "Layout", icon: "layout", when: () => useStudio.getState().mode === "code", run: () => useLayout.getState().applyPreset("balanced") },
+    { id: "layout.agent", title: "Layout con foco en el agente", category: "Layout", icon: "hubot", when: () => useStudio.getState().mode === "code", run: () => useLayout.getState().applyPreset("agent") },
+    { id: "layout.code", title: "Layout con foco en el código", category: "Layout", icon: "code", when: () => useStudio.getState().mode === "code", run: () => useLayout.getState().applyPreset("code") },
+    { id: "layout.review", title: "Layout de revisión", category: "Layout", icon: "diff-multiple", when: () => useStudio.getState().mode === "code", run: () => useLayout.getState().applyPreset("review") },
     {
       id: "layout.focusChat",
       title: "Foco en el chat (ocultar editor)",

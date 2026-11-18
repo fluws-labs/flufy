@@ -946,6 +946,21 @@ fn list_cache() -> &'static Mutex<HashMap<String, ListSlot>> {
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// Navigation only consumes a native workspace snapshot already loaded by the
+/// UI. Resolving printed file paths must not start Git or any other process.
+pub(crate) fn navigation_roots(project: &str, workspace: &str) -> Result<Vec<String>, String> {
+    if workspace == "main" { return Ok(vec![project.to_string()]); }
+    let slot = list_cache().lock().unwrap_or_else(|e| e.into_inner()).get(&key(project)).cloned()
+        .ok_or("recargá los espacios de trabajo antes de abrir esta referencia")?;
+    let cached = slot.lock().unwrap_or_else(|e| e.into_inner());
+    let list = cached.as_ref().and_then(|(_, result)| result.as_ref().ok())
+        .ok_or("no hay un espacio de trabajo validado disponible")?;
+    let ws = list.workspaces.iter().find(|w| w.id == workspace).ok_or("el espacio de trabajo ya no existe")?;
+    let roots: Vec<String> = ws.repos.iter().filter(|r| !r.missing).map(|r| r.root.clone()).collect();
+    if roots.is_empty() { return Err("el espacio de trabajo no tiene repositorios disponibles".into()); }
+    Ok(roots)
+}
+
 pub(crate) fn build_list(app: &AppHandle, project: &str) -> Result<FeatureList, String> {
     let slot = {
         let mut slots = list_cache().lock().unwrap_or_else(|e| e.into_inner());
@@ -2087,6 +2102,13 @@ pub async fn features_update_from_base(app: AppHandle, project: String, path: St
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn navigation_roots_do_not_discover_or_invent_unknown_workspaces() {
+        let project = format!("C:/navigation-test-{}", uuid::Uuid::new_v4());
+        assert_eq!(navigation_roots(&project, "main").unwrap(), vec![project.clone()]);
+        assert!(navigation_roots(&project, "unknown-workspace").is_err());
+    }
 
     #[test]
     fn parses_worktree_porcelain() {
