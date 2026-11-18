@@ -8,27 +8,35 @@
 
 :root {
   color-scheme: dark;
-  --bg-app: #0a0d13;
-  --bg-side: #0e121a;
-  --editor-bg: #0d1117;
-  --bg-raised: #141925;
-  --bg-hover: #1a2130;
-  --bg-active: #212a3d;
-  --bg-input: #090c12;
-  --bg-overlay: #151b27;
-  --border: rgba(148, 163, 184, 0.1);
-  --border-strong: rgba(148, 163, 184, 0.2);
-  --border-focus: rgba(124, 140, 255, 0.65);
-  --fg: #e6ebf3;
-  --editor-fg: #d6deeb;
-  --fg-dim: #98a2b3;
-  --fg-faint: #5c6676;
+  /* Superficies: fondo, panel, elevado */
+  --bg-app: #0a0e15;
+  --bg-side: #10151f;
+  --bg-raised: #171e2b;
+  --bg-elevated: #1d2635;
+  --editor-bg: #0d121a;
+  --bg-hover: #222c3d;
+  --bg-active: #2a364a;
+  --bg-input: #0c1119;
+  --bg-overlay: #1a2231;
+  /* Bordes: sutil y fuerte */
+  --border: rgba(148, 163, 184, 0.16);
+  --border-strong: rgba(148, 163, 184, 0.28);
+  --border-hover: rgba(148, 163, 184, 0.4);
+  --border-focus: rgba(124, 140, 255, 0.72);
+  /* Texto */
+  --fg: #e9eef8;
+  --editor-fg: #d7e0ee;
+  --fg-dim: #a7b2c4;
+  --fg-faint: #8b96a8;
+  /* Un solo acento, con sus estados */
   --accent: #7c8cff;
-  --accent-strong: #97a4ff;
+  --accent-strong: #a9b3ff;
   --accent-bg: rgba(124, 140, 255, 0.16);
   --accent-bg-strong: rgba(124, 140, 255, 0.28);
-  --accent-2: #a78bfa;
-  --gradient: linear-gradient(135deg, #34d399 0%, #10b981 60%, #047857 100%);
+  --accent-ring: rgba(124, 140, 255, 0.4);
+  --accent-contrast: #0b0e14;
+  --accent-2: var(--accent-strong);
+  --gradient: var(--accent);
   --add: #3fb950;
   --add-bg: rgba(46, 160, 67, 0.13);
   --add-strong-bg: rgba(46, 160, 67, 0.28);
@@ -43,10 +51,31 @@
   --error: #f85149;
   --success: #3fb950;
   --info: #58a6ff;
+  /* Escala de espacio 4/8 */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  /* Escala tipografica */
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-base: 13px;
+  --text-md: 15px;
+  --text-lg: 18px;
+  --text-xl: 24px;
+  /* Radios con rol: controles, tarjetas, overlays */
+  --radius-sm: 4px;
   --radius: 6px;
   --radius-lg: 10px;
-  --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(148, 163, 184, 0.08);
-  --shadow-md: 0 6px 20px rgba(0, 0, 0, 0.35);
+  --radius-xl: 14px;
+  --radius-pill: 999px;
+  /* Sombras consistentes */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(148, 163, 184, 0.06);
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.38);
+  --shadow-lg: 0 18px 48px rgba(0, 0, 0, 0.52), 0 0 0 1px rgba(148, 163, 184, 0.1);
+  --shadow-focus: 0 0 0 3px var(--accent-ring);
   --font: "Inter", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
   --display: "Space Grotesk", "Inter", "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
   --mono: "Cascadia Code", "Cascadia Mono", "JetBrains Mono", Consolas, monospace;
@@ -72,10 +101,15 @@ body {
   background: var(--bg-app);
   color: var(--fg);
   font-family: var(--font);
-  font-size: 13px;
+  font-size: var(--text-base);
   line-height: 1.45;
   -webkit-font-smoothing: antialiased;
   user-select: none;
+}
+
+:where(button, a, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 input,
@@ -182,7 +216,7 @@ a {
 }
 .btn:hover:not(:disabled) {
   background: var(--bg-active);
-  border-color: rgba(148, 163, 184, 0.32);
+  border-color: var(--border-hover);
 }
 .btn .codicon {
   font-size: 14px;
@@ -190,7 +224,7 @@ a {
 .btn-primary {
   background: var(--accent);
   border-color: transparent;
-  color: #0b0e14;
+  color: var(--accent-contrast);
   font-weight: 600;
 }
 .btn-primary:hover:not(:disabled) {
@@ -200,7 +234,7 @@ a {
 .btn-danger {
   background: var(--error);
   border-color: transparent;
-  color: #fff;
+  color: #180807;
 }
 .btn-danger:hover:not(:disabled) {
   background: #ff6a61;
@@ -242,7 +276,7 @@ a {
   justify-content: center;
   width: 24px;
   height: 24px;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   color: var(--fg-dim);
   flex-shrink: 0;
 }
@@ -263,9 +297,9 @@ a {
   min-width: 14px;
   height: 14px;
   padding: 0 3px;
-  border-radius: 7px;
+  border-radius: var(--radius-pill);
   background: var(--accent);
-  color: #0b0e14;
+  color: var(--accent-contrast);
   font-size: 9.5px;
   font-weight: 700;
   line-height: 14px;
@@ -278,7 +312,7 @@ a {
   padding: 0 8px;
   background: var(--bg-input);
   border: 1px solid var(--border-strong);
-  border-radius: 5px;
+  border-radius: var(--radius);
   outline: none;
   font-size: 12.5px;
 }
@@ -317,7 +351,7 @@ textarea.input {
 .kbd {
   display: inline-block;
   padding: 1px 5px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   border: 1px solid var(--border-strong);
   border-bottom-width: 2px;
   background: var(--bg-raised);
@@ -370,7 +404,7 @@ textarea.input {
   gap: 4px;
   padding: 0 7px;
   height: 18px;
-  border-radius: 9px;
+  border-radius: var(--radius-pill);
   background: var(--bg-hover);
   border: 1px solid var(--border);
   color: var(--fg-dim);
@@ -381,7 +415,7 @@ textarea.input {
 .dirty-pill,
 .warn-pill {
   padding: 1px 7px;
-  border-radius: 9px;
+  border-radius: var(--radius-pill);
   font-size: 11px;
   background: rgba(227, 179, 65, 0.14);
   color: var(--warn);
@@ -438,7 +472,7 @@ textarea.input {
   min-width: 16px;
   height: 16px;
   padding: 0 4px;
-  border-radius: 8px;
+  border-radius: var(--radius-pill);
   font-size: 10px;
   font-weight: 700;
   margin-left: 4px;
@@ -455,7 +489,7 @@ textarea.input {
 .status-tag {
   font-size: 10.5px;
   padding: 0 6px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: var(--bg-hover);
   color: var(--fg-dim);
   text-transform: lowercase;
@@ -491,7 +525,7 @@ textarea.input {
   padding: 0 8px 0 10px;
   background: var(--bg-input);
   border: 1px solid var(--border-strong);
-  border-radius: 7px;
+  border-radius: var(--radius);
   font-size: 12.5px;
   color: var(--fg);
   text-align: left;
@@ -501,14 +535,14 @@ textarea.input {
     background 0.12s;
 }
 .select-trigger:hover {
-  border-color: rgba(148, 163, 184, 0.34);
+  border-color: var(--border-hover);
   background: var(--bg-raised);
 }
 .select-trigger:focus-visible,
 .select-trigger.open {
   outline: none;
   border-color: var(--border-focus);
-  box-shadow: 0 0 0 3px rgba(124, 140, 255, 0.14);
+  box-shadow: var(--shadow-focus);
 }
 .select-lead {
   color: var(--fg-dim);
@@ -543,7 +577,7 @@ textarea.input {
   padding: 4px;
   background: var(--bg-overlay);
   border: 1px solid var(--border-strong);
-  border-radius: 9px;
+  border-radius: var(--radius-lg);
   box-shadow: var(--shadow-lg);
   animation: fade-in 0.08s ease-out;
 }
@@ -554,7 +588,7 @@ textarea.input {
   width: 100%;
   min-height: 30px;
   padding: 4px 12px 4px 6px;
-  border-radius: 6px;
+  border-radius: var(--radius);
   font-size: 12.5px;
   text-align: left;
   color: var(--fg);
@@ -636,7 +670,7 @@ textarea.input {
 .time-cell {
   flex-shrink: 0;
   height: 28px;
-  border-radius: 6px;
+  border-radius: var(--radius);
   font-size: 12.5px;
   font-variant-numeric: tabular-nums;
   color: var(--fg-dim);
@@ -662,12 +696,12 @@ textarea.input {
   height: 30px;
   background: var(--bg-input);
   border: 1px solid var(--border-strong);
-  border-radius: 7px;
+  border-radius: var(--radius);
   overflow: hidden;
 }
 .stepper:focus-within {
   border-color: var(--border-focus);
-  box-shadow: 0 0 0 3px rgba(124, 140, 255, 0.14);
+  box-shadow: var(--shadow-focus);
 }
 .stepper button {
   width: 30px;
@@ -706,7 +740,7 @@ textarea.input {
   padding: 3px;
   background: var(--bg-input);
   border: 1px solid var(--border-strong);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
 }
 .segmented-item {
   display: inline-flex;
@@ -714,7 +748,7 @@ textarea.input {
   gap: 6px;
   height: 24px;
   padding: 0 11px;
-  border-radius: 6px;
+  border-radius: var(--radius);
   font-size: 12px;
   white-space: nowrap;
   color: var(--fg-dim);
@@ -743,7 +777,7 @@ textarea.input {
   position: relative;
   width: 34px;
   height: 20px;
-  border-radius: 10px;
+  border-radius: var(--radius-pill);
   background: var(--bg-active);
   border: 1px solid var(--border-strong);
   transition: background 0.15s;
@@ -775,5 +809,16 @@ textarea.input {
   outline: none;
 }
 .toggle:focus-visible .toggle-track {
-  box-shadow: 0 0 0 3px rgba(124, 140, 255, 0.25);
+  box-shadow: var(--shadow-focus);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

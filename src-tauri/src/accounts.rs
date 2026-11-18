@@ -4,8 +4,14 @@ use serde_json::Value;
 
 pub fn available_models(catalog: &Value) -> Vec<(String, String)> {
     catalog["providers"].as_array().into_iter().flatten().filter(|p| {
-        matches!(p["id"].as_str(), Some("openai" | "opencode" | "opencode-go" | "anthropic" | "google" | "openrouter")) &&
-            p["options"]["apiKey"].as_str() != Some("public") &&
+        let id = p["id"].as_str().unwrap_or_default();
+        if !matches!(id, "openai" | "opencode" | "opencode-go" | "anthropic" | "google" | "openrouter" | "ollama") {
+            return false;
+        }
+        if id == "ollama" {
+            return true;
+        }
+        p["options"]["apiKey"].as_str() != Some("public") &&
             (matches!(p["source"].as_str(), Some("api" | "env")) || p["options"]["apiKey"].as_str().map(|k| !k.is_empty()).unwrap_or(false))
     }).flat_map(|p| {
         let provider = p["id"].as_str().unwrap_or_default().to_string();

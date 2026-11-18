@@ -254,10 +254,10 @@
 .msg-user-bubble {
   max-width: 92%;
   padding: 8px 12px;
-  border-radius: 12px 12px 4px 12px;
-  background: linear-gradient(135deg, rgba(108, 140, 255, 0.22), rgba(139, 92, 246, 0.2));
-  border: 1px solid rgba(124, 140, 255, 0.28);
-  font-size: 13px;
+  border-radius: var(--radius-lg) var(--radius-lg) var(--radius-sm) var(--radius-lg);
+  background: var(--bg-active);
+  border: 1px solid var(--accent-bg-strong);
+  font-size: var(--text-base);
   line-height: 1.55;
 }
 .msg-user-meta {
@@ -339,7 +339,7 @@
   margin-top: 0;
 }
 .msg-assistant .md {
-  font-size: 13.5px;
+  font-size: var(--text-base);
   line-height: 1.7;
 }
 .msg-assistant {
@@ -933,17 +933,17 @@
   flex-direction: column;
   gap: 6px;
   padding: 8px 8px 6px 10px;
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   background: var(--bg-input);
   border: 1px solid var(--border-strong);
-  box-shadow: 0 0 0 0 transparent;
+  box-shadow: var(--shadow-sm);
   transition:
     border-color 0.15s,
     box-shadow 0.15s;
 }
 .composer:focus-within {
-  border-color: rgba(124, 140, 255, 0.55);
-  box-shadow: 0 0 0 3px rgba(124, 140, 255, 0.12);
+  border-color: var(--border-focus);
+  box-shadow: var(--shadow-focus);
 }
 .composer.dragging {
   border-color: var(--accent);
@@ -962,7 +962,7 @@
   border: none;
   outline: none;
   resize: none;
-  font-size: 13px;
+  font-size: var(--text-base);
   line-height: 1.5;
   color: var(--fg);
 }
@@ -1369,7 +1369,7 @@
 }
 
 .todo-list {
-  border-radius: 9px;
+  border-radius: var(--radius-lg);
   background: var(--bg-raised);
   border: 1px solid var(--border);
   overflow: hidden;
@@ -1401,7 +1401,7 @@
 .todo-bar {
   display: block;
   height: 100%;
-  background: var(--accent-2);
+  background: var(--accent);
   transition: width 0.3s;
 }
 .todo-count {
@@ -1509,11 +1509,11 @@
   filter: drop-shadow(0 8px 26px rgba(16, 185, 129, 0.35));
 }
 .agent-welcome h2 {
-  font-size: 16px;
+  font-size: var(--text-lg);
   font-weight: 650;
 }
 .agent-welcome p {
-  font-size: 12.5px;
+  font-size: var(--text-base);
   color: var(--fg-dim);
   max-width: 360px;
   line-height: 1.55;
@@ -1527,7 +1527,7 @@
   display: flex;
   gap: 9px;
   padding: 10px;
-  border-radius: 9px;
+  border-radius: var(--radius-lg);
   background: var(--bg-raised);
   border: 1px solid var(--border);
   text-align: left;
@@ -1536,7 +1536,7 @@
     transform 0.12s;
 }
 .agent-suggestion:hover {
-  border-color: rgba(124, 140, 255, 0.45);
+  border-color: var(--border-focus);
   transform: translateY(-1px);
 }
 .agent-suggestion .codicon {

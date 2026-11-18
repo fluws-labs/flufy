@@ -5,7 +5,7 @@ import type { PreviewEditorContext, PreviewIdentity } from '../preview/types'
 import { Chat } from './Chat'
 import { PermissionCard, QuestionCard } from './Interactions'
 
-export function PreviewConversation({ identity, context }: { identity: PreviewIdentity; context: PreviewEditorContext }) {
+export function PreviewConversation({ identity, context, expanded = false }: { identity: PreviewIdentity; context: PreviewEditorContext; expanded?: boolean }) {
   const session = useAgent(s => s.allSessions.find(item => item.id === identity.conversationId))
   const connected = useAgent(s => s.connected)
   const status = useAgent(s => s.statuses[identity.conversationId]?.type ?? 'idle')
@@ -29,7 +29,7 @@ export function PreviewConversation({ identity, context }: { identity: PreviewId
     finally { setSending(false) }
   }
   return <aside className="preview-conversation" aria-label="Agente de previsualización">
-    <header><strong>Conversá sobre el diseño</strong><p>Mismo agente y conversación. Pedí cambios sin salir del editor.</p></header>
+    <header><strong>Conversá sobre el diseño</strong>{expanded && <span className="studio-chip">Ampliado</span>}<p>Mismo agente y conversación. Pedí cambios sin salir del editor.</p></header>
     <div className="preview-conversation-history">{session ? <Chat session={session} busy={busy} /> : <p className="preview-note">La conversación se mostrará al cargar la sesión.</p>}</div>
     <div className="preview-conversation-interactions">{permissions.filter(item => mine(item.sessionID)).map(request => <PermissionCard key={request.id} request={request} />)}{questions.filter(item => mine(item.sessionID)).map(request => <QuestionCard key={request.id} request={request} />)}</div>
     <form onSubmit={event => { event.preventDefault(); void submit() }}>

@@ -1,12 +1,70 @@
 import { create } from "zustand"
 import { loadJson, saveJson } from "../lib/persist"
+import { useLayout } from "./layout"
+import { isCodePreset, type ModePresetId } from "./modePresets"
+import { isStudioMode, STUDIO_MODES, type StudioMode } from "./studioModes"
 
-export type StudioMode = "design" | "team" | "research" | "code"
-const saved = loadJson<StudioMode>("studio.mode", "research")
-export const useStudio = create<{ mode: StudioMode; readOnly: boolean; setReadOnly: (readOnly: boolean) => void; teamRequest: { chatId: string } | null; setMode: (mode: StudioMode) => void }>((set) => ({
+export type { StudioMode } from "./studioModes"
+
+export type StudioLayout = { sidebarCollapsed: boolean; inspectorCollapsed: boolean; chatOpen: boolean }
+
+const saved = loadJson<unknown>("studio.mode", "research")
+const savedLayouts = loadJson<Partial<Record<StudioMode, Partial<StudioLayout>>>>("studio.layouts", {})
+const compact = typeof window !== "undefined" && window.innerWidth < 900
+
+const layouts = Object.fromEntries(STUDIO_MODES.map(mode => [mode, {
+  sidebarCollapsed: savedLayouts[mode]?.sidebarCollapsed ?? compact,
+  inspectorCollapsed: savedLayouts[mode]?.inspectorCollapsed ?? false,
+  chatOpen: savedLayouts[mode]?.chatOpen ?? false,
+}])) as Record<StudioMode, StudioLayout>
+
+export const useStudio = create<{
+  mode: StudioMode
+  readOnly: boolean
+  teamRequest: { chatId: string } | null
+  layouts: Record<StudioMode, StudioLayout>
+  setMode: (mode: StudioMode) => void
+  setReadOnly: (readOnly: boolean) => void
+  setLayout: (mode: StudioMode, patch: Partial<StudioLayout>) => void
+  applyPreset: (preset: ModePresetId) => void
+  resetModeLayout: () => void
+}>((set, get) => ({
   teamRequest: null,
   readOnly: loadJson<unknown>("studio.readOnly", false) === true,
   setReadOnly: readOnly => { saveJson("studio.readOnly", readOnly); set({ readOnly }) },
-  mode: ["design", "team", "research", "code"].includes(saved) ? saved : "research",
-  setMode: mode => { saveJson("studio.mode", mode); set({ mode }) },
+  mode: isStudioMode(saved) ? saved : "research",
+  layouts,
+  setMode: mode => {
+    if (!isStudioMode(mode)) return
+    saveJson("studio.mode", mode)
+    set({ mode })
+    useLayout.getState().setModeLayout(mode)
+    useLayout.getState().toggleChatExpanded(false)
+  },
+  setLayout: (mode, patch) => set(state => {
+    const layouts = { ...state.layouts, [mode]: { ...state.layouts[mode], ...patch } }
+    saveJson("studio.layouts", layouts)
+    return { layouts }
+  }),
+  applyPreset: (preset) => {
+    const layout = useLayout.getState()
+    if (isCodePreset(preset)) {
+      layout.applyPreset(preset)
+      return
+    }
+    layout.toggleChatExpanded(false)
+    if (layout.sidebarVisible) layout.toggleSidebar()
+    if (layout.panelVisible) layout.togglePanel()
+    if (layout.focusChat) layout.toggleFocusChat(false)
+    const mode = get().mode
+    if (mode === "design") get().setLayout("design", { chatOpen: preset === "design-chat" })
+    else if (mode === "team") get().setLayout("team", { sidebarCollapsed: true, inspectorCollapsed: preset !== "team-context" })
+    else if (mode === "research") get().setLayout("research", { sidebarCollapsed: true, inspectorCollapsed: preset !== "research-sources" })
+  },
+  resetModeLayout: () => {
+    const mode = get().mode
+    const compact = window.innerWidth < 900
+    get().setLayout(mode, { sidebarCollapsed: compact, inspectorCollapsed: false, chatOpen: false })
+    useLayout.getState().resetLayout()
+  },
 }))

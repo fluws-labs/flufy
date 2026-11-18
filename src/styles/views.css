@@ -15,10 +15,10 @@
 .view-title {
   flex: 1;
   min-width: 0;
-  font-size: 11px;
+  font-size: var(--text-xs);
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: 0.08em;
   color: var(--fg-dim);
   white-space: nowrap;
   overflow: hidden;
@@ -196,7 +196,7 @@
   gap: 5px;
   height: var(--row);
   padding-right: 10px;
-  font-size: 13px;
+  font-size: var(--text-base);
   color: var(--fg-dim);
   cursor: pointer;
   white-space: nowrap;
@@ -209,9 +209,10 @@
 .tree-row.selected {
   background: var(--accent-bg);
   color: var(--fg);
+  box-shadow: inset 2px 0 0 var(--accent);
 }
 .tree:focus .tree-row.selected {
-  border-color: rgba(124, 140, 255, 0.5);
+  border-color: var(--border-focus);
 }
 .tree-row.heavy {
   opacity: 0.5;

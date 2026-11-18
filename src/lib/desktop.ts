@@ -13,21 +13,25 @@ export type MachineStatus = {
 
 export type BridgeStatus = { state: "off" | "starting" | "ready" | "error"; error: string | null; tools: number; connected: boolean; connecting: boolean }
 
+export type BrowseStatus = { available: boolean; enabled: boolean; running: boolean; connected: boolean | null; pairing: string | null; nextStep: string | null; version: string | null; error: string | null }
+
 export type DesktopActivity = { at: number; channel: "desktop" | "browser"; tool: string; summary: string; ok: boolean }
 
 export type DesktopStatus = {
   enabled: boolean
   paused: boolean
   browser: boolean
+  browse: boolean
   browserActive: boolean
   bridge: BridgeStatus
+  browseBridge: BrowseStatus
   blocked: string[]
   activity: DesktopActivity[]
   machine: MachineStatus
   available: boolean
 }
 
-export type DesktopPatch = Partial<{ enabled: boolean; paused: boolean; browser: boolean; blocked: string[] }>
+export type DesktopPatch = Partial<{ enabled: boolean; paused: boolean; browser: boolean; browse: boolean; blocked: string[] }>
 
 const ACTIVE_MS = 20000
 

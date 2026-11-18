@@ -88,6 +88,7 @@ fn with_profile<T>(profile: PathBuf, action: impl FnOnce() -> T) -> T {
 }
 pub fn stop_all() {
     stop();
+    super::browse::stop();
     let entries: Vec<_> = internal_bridges().lock().unwrap().keys().cloned().collect();
     for profile in entries { with_profile(profile, stop); }
 }
@@ -466,6 +467,13 @@ mod context_tests {
 
 pub fn context_for_url(url: Option<&str>) -> Value {
     let Some(url) = url else { return json!({"pageId":null, "hint":"No se pudo leer la URL visible; usá list_pages y comprobá el destino."}); };
+    if let Some(app) = crate::proc::app() {
+        let session = super::tasks::current(app).map(|t| t.session).unwrap_or_default();
+        let workspace = crate::teams::browser_session(app, &session);
+        if super::browse::enabled(app, &workspace) {
+            return super::browse::context_for_url(&session, url);
+        }
+    }
     if !status().connected { return json!({"url":url, "pageId":null, "hint":"Conexión con Chrome sin verificar; usá list_pages."}); }
     // Never launch Chrome or open a permission prompt just to enrich context.
     match request("tools/call", json!({"name":"list_pages", "arguments":{}}), Duration::from_secs(2)) {
@@ -553,6 +561,11 @@ pub fn call_session_recovery(session: &str, workspace: &str, name: &str, mut arg
         args["_guillecode"]["isolated"] = json!(true);
         return with_profile(profile, || call(name, args));
     }
+    if let Some(app) = crate::proc::app() {
+        if super::browse::enabled(app, workspace) {
+            return Ok(super::browse::call_session(session, name, args));
+        }
+    }
     call(name, args)
 }
 
@@ -588,6 +601,11 @@ pub fn workspace(session: &str, page_id: Option<u64>, quiet: bool) -> Result<Val
     // Al abrir una conversación sólo se puede consultar el estado sin conectar
     // con Chrome: hacerlo al montar el compositor disparaba el permiso de
     // DevTools remotos en chats que no usan el navegador.
+    if let Some(app) = crate::proc::app() {
+        if super::browse::enabled(app, session) {
+            return super::browse::workspace(app, session, quiet);
+        }
+    }
     if quiet {
         return Ok(json!({ "assigned": false, "missing": false, "windowId": null, "pages": [] }));
     }
@@ -615,6 +633,9 @@ pub async fn browser_chrome_workspace(app: tauri::AppHandle, session: String) ->
     super::gate(&app)?;
     if !super::config(&app).browser { return Err("El navegador está desactivado".into()); }
     tauri::async_runtime::spawn_blocking(move || {
+        if super::browse::enabled(&app, &session) {
+            return super::browse::workspace(&app, &session, false);
+        }
         let result = call("list_pages", json!({ "_guillecode": { "session": session, "action": "inspect" } }))?;
         if failed(&result) { return Err(text_of(&result)); }
         serde_json::from_str(&text_of(&result)).map_err(|e| format!("No se pudo leer el espacio de Chrome: {}", e))

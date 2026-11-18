@@ -2,7 +2,7 @@ import { create } from "zustand"
 import { ChangeSet, EditorState, Text, Transaction, type TransactionSpec } from "@codemirror/state"
 import type { EditorView } from "@codemirror/view"
 import { diff as textDiff } from "@codemirror/merge"
-import { BINARY_FILE_ERROR, readFile, stat, writeFile } from "../lib/fs"
+import { BINARY_FILE_ERROR, readFile, stat, writeFile, type FileContent } from "../lib/fs"
 import { gitBlame, gitShowFile } from "../lib/git"
 import { normalizePath, relativePath } from "../lib/paths"
 import { errorMessage } from "../lib/tauri"
@@ -89,7 +89,7 @@ export function dirtyPaths(): string[] {
   return [...docs.values()].filter((d) => useDocs.getState().dirty[docKey(d.path)]).map((d) => d.path)
 }
 
-export async function loadDocument(path: string): Promise<DocEntry> {
+export async function loadDocument(path: string, validatedFile?: FileContent): Promise<DocEntry> {
   const key = docKey(path)
   const existing = docs.get(key)
   if (existing) return existing
@@ -98,7 +98,7 @@ export async function loadDocument(path: string): Promise<DocEntry> {
   const promise = (async () => {
     let file
     try {
-      file = await readFile(path)
+      file = validatedFile ?? await readFile(path)
     } catch (e) {
       if (errorMessage(e) === BINARY_FILE_ERROR) throw new BinaryFileError()
       throw e

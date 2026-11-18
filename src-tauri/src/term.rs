@@ -17,11 +17,20 @@ const POWERSHELL_SETUP: &str = r#"[Console]::InputEncoding=[Console]::OutputEnco
 pub struct TermState {
     pub terms: Mutex<HashMap<String, Term>>,
     pending: Mutex<HashMap<String, Sender<Result<(), String>>>>,
+    // Retained after shell exit while its scrollback remains visible in the UI.
+    references: Mutex<HashMap<String, (String, String)>>,
 }
 
 impl TermState {
     pub fn new() -> Self {
-        TermState { terms: Mutex::new(HashMap::new()), pending: Mutex::new(HashMap::new()) }
+        TermState { terms: Mutex::new(HashMap::new()), pending: Mutex::new(HashMap::new()), references: Mutex::new(HashMap::new()) }
+    }
+
+    pub(crate) fn reference_cwd(&self, id: &str, owner: &str) -> Result<String, String> {
+        let references = self.references.lock().unwrap();
+        let (label, cwd) = references.get(id).ok_or("la terminal ya no existe")?;
+        if label != owner { return Err("la terminal pertenece a otra ventana".into()); }
+        Ok(cwd.clone())
     }
 }
 
@@ -379,6 +388,7 @@ pub fn write_to(app: &AppHandle, id: &str, data: &[u8]) -> Result<(), String> {
 }
 
 pub fn kill_one(app: &AppHandle, id: &str) -> Option<String> {
+    app.state::<TermState>().references.lock().unwrap().remove(id);
     let removed = app.state::<TermState>().terms.lock().unwrap().remove(id)?;
     let owner = removed.owner.clone();
     removed.kill_tree();
@@ -468,6 +478,7 @@ fn spawn(app: &AppHandle, owner: &str, args: &TermSpawnArgs, on_event: Channel<T
             owner: owner.to_string(), cwd: args.cwd.clone(), title: args.title.clone().filter(|t| !t.trim().is_empty()),
             agent: args.agent.unwrap_or(false), screen,
         });
+        state.references.lock().unwrap().insert(id.clone(), (owner.to_string(), args.cwd.clone()));
     }
     std::thread::spawn(move || {
         let code = child.wait().ok().map(|s| s.exit_code());
@@ -541,6 +552,7 @@ pub async fn terminal_resize(state: tauri::State<'_, TermState>, id: String, col
 
 #[tauri::command]
 pub async fn terminal_kill(state: tauri::State<'_, TermState>, id: String) -> Result<(), String> {
+    state.references.lock().unwrap().remove(&id);
     let removed = state.terms.lock().unwrap().remove(&id);
     if let Some(term) = removed {
         let _ = tauri::async_runtime::spawn_blocking(move || term.kill_tree()).await;
@@ -557,6 +569,7 @@ pub async fn terminal_kill_all(app: AppHandle, window: tauri::Window) -> Result<
 
 pub fn kill_owned(app: &AppHandle, owner: &str) {
     if let Some(state) = app.try_state::<TermState>() {
+        state.references.lock().unwrap().retain(|_, (label, _)| label != owner);
         let drained: Vec<Term> = {
             let mut terms = state.terms.lock().unwrap();
             let ids: Vec<String> = terms.iter().filter(|(_, t)| t.owner == owner).map(|(id, _)| id.clone()).collect();
@@ -570,6 +583,7 @@ pub fn kill_owned(app: &AppHandle, owner: &str) {
 
 pub fn kill_all(app: &AppHandle) {
     if let Some(state) = app.try_state::<TermState>() {
+        state.references.lock().unwrap().clear();
         let drained: Vec<Term> = state.terms.lock().unwrap().drain().map(|(_, t)| t).collect();
         for term in drained {
             term.kill_tree();
@@ -580,6 +594,16 @@ pub fn kill_all(app: &AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reference_context_is_window_owned_and_independent_of_live_processes() {
+        let state = TermState::new();
+        state.references.lock().unwrap().insert("id".into(), ("main".into(), "C:/project".into()));
+        assert!(state.terms.lock().unwrap().is_empty());
+        assert_eq!(state.reference_cwd("id", "main").unwrap(), "C:/project");
+        assert!(state.reference_cwd("id", "other").is_err());
+        assert!(state.reference_cwd("missing", "main").is_err());
+    }
 
     fn screen(rows: u16, cols: u16) -> ScreenState {
         Screen::new(rows, cols).state.into_inner().unwrap()

@@ -24,6 +24,7 @@ export type EditorInput =
   | { kind: "accounts" }
   | { kind: "codeIndex" }
   | { kind: "resources" }
+  | { kind: "localModels" }
   | { kind: "featureCreate"; repo?: string }
   | { kind: "featureIntegrate"; path: string }
   | { kind: "welcome" }
@@ -85,6 +86,8 @@ export function tabId(input: EditorInput): string {
       return "codeIndex"
     case "resources":
       return "resources"
+    case "localModels":
+      return "localModels"
     case "aiReview":
       return `aiReview:${input.scope}:${normalizePath(input.repo).toLowerCase()}:${input.number ?? ""}`
     case "featureCreate":
@@ -134,6 +137,8 @@ export function inputTitle(input: EditorInput): string {
       return "Índice de código"
     case "resources":
       return "Recursos de la PC"
+    case "localModels":
+      return "Modelos locales"
     case "aiReview":
       return input.scope === "pr" ? `Revisión IA · PR #${input.number}` : "Revisión IA · cambios"
     case "featureCreate":

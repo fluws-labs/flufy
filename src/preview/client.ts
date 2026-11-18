@@ -129,6 +129,7 @@ function previewStyleToCss(style: NonNullable<PreviewNode["style"]>, tokens: Rec
   const background = resolveSafeColor(style.background, tokens); if (background) css.background = background
   const borderColor = resolveSafeColor(style.borderColor, tokens); if (borderColor) css.borderColor = borderColor
   if (style.radius !== undefined) css.borderRadius = `${style.radius}px`
+  const fontFamily = safeFont(style.fontFamily); if (fontFamily) css.fontFamily = fontFamily
   if (style.fontSize !== undefined) css.fontSize = `${style.fontSize}px`
   if (style.fontWeight !== undefined) css.fontWeight = String(style.fontWeight)
   return css
@@ -393,6 +394,7 @@ function cssToPreviewStyle(css: Record<string, string | number> | undefined): Pr
   if (typeof background === "string") style.background = background
   if (typeof css.borderColor === "string") style.borderColor = css.borderColor
   const radius = num(css.borderRadius); if (radius !== undefined) style.radius = radius
+  if (typeof css.fontFamily === "string") style.fontFamily = css.fontFamily
   const fontSize = num(css.fontSize); if (fontSize !== undefined) style.fontSize = fontSize
   const fontWeight = num(css.fontWeight); if (fontWeight !== undefined) style.fontWeight = fontWeight
   return Object.keys(style).length ? style : undefined

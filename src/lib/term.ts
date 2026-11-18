@@ -1,4 +1,5 @@
 import { call, Channel } from "./tauri"
+import type { FileContent } from "./fs"
 
 export type ShellInfo = { id: string; name: string; path: string }
 export type TermEvent = { kind: "data"; data: string } | { kind: "exit"; code: number | null }
@@ -17,3 +18,6 @@ export const terminalWrite = (id: string, data: string) => call<void>("terminal_
 export const terminalResize = (id: string, cols: number, rows: number) => call<void>("terminal_resize", { id, cols, rows })
 export const terminalKill = (id: string) => call<void>("terminal_kill", { id })
 export const terminalKillAll = () => call<void>("terminal_kill_all")
+
+export const terminalFileReference = (id: string, file: string, workspace: string, read: boolean) =>
+  call<{ path: string; file?: FileContent }>("terminal_file_reference", { id, file, workspace, read })
