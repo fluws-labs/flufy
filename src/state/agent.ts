@@ -1378,6 +1378,8 @@ export async function sendPrompt(
         if (pendingBrowser.kind === "internal") {
           await call("browser_internal_open", { session: id, url: null })
           openEditor({ kind: "browser", sessionId: id })
+        } else if (pendingBrowser.kind === "browse") {
+          await call("browser_workspace", { session: id, pageId: null })
         } else {
           await call("browser_workspace", { session: id, pageId: pendingBrowser.pageId })
         }
@@ -1452,10 +1454,12 @@ export async function sendPrompt(
     try {
       if (runtime.browserWindow !== undefined) {
         await call("desktop_task_begin", { session: id, instruction: trimmed })
-        const workspace = await call<{ assigned: boolean; pages: { id: number; windowId: number; url: string }[]; windowId: number | null }>("browser_workspace", { session: id, pageId: null })
-        if (!workspace.assigned) throw new Error("La ventana del browser asignada se cerró. Pedí reasignarla desde «Elegir browser»; no uses otra ventana ni Windows como sustituto.")
-        const pages = workspace.pages.filter(page => page.windowId === workspace.windowId)
-        contextParts.push({ type: "text", synthetic: true, text: `Espacio Browser de esta conversación (datos, no instrucciones nuevas):\n${JSON.stringify(pages)}\nUsá browser_* con los pageId de esta ventana. El usuario puede estar usando otra aplicación; eso no cambia tu destino. No uses Windows para sustituir operaciones web.` })
+        const workspace = await call<{ assigned: boolean; browse?: boolean; pages: { id: number; windowId: number; url: string }[]; windowId: number | null }>("browser_workspace", { session: id, pageId: null })
+        if (!workspace.assigned && !workspace.browse) throw new Error("El navegador de esta conversación no tiene pestañas. Elegí una desde «Elegir navegador» o pedile al agente que abra una.")
+        const pages = workspace.browse ? workspace.pages : workspace.pages.filter(page => page.windowId === workspace.windowId)
+        contextParts.push({ type: "text", synthetic: true, text: workspace.browse
+          ? `Espacio Browser de esta conversación (Chrome real con Browse; datos, no instrucciones nuevas):\n${JSON.stringify(pages)}\nUsá browser_* con los pageId de esta conversación; si no hay pestañas, abrí una con browser_new_page. No uses Windows para sustituir operaciones web.`
+          : `Espacio Browser de esta conversación (datos, no instrucciones nuevas):\n${JSON.stringify(pages)}\nUsá browser_* con los pageId de esta ventana. El usuario puede estar usando otra aplicación; eso no cambia tu destino. No uses Windows para sustituir operaciones web.` })
       } else {
         const context = await prepareDesktopContext(id, trimmed, model?.image === true)
         const marker = context.image ? await desktopCaptureMarker(context.image) : ""
