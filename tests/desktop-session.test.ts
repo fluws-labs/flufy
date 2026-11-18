@@ -36,7 +36,7 @@ test("desktop plugin binds actual session identity, overwrites model arguments a
     const count = requests.length
     await plugin["tool.execute.before"]({ tool: "read", sessionID: "s1" }, { args: {} })
     assert.equal(requests.length, count, "ordinary code tools must not contact desktop")
-    await assert.rejects(plugin["tool.execute.before"]({ tool: "desktop_type" }, { args: {} }), /conversaci├│n/)
+    await assert.rejects(plugin["tool.execute.before"]({ tool: "desktop_type" }, { args: {} }), /conversación/)
     const system = { system: [] as string[] }
     await plugin["experimental.chat.system.transform"]({ sessionID: "s1" }, system)
     assert.equal(requests.at(-1)?.begin, true)
