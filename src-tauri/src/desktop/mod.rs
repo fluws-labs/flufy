@@ -297,7 +297,7 @@ fn agent_config(state: &DesktopState) -> Value {
                 "mode": "primary",
                 "description": PC_DESCRIPTION,
                 "prompt": escritorio_prompt(),
-                "permission": { "*": "allow", "self_*": "deny", "desktop_*": "allow", "browser_*": "allow" },
+                "permission": { "*": "allow", "desktop_*": "allow", "browser_*": "allow" },
             },
             "local": {
                 "mode": "primary",
