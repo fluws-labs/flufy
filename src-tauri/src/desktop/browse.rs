@@ -278,12 +278,25 @@ fn ensure() -> Result<(), String> {
 }
 
 fn call_tool(tool: &str, arguments: Value) -> Result<Value, String> {
-    ensure()?;
-    let result = request("tools/call", json!({ "name": tool, "arguments": arguments }), CALL_TIMEOUT)?;
-    if result["isError"].as_bool().unwrap_or(false) {
-        return Err(text_of(&result));
+    let mut retried = false;
+    loop {
+        ensure()?;
+        let result = request("tools/call", json!({ "name": tool, "arguments": arguments.clone() }), CALL_TIMEOUT)?;
+        if !result["isError"].as_bool().unwrap_or(false) {
+            return Ok(result);
+        }
+        let message = text_of(&result);
+        // Starting the relay can lose a race (another MCP instance, a port held
+        // for a moment, or a transient Windows access denial). The call never
+        // reached a page, so one clean restart is safe.
+        if !retried && (message.contains("failed to start the browse relay") || message.contains("os error 5") || message.contains("Acceso denegado")) {
+            retried = true;
+            stop_process();
+            std::thread::sleep(Duration::from_millis(500));
+            continue;
+        }
+        return Err(message);
     }
-    Ok(result)
 }
 
 fn text_of(result: &Value) -> String {
@@ -323,6 +336,16 @@ fn group_for(session: &str) -> String {
 
 fn tab_key(value: &Value) -> Option<String> {
     if let Some(id) = value.as_i64() { Some(id.to_string()) } else { value.as_str().map(str::to_string) }
+}
+
+/// Browse takes numeric tab ids as JSON numbers; a numeric *string* is read as
+/// a chosen id ("work-mail") and rejected. Keep the stored key a string and
+/// turn it back into a number when talking to the relay.
+fn tab_value(tab: &str) -> Value {
+    match tab.parse::<i64>() {
+        Ok(id) => json!(id),
+        Err(_) => json!(tab),
+    }
 }
 
 fn with_session<T>(session: &str, f: impl FnOnce(&mut SessionTabs) -> T) -> T {
@@ -442,7 +465,7 @@ fn translation_error(tool: &str) -> String {
 fn page_tool(session: &str, tool: &str, args: &Value) -> Result<(&'static str, Value), String> {
     let tab = page_tab(session, args)?;
     let mut out = serde_json::Map::new();
-    out.insert("tab".into(), json!(tab.clone()));
+    out.insert("tab".into(), tab_value(&tab));
     let take = |key: &str| -> Option<Value> {
         let value = args.get(key)?;
         if value.is_null() { None } else { Some(value.clone()) }
@@ -570,7 +593,7 @@ fn navigation(session: &str, args: &Value) -> Result<Value, String> {
     match args["pageId"].as_u64() {
         Some(_) => {
             let tab = page_tab(session, args)?;
-            value.insert("tab".into(), json!(tab));
+            value.insert("tab".into(), tab_value(&tab));
         }
         None => {
             let group = with_session(session, |state| state.group.clone());
@@ -607,7 +630,16 @@ fn dispatch(session: &str, name: &str, args: &Value) -> Result<Value, String> {
             let group = with_session(session, |state| state.group.clone());
             let mut value = json!({ "action": "new", "group": group });
             if let Some(url) = args["url"].as_str().filter(|url| !url.trim().is_empty()) { value["url"] = json!(url); }
-            let result = call_tool("tabs", value)?;
+            let result = match call_tool("tabs", value.clone()) {
+                Ok(result) => result,
+                Err(error) if error.contains("Tabs cannot be edited right now") => {
+                    // Chrome locks tab groups for a moment while the user drags
+                    // a tab; the tab was not created, so retrying is safe.
+                    std::thread::sleep(Duration::from_millis(350));
+                    call_tool("tabs", value)?
+                }
+                Err(error) => return Err(error),
+            };
             let mut parsed: Value = serde_json::from_str(&text_of(&result)).unwrap_or(Value::Null);
             if let Some(tab) = parsed.get("tab").and_then(tab_key) {
                 let page_id = with_session(session, |state| assign(state, &tab));
@@ -619,7 +651,7 @@ fn dispatch(session: &str, name: &str, args: &Value) -> Result<Value, String> {
         }
         "close_page" => {
             let tab = page_tab(session, args)?;
-            let result = call_tool("tabs", json!({ "action": "close", "tab": tab }))?;
+            let result = call_tool("tabs", json!({ "action": "close", "tab": tab_value(&tab) }))?;
             with_session(session, |state| {
                 if let Some((page_id, _)) = state.pages.iter().find(|(_, value)| **value == tab).map(|(id, value)| (*id, value.clone())) {
                     state.pages.remove(&page_id);
@@ -650,8 +682,8 @@ fn dispatch(session: &str, name: &str, args: &Value) -> Result<Value, String> {
         "get_console_message" | "get_network_request" => Ok(result_error("Esa herramienta de Chrome DevTools no tiene equivalente en Browse por ahora.")),
         other => {
             let (tool, mut value) = page_tool(session, other, args)?;
-            if let Some(tab) = value["tab"].as_str() {
-                if !with_session(session, |state| owned(state, tab)) {
+            if let Some(tab) = value.get("tab").and_then(tab_key) {
+                if !with_session(session, |state| owned(state, &tab)) {
                     return Err("Esa pestaña no pertenece a esta conversación. Usá browser_list_pages.".into());
                 }
             }
