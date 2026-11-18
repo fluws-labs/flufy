@@ -71,6 +71,7 @@ async function setup(page: Page, open = ["s1", "c1", "s2"]) {
   })
   await page.goto("/")
   await page.getByTitle(/Sesiones del agente/).click()
+  await page.locator(".session-filters").getByRole("button", { name: /^Todas/ }).click()
   await expect(row(page, "Conversación vieja")).toBeVisible()
   return state
 }
@@ -125,7 +126,7 @@ test("archiva con sus subagentes, persiste al recargar y restaura conservando el
   await expect(page.locator(".session-archived-banner")).toHaveCount(0)
   await expect(page.getByRole("button", { name: "Archivadas (0)", exact: true })).toBeVisible()
   expect(state.mutations.at(-1)?.body).toEqual({ time: { archived: 0 } })
-  await page.getByRole("button", { name: "Activas (2)", exact: true }).click()
+  await page.locator(".session-filters").getByRole("button", { name: /^Todas/ }).click()
   await row(page, "Conversación vieja").click()
   await expect(page.locator(".agent-panel .chat-scroll")).toContainText("Este historial se conserva al archivar.")
   await expect(page.locator(".agent-panel textarea")).toBeVisible()
@@ -146,7 +147,7 @@ test("menú contextual de pestañas y restauración desde Archivadas", async ({ 
   await expect(page.getByRole("button", { name: "Archivadas (0)", exact: true })).toBeVisible()
   await page.getByPlaceholder("Filtrar sesiones").fill("")
   await expect(page.getByText("No hay conversaciones archivadas", { exact: true })).toBeVisible()
-  await page.getByRole("button", { name: "Activas (2)", exact: true }).click()
+  await page.locator(".session-filters").getByRole("button", { name: /^Todas/ }).click()
   await expect(row(page, "Conversación vieja")).toBeVisible()
 })
 
@@ -178,7 +179,7 @@ test("sincroniza archivado y restauración de otra ventana por eventos del motor
   info.time.archived = 0
   state.events.push({ directory: root, payload: { type: "session.updated", properties: { info: structuredClone(info) } } })
   await expect(row(page, "Conversación vieja")).toHaveCount(0, { timeout: 15000 })
-  await page.getByRole("button", { name: "Activas (2)", exact: true }).click()
+  await page.locator(".session-filters").getByRole("button", { name: /^Todas/ }).click()
   await expect(row(page, "Conversación vieja")).toBeVisible()
   expect(state.mutations).toEqual([])
 })
