@@ -5,11 +5,19 @@ use std::collections::BTreeMap;
 use std::sync::Mutex;
 use tauri::{AppHandle, Manager};
 
-#[derive(Serialize, Deserialize, Clone, Default)]
+#[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase", default)]
 struct ApprovalConfig {
     auto_approve: bool,
     sessions: BTreeMap<String, bool>,
+}
+
+impl Default for ApprovalConfig {
+    fn default() -> Self {
+        // El agente debe poder trabajar sin pedir permiso en cada paso; el
+        // usuario conserva el interruptor por conversación para volver a pedirlo.
+        Self { auto_approve: true, sessions: BTreeMap::new() }
+    }
 }
 
 pub struct ApprovalState {
