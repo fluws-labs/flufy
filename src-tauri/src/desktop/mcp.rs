@@ -73,6 +73,12 @@ fn handle(app: &AppHandle, mut req: Request, token: &str) {
         Err(_) => return reply(req, 400, Some(&json!({ "jsonrpc": "2.0", "id": null, "error": { "code": -32700, "message": "JSON inválido" } }))),
     };
     if session_binding {
+        if parsed["begin"].as_bool().unwrap_or(false) {
+            return match super::tasks::resume(app, parsed["session"].as_str().unwrap_or_default()) {
+                Ok(binding) => reply(req, 200, Some(&binding)),
+                Err(e) => reply(req, 400, Some(&json!({ "error": e }))),
+            };
+        }
         if parsed["peek"].as_bool().unwrap_or(false) {
             return reply(req, 200, Some(&json!({ "task": super::tasks::get(app, parsed["session"].as_str().unwrap_or_default()) })));
         }

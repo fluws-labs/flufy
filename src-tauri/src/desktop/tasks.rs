@@ -111,6 +111,26 @@ pub fn bind(app: &AppHandle, session: &str) -> Result<Value, String> {
     Ok(json!({ "token": task.token, "run": task.run, "task": task }))
 }
 
+/// A new model turn gets control back after the user stopped the previous one.
+/// The stop guard still rejects late calls from the aborted turn (their run is
+/// older); this only revives the task before the new turn starts generating.
+pub fn resume(app: &AppHandle, session: &str) -> Result<Value, String> {
+    let task = match get(app, session) {
+        Some(task) if task.status == "stopped" => update(app, session, |t| {
+            t.run += 1;
+            t.status = "running".into();
+            t.started = chrono::Utc::now().timestamp_millis();
+            t.first_action = None;
+            t.in_flight = None;
+            t.actions = 0;
+            Ok(())
+        })?,
+        Some(task) => task,
+        None => update(app, session, |_| Ok(()))?,
+    };
+    Ok(json!({ "token": task.token, "run": task.run, "task": task }))
+}
+
 pub fn enter(app: &AppHandle, args: &Value) -> Result<Scope, String> {
     let auth = &args["_guillecode"];
     let token = auth["token"].as_str().ok_or("Falta el enlace de sesión del motor. Reiniciá el motor para cargar el plugin de escritorio.")?;
