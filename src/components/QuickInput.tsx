@@ -33,6 +33,9 @@ type Row = {
   groupSep?: boolean
   favorite?: boolean
   onToggleFavorite?: () => void
+  actionIcon?: string
+  actionTitle?: string
+  onAction?: () => void
   match?: FuzzyMatch
   descMatch?: FuzzyMatch
   accept: (sideways: boolean) => void
@@ -113,6 +116,9 @@ export function QuickInput() {
         groupFavorites: request.favorites && !q,
         favorite: request.favorites ? favoriteModels.includes(item.id) : undefined,
         onToggleFavorite: request.favorites ? item.onToggleFavorite : undefined,
+        actionIcon: item.actionIcon,
+        actionTitle: item.actionTitle,
+        onAction: item.onAction,
         match: { score: match.score, positions: match.positions.filter((p) => p < item.label.length) },
         accept: () => resolvePick(item),
       }))
@@ -349,6 +355,19 @@ export function QuickInput() {
                       }}
                     >
                       <Icon name={row.favorite ? "star-full" : "star-empty"} />
+                    </button>
+                  )}
+                  {row.onAction && (
+                    <button
+                      type="button"
+                      className="quick-star quick-delete"
+                      title={row.actionTitle}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        row.onAction?.()
+                      }}
+                    >
+                      <Icon name={row.actionIcon ?? "close"} />
                     </button>
                   )}
                 </div>

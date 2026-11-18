@@ -1,5 +1,6 @@
 import { create } from "zustand"
 import {
+  changeCount,
   featuresCreate,
   featuresList,
   featuresRemove,
@@ -52,6 +53,7 @@ type FeaturesState = {
   loading: boolean
   error: string | null
   runTerminalId: string | null
+  runWorkspaceId: string | null
   showArchived: boolean
   activeWorkspace: string
   prepare: Record<string, PrepareState>
@@ -62,6 +64,7 @@ export const useFeatures = create<FeaturesState>(() => ({
   loading: false,
   error: null,
   runTerminalId: null,
+  runWorkspaceId: null,
   showArchived: false,
   activeWorkspace: "main",
   prepare: {},
@@ -327,9 +330,14 @@ export async function pickWorkspace(): Promise<void> {
     description: w.kind === "main" ? `${w.repos.length} repositorio(s)` : w.repos.map((r) => r.name).join(", "),
     icon: w.id === active ? "check" : w.kind === "main" ? "home" : "worktree",
   }))
+  items.push({ id: "__view__", label: "Ver espacios de trabajo…", icon: "list-tree" })
   items.push({ id: "__new__", label: "Trabajo nuevo…", icon: "add" })
   const choice = await pickOne(items, { title: "Espacios de trabajo", placeholder: "Elegí Principal o un trabajo" })
   if (!choice) return
+  if (choice.id === "__view__") {
+    useLayout.getState().showView("scm", false)
+    return
+  }
   if (choice.id === "__new__") {
     await openFeatureCreate()
     return
@@ -510,6 +518,55 @@ export async function removeWorkspace(ws: Workspace): Promise<void> {
   }
   if (useFeatures.getState().activeWorkspace === ws.id) await selectWorkspace("main")
   await refreshFeatures()
+}
+
+function workspaceWaiting(ws: Workspace): number {
+  const state = useAgent.getState()
+  const ids = new Set(ws.repos.flatMap((repo) => state.allSessions.filter((session) => sessionInRoot(session, repo.root)).map((session) => session.id)))
+  return state.permissions.filter((permission) => ids.has(permission.sessionID)).length + state.questions.filter((question) => ids.has(question.sessionID)).length
+}
+
+export async function cleanupWorkspaces(): Promise<void> {
+  const list = useFeatures.getState().list
+  if (!list?.git) {
+    notify.info("Los espacios de trabajo necesitan un repositorio git", "Abrí un repo, o una carpeta que tenga repos adentro")
+    return
+  }
+  const project = requireProject()
+  const active = useFeatures.getState().activeWorkspace
+  const candidates = (list.workspaces ?? []).filter((ws) => {
+    if (ws.kind === "main" || ws.id === active) return false
+    if (workspaceBusy(ws) > 0 || workspaceWaiting(ws) > 0) return false
+    return ws.repos.every((repo) => repo.missing || (changeCount(repo.changes) === 0 && repo.ahead === 0))
+  })
+  if (candidates.length === 0) {
+    notify.info("No hay trabajos para limpiar", "Quedan solo los que tienen cambios, commits propios o agentes activos.")
+    return
+  }
+  const names = candidates.map((ws) => "«" + ws.label + "»").join(", ")
+  const choice = await ask("Limpiar trabajos", {
+    message: "Se eliminan " + candidates.length + " trabajo(s) sin cambios ni commits propios: " + names + ". Las conversaciones quedan en el historial.",
+    icon: "question",
+    buttons: [
+      { id: "cancel", label: "Cancelar" },
+      { id: "clean", label: "Limpiar", danger: true },
+    ],
+  })
+  if (choice !== "clean") return
+  let done = 0
+  const errors: string[] = []
+  for (const ws of candidates) {
+    const deleteBranch = ws.repos.every((repo) => !repo.missing && repo.ahead === 0)
+    try {
+      await workspaceRemoveCall({ project, workspace: ws.id, deleteBranch, force: false, forceBranch: false })
+      done += 1
+    } catch (error) {
+      errors.push(ws.label + ": " + errorMessage(error))
+    }
+  }
+  await refreshFeatures()
+  if (done) notify.success("Limpié " + done + " trabajo(s)", "Se eliminaron las carpetas; las ramas sin commits propios también.")
+  if (errors.length) notify.warning("Algunos trabajos no se pudieron limpiar", errors.slice(0, 4).join("\n"))
 }
 
 export function settingsOf(scope: string, list: FeatureList | null = useFeatures.getState().list): ProjectSettings | null {
@@ -857,19 +914,19 @@ export async function runApp(): Promise<void> {
   const current = useFeatures.getState().runTerminalId
   if (current && isAppRunning(current)) await killTerminal(current)
   const id = await runInTerminal(command, { newTerminal: true, cwd: root, title: "app" })
-  useFeatures.setState({ runTerminalId: id })
+  useFeatures.setState({ runTerminalId: id, runWorkspaceId: activeWorkspace()?.id ?? null })
 }
 
 export async function stopApp(): Promise<void> {
   const id = useFeatures.getState().runTerminalId
   if (!id) return
   await killTerminal(id)
-  useFeatures.setState({ runTerminalId: null })
+  useFeatures.setState({ runTerminalId: null, runWorkspaceId: null })
   notify.info("La app se detuvo", "Se cerró su terminal y se liberaron los puertos")
 }
 
 useTerminals.subscribe((s) => {
   const id = useFeatures.getState().runTerminalId
-  if (id && !s.terminals.some((t) => t.id === id)) useFeatures.setState({ runTerminalId: null })
+  if (id && !s.terminals.some((t) => t.id === id)) useFeatures.setState({ runTerminalId: null, runWorkspaceId: null })
   reconcilePrepare(s.terminals)
 })

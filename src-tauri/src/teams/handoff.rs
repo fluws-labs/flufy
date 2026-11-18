@@ -352,6 +352,14 @@ fn board(app: &AppHandle, args: &Value) -> Result<Value, String> {
     let activeSupport: Vec<Value> = run.support_reports.iter().filter(|report| report.finished_at.is_none())
         .map(|report| json!({"kind": report.kind, "status": report.status, "agent": report.agent.name}))
         .collect();
+    let support_reports: Vec<Value> = run.support_reports.iter().rev().take(5).map(|report| json!({
+        "kind": report.kind,
+        "agent": report.agent.name,
+        "status": report.status,
+        "summary": report.summary.chars().take(800).collect::<String>(),
+        "action": report.result.get("action"),
+        "guidance": report.result.get("guidance"),
+    })).collect();
     // Other teams that currently hold the same folders are part of the real
     // blocker; the user-facing Lead must be able to name them, not guess.
     let other_teams: Vec<Value> = store.chats.iter()
@@ -381,6 +389,7 @@ fn board(app: &AppHandle, args: &Value) -> Result<Value, String> {
         "tasks": tasks,
         "unresolvedCoordination": unresolved,
         "activeSupport": activeSupport,
+        "supportReports": support_reports,
         "otherTeamsInFolder": other_teams,
     }))
 }

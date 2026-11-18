@@ -11,6 +11,7 @@ export type SessionRuntime = {
   submittedAt?: number; preparedAt?: number
   browserWindow?: number
   previewEnabled?: boolean
+  autoSpeech?: boolean
   teamImages?: TeamImageInput[]
   browserChoice?: { kind: "internal" } | { kind: "browse" } | { kind: "chrome"; pageId: number; windowId: number; tabs: number }
   transfer?: { id: string; source: string; target: string; expires: number; state: "pending" | "received" | "cancelled" }

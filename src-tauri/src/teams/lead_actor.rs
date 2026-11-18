@@ -29,6 +29,9 @@ pub(super) fn lock_session() -> std::sync::MutexGuard<'static, ()> {
 /// restart or a repeated launch never asks the Lead to react twice.
 pub fn run_state_changed(app: &AppHandle, run_id: &str) -> Result<(), String> {
     let run = super::run(app, run_id)?;
+    if run.support_reports.iter().any(|report| report.kind == "run_coordination" && report.finished_at.is_none()) {
+        return Ok(());
+    }
     if !matches!(run.status.as_str(), "completed" | "blocked" | "failed" | "planning_blocked") {
         return Ok(());
     }
@@ -66,6 +69,9 @@ pub fn run_state_changed(app: &AppHandle, run_id: &str) -> Result<(), String> {
 
 pub fn run_attention(app: &AppHandle, run_id: &str) -> Result<(), String> {
     let run = super::run(app, run_id)?;
+    if run.support_reports.iter().any(|report| report.kind == "run_coordination" && report.finished_at.is_none()) {
+        return Ok(());
+    }
     let Some(chat_id) = super::run_chat(app, run_id)? else { return Ok(()) };
     let Some(source) = read(app)?.chats.iter().find(|chat| chat.id == chat_id)
         .and_then(|chat| chat.origin.as_ref().map(|origin| origin.session_id.clone())) else { return Ok(()) };
@@ -78,6 +84,9 @@ pub fn run_attention(app: &AppHandle, run_id: &str) -> Result<(), String> {
     blockers.extend(run.support_reports.iter().filter(|report| report.finished_at.is_none())
         .map(|report| format!("soporte {} en curso", report.kind)));
     if let Some(error) = &run.error { blockers.push(error.chars().take(400).collect()); }
+    if let Some(report) = run.support_reports.iter().rev().find(|report| report.kind == "run_coordination" && report.status == "completed") {
+        blockers.push(format!("Coordinador: {}", report.summary.chars().take(400).collect::<String>()));
+    }
     if blockers.is_empty() { return Ok(()); }
     let summary = blockers.join("; ");
     let fingerprint = {

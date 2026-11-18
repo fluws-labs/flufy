@@ -22,6 +22,7 @@ export type DesktopStatus = {
   paused: boolean
   browser: boolean
   browse: boolean
+  controlSelf: boolean
   browserActive: boolean
   bridge: BridgeStatus
   browseBridge: BrowseStatus
@@ -31,7 +32,7 @@ export type DesktopStatus = {
   available: boolean
 }
 
-export type DesktopPatch = Partial<{ enabled: boolean; paused: boolean; browser: boolean; browse: boolean; blocked: string[] }>
+export type DesktopPatch = Partial<{ enabled: boolean; paused: boolean; browser: boolean; browse: boolean; controlSelf: boolean; blocked: string[] }>
 
 const ACTIVE_MS = 20000
 

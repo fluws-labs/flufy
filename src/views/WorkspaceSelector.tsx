@@ -1,8 +1,9 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { loadJson, saveJson } from "../lib/persist"
 import { sessionInRoot, useAgent } from "../state/agent"
 import { useTerminals } from "../state/terminals"
 import {
+  cleanupWorkspaces,
   isAppRunning,
   openFeatureCreate,
   prepareWorkspace,
@@ -18,6 +19,11 @@ import { Icon, IconButton, Section, Spinner } from "../components/ui"
 import type { Workspace } from "../lib/features"
 
 const OPEN_KEY = "scm.workspacesOpen"
+
+export function showWorkspaceList(): void {
+  saveJson(OPEN_KEY, true)
+  window.dispatchEvent(new Event("flufy:workspaces"))
+}
 
 function useWorkspaceActivity(ws: Workspace): { busy: number; waiting: number } {
   const sessions = useAgent((s) => s.allSessions)
@@ -42,23 +48,28 @@ function WorkspaceRow({ ws, active }: { ws: Workspace; active: boolean }) {
   const changes = changesOf(ws)
   const prepare = useFeatures((s) => s.prepare[ws.id])
   const runId = useFeatures((s) => s.runTerminalId)
+  const runWorkspaceId = useFeatures((s) => s.runWorkspaceId)
   const terminals = useTerminals((s) => s.terminals)
-  const running = active && isAppRunning(runId, terminals)
+  const running = ws.id === runWorkspaceId && isAppRunning(runId, terminals)
   const feature = ws.kind === "feature"
   const missing = ws.repos.every((r) => r.missing)
-  const repoNote = ws.repos.length === 1 ? ws.repos[0].name : `${ws.repos.length} repositorios`
   const branches = Array.from(new Set(ws.repos.map((r) => r.branch).filter((b): b is string => !!b)))
+  const bases = Array.from(new Set(ws.repos.map((r) => r.base).filter((b): b is string => !!b)))
+  const baseNote = bases.length === 1 ? bases[0] : bases.length > 1 ? "por repo" : null
+  const baseTitle = ws.repos.map((r) => `${r.name}: ${r.base ?? "sin base"}`).join("\n")
+  const ahead = ws.repos.reduce((total, r) => total + (r.ahead ?? 0), 0)
+  const behind = ws.repos.reduce((total, r) => total + (r.behind ?? 0), 0)
+  const pathNote = ws.repos.length === 1 ? `${ws.repos[0].name} · ${ws.repos[0].path}` : `${ws.repos.length} repos · ${ws.repos.map((r) => r.name).join(", ")}`
   const menu = (): MenuItem[] => {
     const items: MenuItem[] = []
-    if (!active) items.push({ label: "Usar este espacio", icon: "check", run: () => void selectWorkspace(ws.id) })
-    items.push({ label: "Preparar el entorno", icon: "tools", disabled: missing, run: () => void prepareWorkspace(ws) })
-    if (active) {
-      items.push(
-        running
-          ? { label: "Detener la app", icon: "debug-stop", run: () => void stopApp() }
-          : { label: "Correr la app", icon: "play", run: () => void runApp() },
-      )
+    if (!active) {
+      items.push({ label: "Usar este espacio", icon: "check", run: () => void selectWorkspace(ws.id) })
+      if (!missing) items.push({ label: "Correr la app acá", icon: "play", run: async () => { await selectWorkspace(ws.id); await runApp() } })
     }
+    items.push({ label: "Preparar el entorno", icon: "tools", disabled: missing, run: () => void prepareWorkspace(ws) })
+    if (running) items.push({ label: "Detener la app", icon: "debug-stop", run: () => void stopApp() })
+    else if (active) items.push({ label: "Correr la app", icon: "play", run: () => void runApp() })
+
     if (feature) {
       items.push({ separator: true })
       items.push({ label: "Eliminar el trabajo…", icon: "trash", danger: true, run: () => void removeWorkspace(ws) })
@@ -79,12 +90,18 @@ function WorkspaceRow({ ws, active }: { ws: Workspace; active: boolean }) {
       <div className="feature-text">
         <div className="feature-name">
           <span>{workspaceTitle(ws)}</span>
+          {feature && <span className="feature-badge">trabajo</span>}
           {active && <span className="feature-badge active">activo</span>}
         </div>
         <div className="feature-sub">
-          <Icon name="repo" />
-          <span>{repoNote}</span>
-          {branches.length > 0 && <span className="mono"> · {branches.join(", ")}</span>}
+          <Icon name="git-branch" />
+          <span className="mono">{branches.length ? branches.join(", ") : "HEAD"}</span>
+          {baseNote && <span className="feature-base-tag" title={baseTitle}>← {baseNote}</span>}
+          {(ahead > 0 || behind > 0) && <span className="feature-sync">{ahead > 0 ? `↑${ahead}` : ""}{behind > 0 ? ` ↓${behind}` : ""}</span>}
+        </div>
+        <div className="feature-sub feature-where" title={ws.repos.map((r) => `${r.name}: ${r.path}`).join("\n")}>
+          <Icon name="folder" />
+          <span className="mono">{missing ? "carpeta no encontrada" : pathNote}</span>
           {prepare?.status === "preparing" && (
             <span className="feature-badge">
               <Spinner size={10} /> preparando
@@ -117,12 +134,10 @@ function WorkspaceRow({ ws, active }: { ws: Workspace; active: boolean }) {
         )}
       </span>
       <span className="feature-actions" onClick={(e) => e.stopPropagation()}>
-        {active ? (
-          <IconButton
-            icon={running ? "debug-stop" : "play"}
-            title={running ? "Detener la app" : "Correr la app"}
-            onClick={() => void (running ? stopApp() : runApp())}
-          />
+        {running ? (
+          <IconButton icon="debug-stop" title="Detener la app" onClick={() => void stopApp()} />
+        ) : active ? (
+          <IconButton icon="play" title="Correr la app" onClick={() => void runApp()} />
         ) : (
           <IconButton icon="check" title="Usar este espacio" onClick={() => void selectWorkspace(ws.id)} />
         )}
@@ -137,6 +152,14 @@ export function WorkspaceSelector() {
   const list = useFeatures((s) => s.list)
   const active = useFeatures((s) => s.activeWorkspace)
   const [open, setOpen] = useState(() => loadJson(OPEN_KEY, true))
+  useEffect(() => {
+    const show = () => {
+      setOpen(true)
+      window.setTimeout(() => document.querySelector(".scm-view .feature-list")?.scrollIntoView({ block: "nearest" }), 0)
+    }
+    window.addEventListener("flufy:workspaces", show)
+    return () => window.removeEventListener("flufy:workspaces", show)
+  }, [])
   if (!list?.git) return null
   const workspaces = list.workspaces ?? []
   const features = workspaces.filter((w) => w.kind !== "main")
@@ -151,7 +174,10 @@ export function WorkspaceSelector() {
       count={features.length || undefined}
       open={open}
       onToggle={toggle}
-      actions={<IconButton icon="add" title="Pedirle al agente un trabajo nuevo" onClick={() => void openFeatureCreate()} />}
+      actions={<>
+        <IconButton icon="add" title="Pedirle al agente un trabajo nuevo" onClick={() => void openFeatureCreate()} />
+        <IconButton icon="trash" title="Limpiar trabajos sin cambios ni commits propios" onClick={() => void cleanupWorkspaces()} />
+      </>}
     >
       <div className="feature-list">
         {mains.map((w) => (

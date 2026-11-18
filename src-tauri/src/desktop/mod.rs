@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::VecDeque;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -96,12 +97,13 @@ pub struct DesktopConfig {
     /// Usa el Chrome real del usuario con Browse en las conversaciones normales.
     /// Los equipos siguen con el navegador interno (WebView2) y Chrome DevTools.
     pub browse: bool,
+    pub control_self: bool,
     pub blocked: Vec<String>,
 }
 
 impl Default for DesktopConfig {
     fn default() -> Self {
-        DesktopConfig { enabled: false, paused: false, browser: true, browse: true, blocked: DEFAULT_BLOCKED.iter().map(|s| s.to_string()).collect() }
+        DesktopConfig { enabled: false, paused: false, browser: true, browse: true, control_self: true, blocked: DEFAULT_BLOCKED.iter().map(|s| s.to_string()).collect() }
     }
 }
 
@@ -136,6 +138,7 @@ pub struct DesktopStatus {
     paused: bool,
     browser: bool,
     browse: bool,
+    control_self: bool,
     browser_active: bool,
     bridge: browser::BridgeStatus,
     browse_bridge: browse::BrowseStatus,
@@ -152,10 +155,12 @@ pub struct DesktopPatch {
     paused: Option<bool>,
     browser: Option<bool>,
     browse: Option<bool>,
+    control_self: Option<bool>,
     blocked: Option<Vec<String>>,
 }
 
 static BLOCKED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+static ALLOW_SELF: AtomicBool = AtomicBool::new(true);
 
 fn load(app: &AppHandle) -> DesktopConfig {
     app_data_file(app, "desktop.json")
@@ -185,6 +190,7 @@ pub fn start(app: &AppHandle) {
     tasks::start(app);
     let config = load(app);
     set_blocked(&config.blocked);
+    ALLOW_SELF.store(config.control_self, Ordering::Relaxed);
     let token = format!("{}{}", uuid::Uuid::new_v4().simple(), uuid::Uuid::new_v4().simple());
     let port = match mcp::serve(app, token.clone()) {
         Ok(p) => p,
@@ -332,9 +338,10 @@ pub fn gate(app: &AppHandle) -> Result<(), String> {
 
 #[cfg(windows)]
 pub fn blocked_reason(w: &win::WinInfo) -> Option<String> {
-    // Only the exact process that hosts this agent is off-limits: another
-    // Flufy instance (dev/test) is a normal window and must be controllable.
-    if w.pid == std::process::id() {
+    // El usuario puede permitir que el agente maneje la misma ventana que
+    // hospeda el chat. Por defecto está permitido; el toggle de Control de la PC
+    // vuelve a protegerla si quiere que el agente no toque sus permisos.
+    if w.pid == std::process::id() && !ALLOW_SELF.load(Ordering::Relaxed) {
         return Some("es Flufy: el agente no puede manejar su propia ventana".into());
     }
     listed_reason(w)
@@ -500,6 +507,7 @@ pub fn status(app: &AppHandle) -> DesktopStatus {
         paused: c.paused,
         browser: c.browser,
         browse: c.browse,
+        control_self: c.control_self,
         browser_active: state.browser_injected,
         bridge: browser::status(),
         browse_bridge: browse::status(app, false),
@@ -528,6 +536,10 @@ pub fn apply(app: &AppHandle, patch: DesktopPatch) -> DesktopStatus {
         }
         if let Some(v) = patch.browse {
             c.browse = v;
+        }
+        if let Some(v) = patch.control_self {
+            c.control_self = v;
+            ALLOW_SELF.store(v, Ordering::Relaxed);
         }
         if let Some(list) = patch.blocked {
             let mut clean: Vec<String> = list.iter().map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty()).collect();

@@ -20,7 +20,7 @@ export function teamAttention(chat: TeamChatRecord, run: TeamRun | undefined, re
     const root = run.team.allowedRepositories[0] ?? run.team.projectRoot
     addSession(run.planSessionId, lead, "Organizar el equipo", root)
     for (const session of run.closingSessions ?? []) addSession(session, lead, "Revisión final", root)
-    for (const report of run.supportReports ?? []) addSession(report.sessionId,report.agent.name,report.kind==="investigation"?"Investigar un bloqueo":report.kind==="goal_analysis"?"Comparar objetivo inicial y entrega":"Revisar entrega e integración",report.repository,report.agent.id)
+    for (const report of run.supportReports ?? []) addSession(report.sessionId,report.agent.name,report.kind==="investigation"?"Investigar un bloqueo":report.kind==="run_coordination"?"Coordinar el bloqueo":report.kind==="goal_analysis"?"Comparar objetivo inicial y entrega":"Revisar entrega e integración",report.repository,report.agent.id)
     for (const task of run.tasks) {
       if (["completed", "cancelled"].includes(task.status)) continue
       const attempt = task.attempts.at(-1)

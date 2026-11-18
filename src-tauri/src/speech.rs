@@ -90,11 +90,29 @@ struct SpeechConfig {
     /// proceso Piper nuevo. Encendido, mantiene el modelo cargado para bajar
     /// la latencia a costa de RAM.
     worker: bool,
+    /// "piper" (local liviano) o "server" (OpenAI-compatible, por ejemplo XTTS).
+    engine: String,
+    server_url: String,
+    server_model: String,
+    server_voice: String,
+    server_language: String,
+    server_api_key: String,
 }
 
 impl Default for SpeechConfig {
     fn default() -> Self {
-        Self { enabled: true, voice: DEFAULT_VOICE.into(), speed: 1.0, worker: false }
+        Self {
+            enabled: true,
+            voice: DEFAULT_VOICE.into(),
+            speed: 1.0,
+            worker: false,
+            engine: "piper".into(),
+            server_url: "http://127.0.0.1:8020".into(),
+            server_model: "xtts-v2".into(),
+            server_voice: "dora".into(),
+            server_language: "es".into(),
+            server_api_key: String::new(),
+        }
     }
 }
 
@@ -113,6 +131,45 @@ impl SpeechConfig {
             self.speed.clamp(0.7, 1.4)
         } else {
             1.0
+        }
+    }
+
+    fn is_server(&self) -> bool {
+        self.engine.eq_ignore_ascii_case("server")
+    }
+
+    /// El hash de una nota incluye el motor: la misma frase con Piper y con
+    /// XTTS no debe reutilizar el audio de la otra.
+    fn voice_key(&self) -> String {
+        if self.is_server() {
+            format!(
+                "server:{}:{}:{}",
+                self.server_model.trim(),
+                self.server_voice.trim(),
+                self.server_language.trim()
+            )
+        } else {
+            self.voice_id()
+        }
+    }
+
+    fn server_ready(&self) -> bool {
+        !self.server_url.trim().is_empty()
+    }
+
+    fn server_endpoint(&self) -> String {
+        let mut base = self.server_url.trim().trim_end_matches('/').to_string();
+        if base.is_empty() {
+            base = "http://127.0.0.1:8020".into();
+        }
+        if base.ends_with("/audio/speech") {
+            base
+        } else if base.ends_with("/v1") {
+            format!("{}/audio/speech", base)
+        } else if base.ends_with("/v1/audio") {
+            format!("{}/speech", base)
+        } else {
+            format!("{}/v1/audio/speech", base)
         }
     }
 }
@@ -173,6 +230,13 @@ pub struct SpeechView {
     pub voices_dir: Option<String>,
     pub worker: bool,
     pub worker_running: bool,
+    pub engine: String,
+    pub server_url: String,
+    pub server_model: String,
+    pub server_voice: String,
+    pub server_language: String,
+    pub server_api_key_set: bool,
+    pub server_ready: bool,
     pub voices: Vec<VoiceView>,
 }
 
@@ -238,11 +302,17 @@ fn engine_dir(app: &AppHandle) -> Option<PathBuf> {
 }
 
 pub fn available(app: &AppHandle) -> bool {
+    if load(app).is_server() {
+        return true;
+    }
     engine_dir(app).is_some()
 }
 
 pub fn ready(app: &AppHandle) -> bool {
     let config = load(app);
+    if config.is_server() {
+        return config.server_ready();
+    }
     available(app) && model_present(app, &config.voice_id())
 }
 
@@ -287,7 +357,11 @@ pub fn view(app: &AppHandle) -> SpeechView {
         .collect();
     SpeechView {
         available: available(app),
-        ready: available(app) && model_present(app, &id),
+        ready: if config.is_server() {
+            config.server_ready()
+        } else {
+            available(app) && model_present(app, &id)
+        },
         enabled: config.enabled,
         voice: id,
         speed: config.speed(),
@@ -295,6 +369,13 @@ pub fn view(app: &AppHandle) -> SpeechView {
         voices_dir: voices_dir(app).map(|p| p.to_string_lossy().into_owned()),
         worker: config.worker,
         worker_running,
+        engine: if config.is_server() { "server".into() } else { "piper".into() },
+        server_url: config.server_url.clone(),
+        server_model: config.server_model.clone(),
+        server_voice: config.server_voice.clone(),
+        server_language: config.server_language.clone(),
+        server_api_key_set: !config.server_api_key.trim().is_empty(),
+        server_ready: config.server_ready(),
         voices,
     }
 }
@@ -327,6 +408,51 @@ pub fn update(app: &AppHandle, enabled: Option<bool>, voice: Option<String>, spe
     // Un cambio de voz, velocidad o el apagado del worker invalidan el proceso
     // que tenía el modelo cargado. Se vuelve a levantar solo si hace falta.
     if !config.worker || config.voice != previous.voice || (config.speed - previous.speed).abs() > 0.001 {
+        stop_worker(app);
+    }
+    view(app)
+}
+
+pub fn update_server(
+    app: &AppHandle,
+    engine: Option<String>,
+    server_url: Option<String>,
+    server_model: Option<String>,
+    server_voice: Option<String>,
+    server_language: Option<String>,
+    server_api_key: Option<String>,
+) -> SpeechView {
+    let previous = load(app);
+    let mut config = previous.clone();
+    if let Some(value) = engine {
+        config.engine = if value.eq_ignore_ascii_case("server") { "server" } else { "piper" }.into();
+    }
+    if let Some(value) = server_url {
+        config.server_url = value.trim().chars().take(300).collect();
+    }
+    if let Some(value) = server_model {
+        let clean: String = value.trim().chars().take(120).collect();
+        if !clean.is_empty() {
+            config.server_model = clean;
+        }
+    }
+    if let Some(value) = server_voice {
+        let clean: String = value.trim().chars().take(120).collect();
+        if !clean.is_empty() {
+            config.server_voice = clean;
+        }
+    }
+    if let Some(value) = server_language {
+        let clean: String = value.trim().chars().take(16).collect();
+        if !clean.is_empty() {
+            config.server_language = clean;
+        }
+    }
+    if let Some(value) = server_api_key {
+        config.server_api_key = value.trim().chars().take(500).collect();
+    }
+    save(app, &config);
+    if config.engine != previous.engine {
         stop_worker(app);
     }
     view(app)
@@ -558,7 +684,11 @@ fn spawn_synth(app: &AppHandle, voice: &str, text: &str, speed: f32) -> Result<V
 }
 
 fn synthesize(app: &AppHandle, voice: &str, speed: f32, text: &str) -> Result<Vec<u8>, String> {
-    if load(app).worker {
+    let config = load(app);
+    if config.is_server() {
+        return synthesize_server(&config, text);
+    }
+    if config.worker {
         match worker_synth(app, voice, speed, text) {
             Ok(bytes) => Ok(bytes),
             // Si el proceso persistente se cayó, el segmento igual sale con
@@ -568,6 +698,37 @@ fn synthesize(app: &AppHandle, voice: &str, speed: f32, text: &str) -> Result<Ve
     } else {
         spawn_synth(app, voice, text, speed)
     }
+}
+
+/// Sintetiza con cualquier servidor compatible con OpenAI (`/v1/audio/speech`).
+fn synthesize_server(config: &SpeechConfig, text: &str) -> Result<Vec<u8>, String> {
+    let endpoint = config.server_endpoint();
+    let payload = json!({
+        "model": config.server_model.trim(),
+        "input": text,
+        "voice": config.server_voice.trim(),
+        "language": config.server_language.trim(),
+        "speed": config.speed(),
+        "response_format": "wav",
+    });
+    let mut request = ureq::post(&endpoint).timeout(Duration::from_secs(180));
+    let key = config.server_api_key.trim();
+    if !key.is_empty() {
+        request = request.set("Authorization", &format!("Bearer {}", key));
+    }
+    let response = request.send_json(payload).map_err(|e| match e {
+        ureq::Error::Status(code, _) => format!("El servidor de voz respondió HTTP {} ({})", code, endpoint),
+        _ => format!("No se pudo conectar con el servidor de voz en {}: {}", endpoint, e),
+    })?;
+    let mut bytes = Vec::new();
+    response
+        .into_reader()
+        .read_to_end(&mut bytes)
+        .map_err(|e| format!("No se pudo leer el audio del servidor: {}", e))?;
+    if !is_wav(&bytes) {
+        return Err("El servidor de voz no devolvió un WAV válido".into());
+    }
+    Ok(bytes)
 }
 
 fn read_note(path: &Path) -> Result<Vec<u8>, String> {
@@ -580,7 +741,7 @@ pub fn ensure_note(app: &AppHandle, session: &str, part: &str, text: &str) -> Re
         return Err("Conversación inválida".into());
     }
     let config = load(app);
-    let voice = config.voice_id();
+    let voice = config.voice_key();
     let speed = config.speed();
     if text.len() > MAX_TEXT {
         return Err("El bloque de voz es demasiado largo".into());
@@ -616,7 +777,7 @@ pub fn ensure_segment(app: &AppHandle, session: &str, part: &str, index: u32, te
         return Err("Segmento inválido".into());
     }
     let config = load(app);
-    let voice = config.voice_id();
+    let voice = config.voice_key();
     let speed = config.speed();
     if text.len() > MAX_TEXT {
         return Err("El segmento de voz es demasiado largo".into());
@@ -709,6 +870,9 @@ fn spawn_worker(app: &AppHandle, voice: &str, speed: f32) -> Result<Worker, Stri
 
 fn ensure_worker(app: &AppHandle) -> Result<(), String> {
     let config = load(app);
+    if config.is_server() {
+        return Ok(());
+    }
     let voice = config.voice_id();
     let speed = config.speed();
     let state = app.state::<SpeechState>();
@@ -730,7 +894,8 @@ fn ensure_worker(app: &AppHandle) -> Result<(), String> {
 
 /// Deja el modelo cargado para que el primer segmento no pague la carga.
 pub fn warm(app: &AppHandle) {
-    if !load(app).worker || !ready(app) {
+    let config = load(app);
+    if config.is_server() || !config.worker || !ready(app) {
         return;
     }
     let state = app.state::<SpeechState>();
@@ -1112,6 +1277,31 @@ pub fn speech_get(app: AppHandle) -> SpeechView {
 pub async fn speech_set(app: AppHandle, enabled: bool, voice: String, speed: f64, worker: bool) -> Result<SpeechView, String> {
     tauri::async_runtime::spawn_blocking(move || {
         Ok::<SpeechView, String>(update(&app, Some(enabled), Some(voice), Some(speed), Some(worker)))
+    })
+    .await
+    .unwrap()
+}
+
+#[tauri::command]
+pub async fn speech_server_set(
+    app: AppHandle,
+    engine: String,
+    server_url: String,
+    server_model: String,
+    server_voice: String,
+    server_language: String,
+    server_api_key: String,
+) -> Result<SpeechView, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        Ok::<SpeechView, String>(update_server(
+            &app,
+            Some(engine),
+            Some(server_url),
+            Some(server_model),
+            Some(server_voice),
+            Some(server_language),
+            Some(server_api_key),
+        ))
     })
     .await
     .unwrap()

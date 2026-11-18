@@ -119,7 +119,7 @@ fn notify(app: &AppHandle, r: &Run, done: bool) {
     );
     let body = if done {
         format!(
-            "El equipo terminó el trabajo y sus pruebas. Revisá la entrega y decime «trabajo completado» o pedime mejoras. Evidencias: {}.",
+            "El equipo terminó el trabajo y sus pruebas. Los resultados y las evidencias están listos; si querés mejoras, pedilas. Evidencias: {}.",
             r.evidence_dir
         )
     } else {
@@ -1408,6 +1408,63 @@ fn reusable_worker_result(task: &Task, history: &Value) -> bool {
         .and_then(|m| m["info"]["id"].as_str()).is_some_and(|id| !boundary.iter().any(|old| old == id))
 }
 
+// A run-level block is not a single worker request. Give the Lead an
+// independent Coordinador report with the real state; the normal control path
+// reapplies a retry only after the report is complete and sessions reconciled.
+fn start_run_coordinator(app: &AppHandle, id: &str, r: &Run) -> bool {
+    if !["blocked", "failed", "planning_blocked"].contains(&r.status.as_str()) {
+        return false;
+    }
+    if super::autonomy::requires_user(r.error.as_deref().unwrap_or("")) {
+        return false;
+    }
+    let previous = r.support_reports.iter().filter(|s| s.kind == "run_coordination").count();
+    if previous >= 2
+        || r.support_reports.iter().any(|s| s.kind == "run_coordination" && s.finished_at.is_none())
+    {
+        return false;
+    }
+    let app = app.clone();
+    let run_id = id.to_string();
+    std::thread::spawn(move || {
+        let decision = match super::support::coordinate(&app, &run_id) {
+            Ok(decision) => decision,
+            Err(error) => {
+                log::warn!("[teams-coordinator] {}", error);
+                let _ = super::lead_actor::run_attention(&app, &run_id);
+                return;
+            }
+        };
+        let retry = decision.action == "retry";
+        let summary = decision.summary.clone();
+        let guidance = decision.guidance.clone();
+        let user_request = decision.user_request.clone();
+        if let Err(error) = super::update_run(&app, &run_id, |r| {
+            r.configuration_changes.push(json!({
+                "kind":"automaticRunCoordination",
+                "at":now(),
+                "action":decision.action,
+                "summary":summary,
+                "guidance":guidance,
+                "userRequest":user_request
+            }));
+            if retry && !guidance.trim().is_empty() {
+                r.guidance.push(format!("Coordinación del bloqueo: {}", guidance.trim()));
+            }
+            Ok(())
+        }) {
+            log::warn!("[teams-coordinator] {}", error);
+        }
+        if retry {
+            if let Err(error) = super::control(&app, &run_id, "retry") {
+                log::warn!("[teams-coordinator] no se pudo reintentar: {}", error);
+            }
+        }
+        let _ = super::lead_actor::run_attention(&app, &run_id);
+    });
+    true
+}
+
 fn offer_lead_help(app: &AppHandle, run_id: &str, task_id: &str) -> Result<(), String> {
     let state = run(app, run_id)?;
     let Some(task) = state.tasks.iter().find(|t| t.id == task_id && super::autonomy::eligible(&state, t)) else { return Ok(()); };
@@ -1600,7 +1657,7 @@ fn closeout(app: &AppHandle, id: &str) -> Result<bool, String> {
         "id":a.id,"status":a.status,"summary":a.summary,"checks":a.declared_checks,"error":a.error,"review":a.review,
         "commands":a.commands.iter().map(|c| json!({"command":c["command"],"exitCode":c["exitCode"]})).collect::<Vec<_>>()
     }))})).collect();
-    let prompt = format!("{}\nSos el Lead de cierre. Verificá que el OBJETIVO GENERAL completo se cumplió y que hay comprobaciones suficientes de integración, incluso sin un empleado QA. Las revisiones individuales no bastan si faltan flujos o contratos. Revisá evidencia observada y archivos de lectura disponibles. No inventes verificaciones. Podés crear tareas de corrección, integración o verificación asignadas a miembros existentes.\nOBJETIVO: {}\nEQUIPO: {}\nENTREGAS Y COMANDOS REALES: {}\nDIFF: {}\nRespondé SOLO JSON: {{\"status\":\"approved|changes_requested|review_error\",\"summary\":\"resumen verificable o defectos concretos\",\"criteriaSatisfied\":true,\"tasks\":[]}}. Si pedís cambios, tasks debe contener tareas NUEVAS con IDs únicos y el mismo contrato del plan: id,title,objective,assignedAgentId,repository,dependencies,expectedFiles,acceptanceCriteria. No apruebes si hay trabajo pendiente. Si falta implementar o verificar algo del objetivo, asigná tareas de corrección al equipo; no lo delegues al usuario como QA manual pendiente. Solo después de terminar e integrar todas las tareas, pedile al usuario su QA manual: puede decir «trabajo completado» o pedir mejoras. No esperes su intervención durante el trabajo ni reemplaces sus conclusiones por una aprobación propia. Las capturas no disponibles son una limitación explícita, no prueba visual.",POLICY,r.goal,serde_json::to_string(&r.team).map_err(|e|e.to_string())?,serde_json::to_string(&outcomes).map_err(|e|e.to_string())?,evidence::changes(&r)?);
+    let prompt = format!("{}\nSos el Lead de cierre. Verificá que el OBJETIVO GENERAL completo se cumplió y que hay comprobaciones suficientes de integración, incluso sin un empleado QA. Las revisiones individuales no bastan si faltan flujos o contratos. Revisá evidencia observada y archivos de lectura disponibles. No inventes verificaciones. Podés crear tareas de corrección, integración o verificación asignadas a miembros existentes.\nOBJETIVO: {}\nEQUIPO: {}\nENTREGAS Y COMANDOS REALES: {}\nDIFF: {}\nRespondé SOLO JSON: {{\"status\":\"approved|changes_requested|review_error\",\"summary\":\"resumen verificable o defectos concretos\",\"criteriaSatisfied\":true,\"tasks\":[]}}. Si pedís cambios, tasks debe contener tareas NUEVAS con IDs únicos y el mismo contrato del plan: id,title,objective,assignedAgentId,repository,dependencies,expectedFiles,acceptanceCriteria. No apruebes si hay trabajo pendiente. Si falta implementar o verificar algo del objetivo, asigná tareas de corrección al equipo; no lo delegues al usuario como QA manual pendiente. No le pidas al usuario QA manual ni aprobación: entregá el resultado verificado y las limitaciones. El usuario puede pedir mejoras después; no esperes su intervención durante el trabajo. Las capturas no disponibles son una limitación explícita, no prueba visual.",POLICY,r.goal,serde_json::to_string(&r.team).map_err(|e|e.to_string())?,serde_json::to_string(&outcomes).map_err(|e|e.to_string())?,evidence::changes(&r)?);
     let prompt = format!(
         "{}\nOBSERVACIONES REALES DE LOS FLUJOS (antes/después y pasos, no inferidas): {}",
         prompt,
@@ -1746,6 +1803,9 @@ pub fn launch(app: &AppHandle, id: &str) {
             }
             if let Ok(r) = run(&app, &id) {
                 notify(&app, &r, false);
+                if matches!(r.status.as_str(), "blocked" | "failed") {
+                    start_run_coordinator(&app, &id, &r);
+                }
             }
         }
         if let Err(error) = super::lead_actor::run_state_changed(&app, &id) {
@@ -1829,7 +1889,11 @@ fn schedule(app: &AppHandle, id: &str) -> Result<(), String> {
         plan(app, id)?;
     }
     if ["planning_blocked","plan_ready"].contains(&run(app,id)?.status.as_str()) {
-        if run(app,id)?.status == "planning_blocked" { notify(app,&run(app,id)?,false); }
+        if run(app,id)?.status == "planning_blocked" {
+            let r = run(app,id)?;
+            notify(app,&r,false);
+            start_run_coordinator(app,id,&r);
+        }
         return Ok(());
     }
     if run(app, id)?.tasks.iter().all(|t| t.attempts.is_empty()) {
@@ -1939,7 +2003,10 @@ fn schedule(app: &AppHandle, id: &str) -> Result<(), String> {
         }
         let mut r = run(app, id)?;
         if r.status == "blocked" {
-            if workers.is_empty() && coordinator.is_none() { return Ok(()); }
+            if workers.is_empty() && coordinator.is_none() {
+                start_run_coordinator(app, id, &r);
+                return Ok(());
+            }
             std::thread::sleep(Duration::from_millis(500));
             continue;
         }
@@ -2018,7 +2085,7 @@ fn schedule(app: &AppHandle, id: &str) -> Result<(), String> {
             })?;
             let mut r = run(app, id)?;
             r.summary = format!(
-                "Terminamos. {}\n\n{}\n\nRevisá la entrega: decime «trabajo completado» para dar tu visto bueno, o pedime mejoras y las implementamos.",
+                "Entregamos. {}\n\n{}\n\nLos resultados y las evidencias están listos. Si querés mejoras, pedilas; no necesitás aprobar la entrega.",
                 r.summary,
                 r.tasks
                     .iter()

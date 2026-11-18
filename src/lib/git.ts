@@ -83,6 +83,21 @@ export const gitShowFileBase64 = (worktree: string, rev: string, file: string) =
 export const gitDiffFile = (worktree: string, file: string, staged: boolean) =>
   call<string>("git_diff_file", { worktree, file, staged })
 export const gitBranches = (worktree: string) => call<Branch[]>("git_branches", { worktree })
+export const gitCleanBranches = (worktree: string) => call<string[]>("git_clean_branches", { worktree })
+
+export type RemoteBranch = {
+  name: string
+  branch: string
+  oid: string
+  author: string
+  email: string
+  unique: number
+  merged: boolean
+  own: boolean
+}
+
+export const gitRemoteBranches = (worktree: string) => call<RemoteBranch[]>("git_remote_branches", { worktree })
+export const gitDeleteRemoteBranch = (worktree: string, branch: string) => call<string>("git_delete_remote_branch", { worktree, branch })
 export const gitCheckout = (worktree: string, branch: string, create = false, from?: string) =>
   call<void>("git_checkout", { worktree, branch, create, from })
 export const gitSubrepos = (worktree: string) => call<string[]>("git_subrepos", { worktree }).then((r) => r.map(normalizePath))

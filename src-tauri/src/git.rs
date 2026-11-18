@@ -848,6 +848,129 @@ pub async fn git_branches(worktree: String) -> Result<Vec<Branch>, String> {
     blocking(move || branches_sync(&worktree)).await
 }
 
+fn clean_branches_sync(worktree: &str) -> Result<Vec<String>, String> {
+    let current = git_quiet(worktree, &["rev-parse", "--abbrev-ref", "HEAD"])?.trim().to_string();
+    let worktree_branches: Vec<String> = git_quiet(worktree, &["worktree", "list", "--porcelain"])?
+        .lines()
+        .filter_map(|line| line.strip_prefix("branch refs/heads/").map(|branch| branch.trim().to_string()))
+        .collect();
+    let refs = git_quiet(worktree, &["for-each-ref", "--format=%(refname:short)%1f%(upstream:short)", "refs/heads"])?;
+    let mut deleted = Vec::new();
+    for line in refs.lines() {
+        let Some((branch, upstream)) = line.split_once('\x1f') else { continue };
+        let branch = branch.trim();
+        let upstream = upstream.trim();
+        if branch.is_empty() || branch == current || upstream.is_empty() || worktree_branches.iter().any(|item| item == branch) {
+            continue;
+        }
+        let remote = format!("refs/remotes/{}", upstream);
+        if git_quiet(worktree, &["rev-parse", "--verify", "--quiet", &remote]).is_err() {
+            continue;
+        }
+        let local = format!("refs/heads/{}", branch);
+        if git_quiet(worktree, &["merge-base", "--is-ancestor", &local, &remote]).is_err() {
+            continue;
+        }
+        if git_quiet(worktree, &["branch", "-D", branch]).is_ok() {
+            deleted.push(branch.to_string());
+        }
+    }
+    Ok(deleted)
+}
+
+#[tauri::command]
+pub async fn git_clean_branches(worktree: String) -> Result<Vec<String>, String> {
+    blocking(move || clean_branches_sync(&worktree)).await
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteBranch {
+    pub name: String,
+    pub branch: String,
+    pub oid: String,
+    pub author: String,
+    pub email: String,
+    pub unique: usize,
+    pub merged: bool,
+    pub own: bool,
+}
+
+fn remote_branches_sync(worktree: &str) -> Result<Vec<RemoteBranch>, String> {
+    let default = default_branch_sync(worktree).unwrap_or_else(|_| "origin/main".into());
+    let user_email = git_quiet(worktree, &["config", "user.email"]).map(|value| value.trim().to_lowercase()).unwrap_or_default();
+    let out = git_quiet(
+        worktree,
+        &[
+            "for-each-ref",
+            "--format=%(refname:short)%1f%(objectname)%1f%(authorname)%1f%(authoremail)",
+            "refs/remotes/origin",
+        ],
+    )?;
+    let mut branches = Vec::new();
+    for line in out.lines() {
+        let mut fields = line.split('\x1f');
+        let name = fields.next().unwrap_or("").to_string();
+        let oid = fields.next().unwrap_or("").to_string();
+        let author = fields.next().unwrap_or("").to_string();
+        let email = fields.next().unwrap_or("").trim_matches(|c| c == '<' || c == '>').trim().to_lowercase();
+        if name.is_empty() || name.ends_with("/HEAD") {
+            continue;
+        }
+        let branch = name.strip_prefix("origin/").unwrap_or(&name).to_string();
+        let range = format!("{}..{}", default, name);
+        let unique = git_quiet(worktree, &["rev-list", &range])
+            .map(|value| value.lines().filter(|line| !line.trim().is_empty()).count())
+            .unwrap_or(0);
+        let all_own = if unique == 0 {
+            true
+        } else {
+            git_quiet(worktree, &["log", "--format=%ae", &range])
+                .map(|value| value.lines().filter(|line| !line.trim().is_empty()).all(|email| email.trim().eq_ignore_ascii_case(&user_email)))
+                .unwrap_or(false)
+        };
+        let own = !user_email.is_empty() && email == user_email && all_own;
+        branches.push(RemoteBranch { name, branch, oid, author, email, unique, merged: unique == 0, own });
+    }
+    Ok(branches)
+}
+
+#[tauri::command]
+pub async fn git_remote_branches(worktree: String) -> Result<Vec<RemoteBranch>, String> {
+    blocking(move || remote_branches_sync(&worktree)).await
+}
+
+fn delete_remote_branch_sync(worktree: &str, branch: &str) -> Result<String, String> {
+    let name = branch.trim().strip_prefix("origin/").ok_or("Solo se pueden borrar ramas de origin")?;
+    let lower = name.to_lowercase();
+    if lower == "main" || lower == "master" || lower == "head" {
+        return Err("No se puede borrar la rama principal".into());
+    }
+    let default = default_branch_sync(worktree).unwrap_or_default();
+    if default.strip_prefix("origin/").unwrap_or(&default).eq_ignore_ascii_case(name) {
+        return Err("No se puede borrar la rama por defecto".into());
+    }
+    let info = remote_branches_sync(worktree)?.into_iter().find(|item| item.name == branch).ok_or("La rama remota no existe")?;
+    if !info.own {
+        return Err("La rama no es 100% tuya: tiene commits de otro autor o identidad".into());
+    }
+    let remote_ref = format!("refs/remotes/{}", branch);
+    let local_oid = git_quiet(worktree, &["rev-parse", "--verify", "--quiet", &remote_ref]).map(|value| value.trim().to_string()).unwrap_or_default();
+    let remote = git_quiet(worktree, &["ls-remote", "--heads", "origin", name])?;
+    let remote_oid = remote.split_whitespace().next().unwrap_or("");
+    if local_oid.is_empty() || remote_oid.is_empty() || local_oid != remote_oid {
+        return Err("La rama cambió en el remoto; actualizá y volvé a intentar".into());
+    }
+    git_quiet(worktree, &["push", "origin", "--delete", name])?;
+    let _ = git_quiet(worktree, &["branch", "-dr", branch]);
+    Ok(name.to_string())
+}
+
+#[tauri::command]
+pub async fn git_delete_remote_branch(worktree: String, branch: String) -> Result<String, String> {
+    blocking(move || delete_remote_branch_sync(&worktree, &branch)).await
+}
+
 #[tauri::command]
 pub async fn git_checkout(
     worktree: String,

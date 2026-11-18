@@ -1,7 +1,9 @@
 import { useEffect, useImperativeHandle, useRef, useState, type Ref } from "react"
 import { Icon } from "../components/ui"
 import { teamCall } from "../state/teams"
-import { patchSessionRuntime, sessionRuntime } from "../state/session-runtime"
+import { patchSessionRuntime, sessionRuntime, useSessionRuntime } from "../state/session-runtime"
+import { applyVoiceCommand } from "../state/auto-speech"
+import { parseVoiceCommand } from "../lib/voice-text"
 import { setContinuousMode, validateContinuousSend } from "../state/fallback"
 import { openImage } from "../state/lightbox"
 import { CHATGPT } from "../state/accounts"
@@ -25,6 +27,7 @@ const CONNECT_CHATGPT = "__connect_chatgpt__"
 export function TeamComposer({ ref, chat, label, pending, onSent, onBrowser, allowImages = true, compact = false }: { ref?: Ref<TeamComposerHandle>; chat: TeamChatRecord; label: string; pending: boolean; onSent: () => void; onBrowser?: () => void; allowImages?: boolean; compact?: boolean }) {
   const chatId = chat.id
   const draftKey = `team:${chatId}`
+  const autoSpeech = useSessionRuntime(draftKey).autoSpeech === true
   const [text, setText] = useState(() => sessionRuntime(draftKey).draft ?? "")
   const [images, setImages] = useState<TeamImageInput[]>(() => sessionRuntime(draftKey).teamImages ?? [])
   useEffect(() => { patchSessionRuntime(draftKey, { draft: text, teamImages: images }) }, [draftKey, text, images])
@@ -68,6 +71,12 @@ export function TeamComposer({ ref, chat, label, pending, onSent, onBrowser, all
     const message = (override ?? textRef.current).trim()
     const attached = imagesRef.current
     if (submitting.current || adding.current || (!message && !attached.length)) return
+    const voice = parseVoiceCommand(message)
+    if (voice) {
+      const applied = await applyVoiceCommand(draftKey, voice)
+      if (applied && textRef.current.trim() === message) setText("")
+      return
+    }
     submitting.current = true
     setSending(true)
     try {
@@ -153,6 +162,10 @@ export function TeamComposer({ ref, chat, label, pending, onSent, onBrowser, all
         try { await setContinuousMode(chatId, !chat.continuousMode) }
         finally { continuousBusy.current = false; setChangingContinuous(false) }
       }}>Modo continuo {chat.continuousMode ? "activado" : "desactivado"}</button>
+      <button type="button" className={`composer-pill voice-pill${autoSpeech ? " on" : ""}`} role="switch" aria-checked={autoSpeech} aria-pressed={autoSpeech} onClick={() => void applyVoiceCommand(draftKey, "toggle")} title={autoSpeech ? "Voz activada: al terminar la ejecución se lee el resumen del Lead. Clic para silenciar." : "Leer el resumen cuando termina la ejecución del equipo."}>
+        <Icon name={autoSpeech ? "unmute" : "mute"} />
+        <span>{autoSpeech ? "Voz" : "Sin voz"}</span>
+      </button>
     </div>
     {voiceSetup && <VoiceSetup onClose={() => setVoiceSetup(false)} onRecord={recorder.start} />}
     <div className="team-composer-actions">

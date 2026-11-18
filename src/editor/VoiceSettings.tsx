@@ -21,6 +21,13 @@ type SpeechView = {
   voicesDir: string | null
   worker: boolean
   workerRunning: boolean
+  engine: "piper" | "server"
+  serverUrl: string
+  serverModel: string
+  serverVoice: string
+  serverLanguage: string
+  serverApiKeySet: boolean
+  serverReady: boolean
   voices: SpeechVoice[]
 }
 
@@ -39,6 +46,21 @@ const SIZE_NOTE: Record<string, string> = {
   medium: "~1,4 GB · más precisa",
   "large-v3-turbo": "~1,5 GB · máxima precisión",
 }
+
+const XTTS_VOICES = [
+  "Claribel Dervla", "Daisy Studious", "Gracie Wise", "Tammie Ema", "Alison Dietlinde",
+  "Ana Florence", "Annmarie Nele", "Asya Anara", "Brenda Stern", "Gitta Nikolina",
+  "Henriette Usha", "Sofia Hellen", "Tammy Grit", "Tanja Adelina", "Vjollca Johnnie",
+  "Andrew Chipper", "Badr Odhiambo", "Dionisio Schuyler", "Royston Min", "Viktor Eka",
+  "Abrahan Mack", "Adde Michal", "Baldur Sanjin", "Craig Gutsy", "Damien Black",
+  "Gilberto Mathias", "Ilkin Urbano", "Kazuhiko Atallah", "Ludvig Milivoj", "Suad Qasim",
+  "Torcull Diarmuid", "Viktor Menelaos", "Zacharie Aimilios", "Nova Hogarth", "Maja Ruoho",
+  "Uta Obando", "Lidiya Szekeres", "Chandra MacFarland", "Szofi Granger", "Camilla Holmström",
+  "Lilya Stainthorpe", "Zofija Kendrick", "Narelle Moon", "Barbora MacLean", "Alexandra Hisakawa",
+  "Alma María", "Rosemary Okafor", "Ige Behringer", "Filip Traverse", "Damjan Chapman",
+  "Wulf Carlevaro", "Aaron Dreschner", "Kumar Dahl", "Eugenio Mataracı", "Ferran Simen",
+  "Xavier Hayasaka", "Luis Moray", "Marcos Rudaski",
+]
 
 function providerOf(view: VoiceView): Provider {
   if (view.kind === "local") return "local"
@@ -68,6 +90,12 @@ export function VoiceSettings() {
   const [speechEnabled, setSpeechEnabled] = useState(true)
   const [speechWorker, setSpeechWorker] = useState(false)
   const [speechBusy, setSpeechBusy] = useState<string | null>(null)
+  const [speechEngine, setSpeechEngine] = useState<"piper" | "server">("piper")
+  const [serverUrl, setServerUrl] = useState("http://127.0.0.1:8020")
+  const [serverModel, setServerModel] = useState("xtts-v2")
+  const [serverVoice, setServerVoice] = useState("dora")
+  const [serverLanguage, setServerLanguage] = useState("es")
+  const [serverApiKey, setServerApiKey] = useState("")
 
   const refreshWhisper = () => {
     void call<WhisperView>("whisper_status")
@@ -83,6 +111,12 @@ export function VoiceSettings() {
         setSpeechSpeed(view.speed)
         setSpeechEnabled(view.enabled)
         setSpeechWorker(view.worker)
+        setSpeechEngine(view.engine === "server" ? "server" : "piper")
+        setServerUrl(view.serverUrl || "http://127.0.0.1:8020")
+        setServerModel(view.serverModel || "xtts-v2")
+        setServerVoice(view.serverVoice || "dora")
+        setServerLanguage(view.serverLanguage || "es")
+        setServerApiKey("")
       })
       .catch(() => setSpeech(null))
   }
@@ -176,15 +210,47 @@ export function VoiceSettings() {
     return view
   }
 
+  const persistSpeech = async (): Promise<SpeechView | null> => {
+    if (!speech) return null
+    if (speechEngine === "server") {
+      const next = await call<SpeechView>("speech_server_set", {
+        engine: "server",
+        serverUrl,
+        serverModel,
+        serverVoice,
+        serverLanguage,
+        serverApiKey,
+      })
+      setServerApiKey("")
+      return next
+    }
+    await call<SpeechView>("speech_set", { enabled: speechEnabled, voice: speechVoice, speed: speechSpeed, worker: speechWorker })
+    return call<SpeechView>("speech_server_set", {
+      engine: "piper",
+      serverUrl,
+      serverModel,
+      serverVoice,
+      serverLanguage,
+      serverApiKey,
+    })
+  }
+
   const save = async () => {
     setBusy("save")
     try {
       const view = await persist()
+      let nextSpeech: SpeechView | null = null
       if (speech) {
-        const next = await call<SpeechView>("speech_set", { enabled: speechEnabled, voice: speechVoice, speed: speechSpeed, worker: speechWorker })
-        setSpeech(next)
+        nextSpeech = await persistSpeech()
+        if (nextSpeech) setSpeech(nextSpeech)
       }
-      notify.info("Voz configurada", view.ready ? "El micrófono ya está disponible en el celular y en la app." : "Falta completar la configuración.")
+      const engine = nextSpeech?.engine === "server" ? "XTTS" : "Piper"
+      notify.info(
+        "Configuración guardada",
+        view.ready
+          ? "El micrófono ya está disponible en el celular y en la app."
+          : `La transcripción queda pendiente. La lectura con ${engine} ya está guardada.`,
+      )
     } catch (e) {
       notify.error("No se pudo guardar", errorMessage(e))
     } finally {
@@ -260,7 +326,8 @@ export function VoiceSettings() {
   const testSpeech = async () => {
     setSpeechBusy("test")
     try {
-      await call<SpeechView>("speech_set", { enabled: speechEnabled, voice: speechVoice, speed: speechSpeed, worker: speechWorker }).then(setSpeech)
+      const next = await persistSpeech()
+      if (next) setSpeech(next)
       const encoded = await call<string>("speech_test", { text: "Hola, soy Flufy. Así te voy a responder cuando me hables." })
       const binary = atob(encoded)
       const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0))
@@ -276,9 +343,10 @@ export function VoiceSettings() {
   }
 
   if (!saved) return null
+  const serverEngine = speechEngine === "server"
 
   return (
-    <div className="remote-steps voice-settings">
+    <div id="voice-settings" className="remote-steps voice-settings">
       <strong>
         <Icon name="mic" /> Voz y audios
       </strong>
@@ -392,8 +460,10 @@ export function VoiceSettings() {
           <Icon name="unmute" /> Respuestas habladas
         </strong>
         <span>
-          El agente puede contestarte con audios que se generan en esta PC. En el celular suenan solos al llegar y quedan como una burbuja para volver a escucharlos. La voz se descarga una vez y no usa Internet
-          después.
+          El agente puede contestarte con audios que se generan en esta PC. En el celular suenan solos al llegar y quedan como una burbuja para volver a escucharlos.{" "}
+          {serverEngine
+            ? "Con XTTS, el audio lo genera un servidor local en tu GPU; iniciá start.bat antes de probar."
+            : "La voz se descarga una vez y no usa Internet después."}
         </span>
         {!speech ? (
           <small className="muted">Leyendo la configuración de voz…</small>
@@ -401,10 +471,22 @@ export function VoiceSettings() {
           <>
             {!speech.available && <span className="warn-text">El motor de voz no está instalado en esta PC.</span>}
             <div className="voice-grid">
+              <span className="voice-label">Motor</span>
+              <div className="voice-model">
+                <Segmented<"piper" | "server">
+                  value={speechEngine}
+                  onChange={(value) => setSpeechEngine(value)}
+                  options={[
+                    { value: "piper", label: "Piper local" },
+                    { value: "server", label: "Servidor local (XTTS)" },
+                  ]}
+                />
+              </div>
               <span className="voice-label">Responder con audio</span>
               <label className="speech-check">
                 <input type="checkbox" checked={speechEnabled} onChange={(e) => setSpeechEnabled(e.target.checked)} /> Activar
               </label>
+              {!serverEngine && (<>
               <span className="voice-label">Voz</span>
               <div className="voice-model">
                 {speech.voices.map((voice) => (
@@ -485,6 +567,75 @@ export function VoiceSettings() {
                 </label>
                 <small className="muted">{speech.workerRunning ? "Caliente" : "Apagado"}</small>
               </div>
+              </>)}
+              {serverEngine && (<>
+                <span className="voice-label">URL base</span>
+                <div className="voice-model">
+                  <input
+                    className="input input-sm"
+                    type="text"
+                    value={serverUrl}
+                    onChange={(e) => setServerUrl(e.target.value)}
+                    placeholder="http://127.0.0.1:8020"
+                  />
+                </div>
+                <span className="voice-label">Modelo</span>
+                <div className="voice-model">
+                  <input className="input input-sm" type="text" value={serverModel} onChange={(e) => setServerModel(e.target.value)} placeholder="xtts-v2" />
+                </div>
+                <span className="voice-label">Voz</span>
+                <div className="voice-model">
+                  <input
+                    className="input input-sm"
+                    type="text"
+                    list="xtts-voices"
+                    value={serverVoice}
+                    onChange={(e) => setServerVoice(e.target.value)}
+                    placeholder="dora"
+                  />
+                  <datalist id="xtts-voices">
+                    <option value="dora">Dora · español (muestra de referencia)</option>
+                    {XTTS_VOICES.map((voice) => (
+                      <option key={voice} value={voice}>{voice}</option>
+                    ))}
+                  </datalist>
+                  <small className="muted">Elegí una voz de la lista o escribí el nombre de un WAV en la carpeta de voces (sin .wav).</small>
+                </div>
+                <span className="voice-label">Idioma</span>
+                <div className="voice-model">
+                  <input className="input input-sm" type="text" value={serverLanguage} onChange={(e) => setServerLanguage(e.target.value)} placeholder="es" />
+                </div>
+                <span className="voice-label">API key</span>
+                <div className="voice-model">
+                  <input
+                    className="input input-sm"
+                    type="password"
+                    value={serverApiKey}
+                    onChange={(e) => setServerApiKey(e.target.value)}
+                    placeholder={speech.serverApiKeySet ? "Guardada" : "Opcional"}
+                  />
+                </div>
+                <span className="voice-label">Estado</span>
+                <div className="voice-local-status">
+                  <span className={`routine-pill ${speech.serverReady ? "ok" : ""}`}>
+                    {speech.serverReady ? "Servidor configurado" : "Falta la URL"}
+                  </span>
+                  <small className="muted">Iniciá XTTS con start.bat antes de probar.</small>
+                </div>
+                <span className="voice-label">Velocidad</span>
+                <div className="voice-model">
+                  <input
+                    className="input input-sm"
+                    type="range"
+                    min={0.7}
+                    max={1.4}
+                    step={0.05}
+                    value={speechSpeed}
+                    onChange={(e) => setSpeechSpeed(Number(e.target.value))}
+                  />
+                  <small className="muted">{speechSpeed.toFixed(2)}×</small>
+                </div>
+              </>)}
             </div>
             <div className="form-row">
               <button

@@ -12,6 +12,9 @@ export type QuickItem = {
   groupFavorites?: boolean
   favorite?: boolean
   onToggleFavorite?: () => void
+  actionIcon?: string
+  actionTitle?: string
+  onAction?: () => void
   run?: () => void | Promise<void>
 }
 

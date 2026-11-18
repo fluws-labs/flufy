@@ -162,6 +162,10 @@
 .session-dock > * {
   flex-shrink: 0;
 }
+/* El popover de menciones se abre hacia arriba: el dock no debe recortarlo. */
+.session-dock:has(.composer-popover) {
+  overflow: visible;
+}
 .session-pane.editor .session-dock {
   padding: 8px 24px 16px;
   max-width: calc(var(--chat-col) + 48px);
@@ -1038,6 +1042,13 @@
 .composer-pill.approval-pill:not(.on) {
   opacity: 0.6;
 }
+.composer-pill.voice-pill.on {
+  color: var(--accent-strong);
+  background: var(--accent-bg);
+}
+.composer-pill.voice-pill:not(.on) {
+  opacity: 0.6;
+}
 .composer-icon {
   display: inline-flex;
   flex-shrink: 0;
@@ -1164,6 +1175,9 @@
 }
 .composer-suggestion.selected {
   background: var(--accent-bg);
+}
+.composer-suggestion.empty {
+  cursor: default;
 }
 .composer-suggestion-label {
   white-space: nowrap;

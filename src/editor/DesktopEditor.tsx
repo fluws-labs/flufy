@@ -233,7 +233,7 @@ export function DesktopEditor() {
           <strong>
             <Icon name="shield" /> Apps que el agente no puede tocar
           </strong>
-          <span>Consolas, administradores de contraseñas y herramientas del sistema vienen bloqueadas. Flufy también: así el agente no puede aprobarse sus propios permisos.</span>
+          <span>Consolas, administradores de contraseñas y herramientas del sistema vienen bloqueadas. La ventana de Flufy que hospeda el chat se controla aparte, más abajo.</span>
           <div className="desktop-chips">
             {status.blocked.map((b) => (
               <span key={b} className="desktop-chip">
@@ -259,6 +259,24 @@ export function DesktopEditor() {
               <Icon name="add" /> Bloquear
             </button>
           </div>
+        </div>
+        <div className="remote-steps">
+          <strong>
+            <Icon name="multiple-windows" /> Esta ventana de Flufy
+          </strong>
+          <span>
+            Permití que el agente maneje también la ventana que hospeda este chat. Sirve para levantarlo y mirarlo como usuario, pero también le permite tocar sus propios permisos.
+          </span>
+          <Toggle
+            checked={status.controlSelf}
+            onChange={(v) => void run(() => update({ controlSelf: v }), "No se pudo cambiar")}
+            label="El agente puede manejar esta ventana de Flufy"
+          />
+          <span className="desktop-note">
+            {status.controlSelf
+              ? "Permitido: el agente puede operar esta misma ventana."
+              : "Bloqueado: el agente no puede operar la ventana que hospeda el chat."}
+          </span>
         </div>
         <div className="remote-steps desktop-activity">
           <strong>

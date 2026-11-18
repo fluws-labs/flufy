@@ -38,6 +38,7 @@ export function SpeechPanel({
   }, [status?.speed])
 
   const downloading = !!status?.voices.some((v) => v.downloading)
+  const server = status?.engine === "server"
   const refresh = async () => {
     try {
       onStatus(await speechStatus())
@@ -112,7 +113,7 @@ export function SpeechPanel({
           <div className="speech-row">
             <span className="card-text">
               <strong>Motor de voz</strong>
-              <small>{status.ready ? "Listo para el modo voz de cada conversación" : "Elegí y descargá una voz para empezar"}</small>
+              <small>{status.ready ? (server ? "Servidor local XTTS conectado" : "Listo para el modo voz de cada conversación") : server ? "Configurá el servidor en la PC" : "Elegí y descargá una voz para empezar"}</small>
             </span>
             <button
               type="button"
@@ -132,26 +133,38 @@ export function SpeechPanel({
               <span />
             </button>
           </div>
-          <div className="speech-row">
-            <span className="card-text">
-              <strong>Motor persistente</strong>
-              <small>{status.worker ? (status.workerRunning ? "Caliente: menos demora" : "Se está preparando") : "Apagado: usa menos RAM"}</small>
-            </span>
-            <button
-              type="button"
-              className={`switch${status.worker ? " on" : ""}`}
-              aria-pressed={status.worker}
-              onClick={() =>
-                void run("worker", async () => {
-                  const next = await speechUpdate({ worker: !status.worker })
-                  if (next.worker) void warmSpeech().catch(() => undefined)
-                  return next
-                })
-              }
-            >
-              <span />
-            </button>
-          </div>
+          {!server && (
+            <div className="speech-row">
+              <span className="card-text">
+                <strong>Motor persistente</strong>
+                <small>{status.worker ? (status.workerRunning ? "Caliente: menos demora" : "Se está preparando") : "Apagado: usa menos RAM"}</small>
+              </span>
+              <button
+                type="button"
+                className={`switch${status.worker ? " on" : ""}`}
+                aria-pressed={status.worker}
+                onClick={() =>
+                  void run("worker", async () => {
+                    const next = await speechUpdate({ worker: !status.worker })
+                    if (next.worker) void warmSpeech().catch(() => undefined)
+                    return next
+                  })
+                }
+              >
+                <span />
+              </button>
+            </div>
+          )}
+          {server ? (
+            <div className="speech-row">
+              <span className="card-text">
+                <strong>Servidor local (XTTS)</strong>
+                <small>{status.serverUrl} · {status.serverVoice}</small>
+              </span>
+              <span className="routine-pill ok">Configurado</span>
+            </div>
+          ) : (
+          <>
           <h3 className="pick-title">Voz</h3>
           {status.voices.map((voice) => {
             const selected = voice.id === status.voice
@@ -214,6 +227,8 @@ export function SpeechPanel({
               </div>
             )
           })}
+          </>
+          )}
           <span className="speech-label">Velocidad · {speed.toFixed(2)}×</span>
           <input
             className="speech-range"
