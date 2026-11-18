@@ -162,6 +162,10 @@
 .session-dock > * {
   flex-shrink: 0;
 }
+/* El popover de menciones se abre hacia arriba: el dock no debe recortarlo. */
+.session-dock:has(.composer-popover) {
+  overflow: visible;
+}
 .session-pane.editor .session-dock {
   padding: 8px 24px 16px;
   max-width: calc(var(--chat-col) + 48px);
@@ -1171,6 +1175,9 @@
 }
 .composer-suggestion.selected {
   background: var(--accent-bg);
+}
+.composer-suggestion.empty {
+  cursor: default;
 }
 .composer-suggestion-label {
   white-space: nowrap;

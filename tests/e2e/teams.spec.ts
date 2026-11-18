@@ -329,11 +329,11 @@ test("objetivo, pausa, entrega pendiente y feedback conservan revisiones en el m
   await expect(page.getByRole("button", { name: "Reanudar", exact: true })).toBeVisible()
   await page.getByRole("button", { name: "Reanudar", exact: true }).click()
   const first = store.chats[0].runs[0]
-  first.status = "awaiting_manual_qa"; first.finishedAt = Date.now(); first.summary = "Terminamos. Cambios implementados. Pendiente de QA manual."
+  first.status = "awaiting_manual_qa"; first.finishedAt = Date.now(); first.summary = "Terminamos. Cambios implementados. Resultados listos."
   first.artifacts = [{ id: "evidence", taskId: null, phase: "test", kind: "log", relativePath: "pruebas/log.txt", capturedAt: Date.now(), status: "captured", source: "fixture E2E", reason: null }]
   await page.evaluate(async () => { const { refreshTeams } = await import(/* @vite-ignore */ "/src/state/teams.ts"); await refreshTeams() })
   await page.getByRole("button", { name: "Entrega", exact: true }).click()
-  await expect(page.locator(".delivery-results").getByText("Listo para tu revisión")).toBeVisible()
+  await expect(page.locator(".delivery-results").getByText("Entrega lista")).toBeVisible()
   await page.getByText("Evidencia técnica", { exact: true }).click()
   await page.getByRole("button", { name: "Ver evidencia", exact: true }).click()
   await expect(page.locator(".team-evidence-preview")).toContainText("Evidencia observada")
@@ -926,7 +926,7 @@ test("el historial pliega cada equipo completo y conserva los chats normales al 
   await group.getByRole("button", { name: "Hablar con el Lead" }).click()
   await openTeamPanel(page)
   await page.getByTitle(/Sesiones del agente/).click()
-  await expect(page.locator(".team-chat-header")).toContainText("Listo para tu revisión")
+  await expect(page.locator(".team-chat-header")).toContainText("Completada")
   await page.getByPlaceholder("Filtrar sesiones").fill("Subagente anidado")
   await expect(group).toHaveCount(1)
   await expect(page.locator(".session-row", { hasText: "Charla normal" })).toHaveCount(0)
@@ -958,7 +958,7 @@ test("QA manual viene después del trabajo: mejoras crean otra entrega y trabajo
   first.status = "completed"; first.finishedAt = Date.now(); first.summary = "Formulario y API integrados y comprobados."
   first.artifacts = [{ id: "first-proof", taskId: null, phase: "test", kind: "log", relativePath: "primera-entrega.log", capturedAt: Date.now(), status: "captured", source: "fixture", reason: null }]
   await page.evaluate(async () => { const { refreshTeams } = await import(/* @vite-ignore */ "/src/state/teams.ts"); await refreshTeams() })
-  await expect(page.locator(".team-chat-header")).toContainText("Listo para tu revisión")
+  await expect(page.locator(".team-chat-header")).toContainText("Completada")
   await page.getByRole("button",{name:"Entrega",exact:true}).click()
   await expect(page.getByRole("button", { name: "Aprobar entrega", exact: true })).toBeVisible()
   await page.getByRole("button",{name:"Chat",exact:true}).click()
@@ -972,7 +972,7 @@ test("QA manual viene después del trabajo: mejoras crean otra entrega y trabajo
   const second = chat.runs[1]
   second.status = "completed"; second.finishedAt = Date.now(); second.summary = "Contraste mejorado y comprobado."
   await page.evaluate(async () => { const { refreshTeams } = await import(/* @vite-ignore */ "/src/state/teams.ts"); await refreshTeams() })
-  await expect(page.locator(".team-chat-header")).toContainText("Listo para tu revisión")
+  await expect(page.locator(".team-chat-header")).toContainText("Completada")
   await composer.fill("trabajo completado")
   await composer.press("Enter")
   await expect(page.locator(".team-chat-header")).toContainText("Aprobado por usuario")
@@ -1052,7 +1052,7 @@ test("chat legible pliega pedidos largos y amplía la conversación conservando 
   await composer.fill("Crear frontend y backend. ".repeat(25));await composer.press("Enter")
   const run=store.chats[0].runs[0]
   run.status="completed";run.finishedAt=Date.now();run.summary="Frontend y Backend integrados. Pruebas correctas."
-  run.chatSummary={done:"Creé la pantalla y la API.",tested:"Pasaron las pruebas de integración.",pending:"Listo para tu revisión."}
+  run.chatSummary={done:"Creé la pantalla y la API.",tested:"Pasaron las pruebas de integración.",pending:"Resultados listos."}
   await page.evaluate(async()=>{const {refreshTeams}=await import(/* @vite-ignore */ "/src/state/teams.ts");await refreshTeams()})
   const goal=page.locator(".team-goal-details").last()
   await expect(goal).not.toHaveAttribute("open","")

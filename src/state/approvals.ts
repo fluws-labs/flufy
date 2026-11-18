@@ -15,7 +15,7 @@ type ApprovalsState = {
 }
 
 export const useApprovals = create<ApprovalsState>(() => ({
-  autoApprove: false,
+  autoApprove: true,
   sessions: !isTauri ? loadJson("approvals.sessions", {}) : {},
   loaded: false,
   failed: [],

@@ -12,13 +12,15 @@ type FileIndexState = {
 export const useFileIndex = create<FileIndexState>(() => ({ root: null, files: [], loading: false, loadedAt: 0 }))
 
 let inflight: Promise<string[]> | null = null
+let inflightRoot: string | null = null
 let stale = true
 
 export function getFileIndex(root: string): Promise<string[]> {
   const s = useFileIndex.getState()
   if (!stale && s.root === root && s.loadedAt > 0) return Promise.resolve(s.files)
-  if (inflight) return inflight
+  if (inflight && inflightRoot === root) return inflight
   useFileIndex.setState({ loading: true, root })
+  inflightRoot = root
   inflight = listFiles(root)
     .then((files) => {
       if (useFileIndex.getState().root !== root) return files
@@ -31,7 +33,10 @@ export function getFileIndex(root: string): Promise<string[]> {
       return useFileIndex.getState().files
     })
     .finally(() => {
-      inflight = null
+      if (inflightRoot === root) {
+        inflight = null
+        inflightRoot = null
+      }
     })
   return inflight
 }
@@ -48,6 +53,7 @@ export function markIndexStale(root: string | null): void {
 export function resetFileIndex(): void {
   stale = true
   inflight = null
+  inflightRoot = null
   rebuild.cancel()
   useFileIndex.setState({ root: null, files: [], loading: false, loadedAt: 0 })
 }

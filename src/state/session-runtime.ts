@@ -13,7 +13,7 @@ export type SessionRuntime = {
   previewEnabled?: boolean
   autoSpeech?: boolean
   teamImages?: TeamImageInput[]
-  browserChoice?: { kind: "internal" } | { kind: "chrome"; pageId: number; windowId: number; tabs: number }
+  browserChoice?: { kind: "internal" } | { kind: "browse" } | { kind: "chrome"; pageId: number; windowId: number; tabs: number }
   transfer?: { id: string; source: string; target: string; expires: number; state: "pending" | "received" | "cancelled" }
 }
 export function draftRuntimeKey(root: string | null, window: string) { return `draft:${root ?? ""}:${window}` }

@@ -1,6 +1,7 @@
 import { useState } from "react"
+import { openUrl } from "@tauri-apps/plugin-opener"
 import { call, errorMessage } from "../lib/tauri"
-import { recentlyActive, useDesktopStatus, type BridgeStatus, type DesktopStatus } from "../lib/desktop"
+import { recentlyActive, useDesktopStatus, type BridgeStatus, type BrowseStatus, type DesktopStatus } from "../lib/desktop"
 import { confirmAction } from "../components/Dialog"
 import { Toggle } from "../components/fields"
 import { Icon, Spinner } from "../components/ui"
@@ -42,7 +43,15 @@ export function DesktopEditor() {
   const { status, error, refresh, update } = useDesktopStatus(5000)
   const [newApp, setNewApp] = useState("")
   const [busy, setBusy] = useState(false)
+  const [browseProbe, setBrowseProbe] = useState<BrowseStatus | null>(null)
+  const [browseBusy, setBrowseBusy] = useState(false)
 
+  const probeBrowse = async () => {
+    setBrowseBusy(true)
+    try { setBrowseProbe(await call<BrowseStatus>("browse_status", { probe: true })) }
+    catch (e) { notify.error("No se pudo probar Browse", errorMessage(e)) }
+    finally { setBrowseBusy(false) }
+  }
   const run = async (fn: () => Promise<unknown>, failure: string) => {
     setBusy(true)
     try {
@@ -78,8 +87,8 @@ export function DesktopEditor() {
 
   const label = stateLabel(status)
   const bridge = bridgeLabel(status.bridge)
+  const browse = browseProbe ?? status.browseBridge
   const m = status.machine
-
   const stopAll = () =>
     run(async () => {
       if (!(await confirmAction("Detener todo", "Corta todas las sesiones del agente que estén trabajando y pausa el control de la PC.", "Detener"))) return
@@ -157,10 +166,36 @@ export function DesktopEditor() {
         )}
         <div className="remote-steps">
           <strong>
+            <Icon name="globe" /> Chrome real con Browse
+          </strong>
+          <span>
+            En las conversaciones normales el agente usa tu Chrome con tus sesiones y extensiones. Abre pestañas propias en segundo plano, agrupadas por chat. Para logins, 2FA o pagos, completá el paso en Chrome y la tarea sigue. Los equipos siguen con el navegador interno.
+          </span>
+          <div className="remote-bridge-row">
+            <button type="button" className="btn btn-sm" disabled={browseBusy} onClick={() => void probeBrowse()}>
+              <Icon name="refresh" /> {browseBusy ? "Probando…" : "Probar conexión"}
+            </button>
+            <span className={`remote-bridge ${browse.connected ? "ok" : browse.error ? "error" : ""}`} title={browse.error ?? undefined}>
+              {!browse.available ? "Browse no instalado" : browse.connected === true ? `Chrome conectado${browse.version ? ` · v${browse.version}` : ""}` : browse.connected === false ? "Extensión sin conectar" : "Browse instalado"}
+            </span>
+          </div>
+          {!browse.available && (
+            <button type="button" className="btn btn-sm btn-primary" onClick={() => void openUrl("https://opencode.ai/browse")}>
+              <Icon name="link-external" /> Instalar Browse
+            </button>
+          )}
+          {browse.available && browse.connected !== true && browse.nextStep && <span className="desktop-note">{browse.nextStep}</span>}
+          <Toggle checked={status.browse} onChange={(v) => void run(() => update({ browse: v }), "No se pudo cambiar")} label="Usar mi Chrome real (Browse) en chats normales" />
+          <span className="desktop-note">
+            {browse.available ? `Instalado${browse.version ? ` (v${browse.version})` : ""}. ${browse.running ? "El proceso está activo." : "Se inicia cuando el agente lo necesita."}` : "Instalá la CLI y la extensión; después Flufy detecta Chrome y pareá la extensión una vez."}
+          </span>
+        </div>
+        <div className="remote-steps">
+          <strong>
             <Icon name="browser" /> Tu Chrome, con tus sesiones
           </strong>
           <span>
-            El agente se conecta a tu Chrome abierto, con tus sesiones, mediante Chrome DevTools. Requiere Chrome 144 o posterior. Abrí la configuración de abajo y habilitá la depuración remota;
+            Este modo es el del navegador interno y los equipos, con Chrome DevTools. Requiere Chrome 144 o posterior. Abrí la configuración de abajo y habilitá la depuración remota;
             después probá la conexión y aceptá «Permitir» en Chrome. Chrome pide permiso en cada nueva conexión, no en cada acción.
           </span>
           <div className="remote-bridge-row">
@@ -198,7 +233,7 @@ export function DesktopEditor() {
           <strong>
             <Icon name="shield" /> Apps que el agente no puede tocar
           </strong>
-          <span>Consolas, administradores de contraseñas y herramientas del sistema vienen bloqueadas. Flufy también: así el agente no puede aprobarse sus propios permisos.</span>
+          <span>Consolas, administradores de contraseñas y herramientas del sistema vienen bloqueadas. La ventana de Flufy que hospeda el chat se controla aparte, más abajo.</span>
           <div className="desktop-chips">
             {status.blocked.map((b) => (
               <span key={b} className="desktop-chip">
@@ -224,6 +259,24 @@ export function DesktopEditor() {
               <Icon name="add" /> Bloquear
             </button>
           </div>
+        </div>
+        <div className="remote-steps">
+          <strong>
+            <Icon name="multiple-windows" /> Esta ventana de Flufy
+          </strong>
+          <span>
+            Permití que el agente maneje también la ventana que hospeda este chat. Sirve para levantarlo y mirarlo como usuario, pero también le permite tocar sus propios permisos.
+          </span>
+          <Toggle
+            checked={status.controlSelf}
+            onChange={(v) => void run(() => update({ controlSelf: v }), "No se pudo cambiar")}
+            label="El agente puede manejar esta ventana de Flufy"
+          />
+          <span className="desktop-note">
+            {status.controlSelf
+              ? "Permitido: el agente puede operar esta misma ventana."
+              : "Bloqueado: el agente no puede operar la ventana que hospeda el chat."}
+          </span>
         </div>
         <div className="remote-steps desktop-activity">
           <strong>

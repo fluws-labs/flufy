@@ -60,7 +60,11 @@ export type PrDetail = {
   labels: Array<{ name: string; color: string }>
 }
 
+export type ProtectedBranches = { defaultBranch: string | null; protected: string[] }
+
 export const ghStatus = (repo: string) => call<GhStatus>("gh_status", { repo })
+export const ghProtectedBranches = (repo: string) => call<ProtectedBranches>("gh_protected_branches", { repo })
+export const ghOpenPrHeads = (repo: string) => call<string[]>("gh_open_pr_heads", { repo })
 export const prList = (repo: string, state = "open") => call<PrSummary[]>("gh_pr_list", { repo, state })
 export const prView = (repo: string, number: number) => call<PrDetail>("gh_pr_view", { repo, number })
 export const prDiff = (repo: string, number: number) => call<string>("gh_pr_diff", { repo, number })

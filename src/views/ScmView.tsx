@@ -3,6 +3,10 @@ import { create } from "zustand"
 import {
   gitBranches,
   gitCheckout,
+  gitCleanBranches,
+  gitDeleteRemoteBranch,
+  gitDefaultBranch,
+  gitRemoteBranches,
   gitCommit,
   gitDiscard,
   gitFetch,
@@ -15,18 +19,22 @@ import {
   hasUnstaged,
   isConflict,
   isUntracked,
+  type Branch,
+  type RemoteBranch,
 } from "../lib/git"
+import { ghOpenPrHeads, ghProtectedBranches } from "../lib/gh"
 import { generateCommitMessage } from "../lib/ai"
 import { gitMergeAbort, gitMergeContinue } from "../lib/features"
 import { basename } from "../lib/paths"
 import { errorMessage } from "../lib/tauri"
 import { bumpHead, gitAction, refreshAllRepos, setActiveRepo, useGit } from "../state/git"
 import { openEditor } from "../state/editors"
+import { loadJson, saveJson } from "../lib/persist"
 import { openAiReview } from "../state/aiReview"
 import { refreshFeatures, useFeatures } from "../state/features"
-import { WorkspaceSelector } from "./WorkspaceSelector"
+import { WorkspaceSelector, showWorkspaceList } from "./WorkspaceSelector"
 import { StatusRow } from "./StatusRow"
-import { pickOne, promptInput } from "../state/quickinput"
+import { closeQuickInput, pickOne, promptInput } from "../state/quickinput"
 import { notify } from "../state/toasts"
 import { openMenuAt } from "../components/ContextMenu"
 import { confirmAction } from "../components/Dialog"
@@ -35,42 +43,98 @@ import { EmptyState, Icon, IconButton, Section, Spinner } from "../components/ui
 const useCommitDraft = create<{ messages: Record<string, string> }>(() => ({ messages: {} }))
 
 export async function pickBranch(repo: string): Promise<void> {
-  let branches
+  let branches: Branch[]
   try {
     branches = await gitBranches(repo)
   } catch (e) {
     notify.error("No se pudieron listar las ramas", errorMessage(e))
     return
   }
+  const [defaultBranch, protection, remoteDetails, openPrs] = await Promise.all([
+    gitDefaultBranch(repo).catch(() => null),
+    ghProtectedBranches(repo).catch(() => null),
+    gitRemoteBranches(repo).catch(() => [] as RemoteBranch[]),
+    ghOpenPrHeads(repo).catch(() => [] as string[]),
+  ])
+  const remoteInfo = new Map(remoteDetails.map((info) => [info.name, info]))
+  const openPrBranches = new Set(openPrs)
+  const defaultName = (protection?.defaultBranch ?? defaultBranch ?? "").replace(/^origin\//, "")
+  const protectedNames = new Set(protection?.protected ?? [])
+  const matches = (name: string) => {
+    const short = name.replace(/^origin\//, "")
+    return protectedNames.has(short) || protectedNames.has(name)
+  }
+  const describe = (b: Branch) => {
+    const tags: string[] = []
+    if (b.current) tags.push("actual")
+    if (defaultName && (b.name === defaultName || b.name.replace(/^origin\//, "") === defaultName)) tags.push("base")
+    if (matches(b.name)) tags.push("protegida")
+    if (openPrBranches.has(b.name.replace(/^origin\//, ""))) tags.push("PR abierto")
+    if (b.subject) tags.push(b.subject)
+    return tags.join(" · ")
+  }
+  const branchIcon = (b: Branch) => matches(b.name) ? "lock" : b.current ? "check" : b.remote ? "cloud" : "git-branch"
+  const canDelete = (b: Branch) => {
+    const info = remoteInfo.get(b.name)
+    if (!info?.own) return false
+    const short = b.name.replace(/^origin\//, "")
+    return short !== "main" && short !== "master" && short !== defaultName && !protectedNames.has(short) && !openPrBranches.has(short)
+  }
+  const deleteRemote = async (name: string, info: RemoteBranch) => {
+    closeQuickInput()
+    const extra = info.unique > 0 ? `Tiene ${info.unique} commit(s) sin integrar en la base. ` : "No tiene commits propios sin integrar. "
+    if (!(await confirmAction("Borrar rama remota", extra + `Se borra «${name}» en origin. No se puede deshacer. Si tiene un PR abierto, quedará sin rama.`, "Borrar", true))) {
+      void pickBranch(repo)
+      return
+    }
+    const removed = await gitAction("No se pudo borrar la rama remota", () => gitDeleteRemoteBranch(repo, name))
+    if (removed) notify.success("Rama remota borrada", name)
+    void pickBranch(repo)
+  }
   const localNames = new Set(branches.filter((b) => !b.remote).map((b) => b.name))
+  const remoteOnly = loadJson<boolean>("scm.remoteOnly", false)
+  const localItems = branches.filter((b) => !b.remote).map((b) => ({ id: b.name, label: b.name, description: describe(b), icon: branchIcon(b), group: "ramas locales" }))
+  const remoteItems = branches.filter((b) => b.remote).map((b) => {
+    const info = remoteInfo.get(b.name)
+    const deletable = canDelete(b)
+    return {
+      id: b.name,
+      label: b.name,
+      description: describe(b),
+      icon: branchIcon(b),
+      group: "remotas",
+      actionIcon: deletable ? "close" : undefined,
+      actionTitle: deletable ? "Borrar rama remota" : undefined,
+      onAction: deletable && info ? () => void deleteRemote(b.name, info) : undefined,
+    }
+  })
+  const branchItems = remoteOnly ? remoteItems : [...localItems, ...remoteItems.filter((b) => !localNames.has(b.id.split("/").slice(1).join("/")))]
+  const baseItems = [...localItems, ...remoteItems]
   const items = [
     { id: "__new__", label: "Crear rama nueva…", icon: "add" },
-    ...branches
-      .filter((b) => !b.remote)
-      .map((b) => ({
-        id: b.name,
-        label: b.name,
-        description: b.current ? "actual" : b.subject,
-        icon: b.current ? "check" : "git-branch",
-        group: "ramas locales",
-      })),
-    ...branches
-      .filter((b) => b.remote && !localNames.has(b.name.split("/").slice(1).join("/")))
-      .map((b) => ({ id: b.name, label: b.name, description: b.subject, icon: "cloud", group: "remotas" })),
+    { id: "__from__", label: "Crear rama desde una base…", icon: "git-branch-create" },
+    ...branchItems,
   ]
   const choice = await pickOne(items, { title: "Cambiar de rama", placeholder: "Elegí o buscá una rama" })
   if (!choice) return
-  if (choice.id === "__new__") {
+  if (choice.id === "__new__" || choice.id === "__from__") {
+    let base: string | undefined
+    if (choice.id === "__from__") {
+      const picked = await pickOne(baseItems, { title: "Base para la rama nueva", placeholder: "Elegí la base (las protegidas están marcadas)" })
+      if (!picked) return
+      base = picked.id
+    }
     const name = await promptInput({
-      title: "Nueva rama",
+      title: base ? "Nueva rama desde " + base : "Nueva rama",
       placeholder: "nombre-de-la-rama",
       validate: (v) => (!v.trim() ? "Escribí un nombre" : /\s|\.\.|[~^:?*[\\]/.test(v) ? "Nombre inválido para git" : null),
     })
     if (!name) return
-    await gitAction("No se pudo crear la rama", () => gitCheckout(repo, name.trim(), true), `Rama ${name.trim()} creada`)
+    await gitAction("No se pudo crear la rama", () => gitCheckout(repo, name.trim(), true, base), "Rama " + name.trim() + " creada")
     return
   }
-  await gitAction("No se pudo cambiar de rama", () => gitCheckout(repo, choice.id), `Ahora en ${choice.id}`)
+  const remote = choice.id.startsWith("origin/")
+  await gitAction("No se pudo cambiar de rama", () => gitCheckout(repo, choice.id), remote ? "Rama local desde " + choice.id : "Ahora en " + choice.id)
 }
 
 export function ScmView() {
@@ -186,6 +250,17 @@ export function ScmView() {
       { label: "Recuperar el último stash", icon: "inbox", run: () => void gitAction("No se pudo aplicar el stash", () => gitStash(repo, true), "Stash aplicado") },
       { separator: true },
       { label: "Cambiar de rama…", icon: "git-branch", run: () => void pickBranch(repo) },
+      { label: loadJson<boolean>("scm.remoteOnly", false) ? "Ramas: mostrar todas" : "Ramas: solo remotas", icon: "cloud", run: () => { saveJson("scm.remoteOnly", !loadJson<boolean>("scm.remoteOnly", false)); void pickBranch(repo) } },
+      {
+        label: "Limpiar ramas locales…",
+        icon: "trash",
+        run: async () => {
+          if (!(await confirmAction("Limpiar ramas locales", "Se eliminan solo las ramas locales ya integradas en su remoto. No toca la rama actual ni las que usa un worktree.", "Limpiar"))) return
+          const cleaned = await gitAction("No se pudieron limpiar las ramas", () => gitCleanBranches(repo))
+          if (cleaned) notify.info(cleaned.length ? "Limpié " + cleaned.length + " rama(s)" : "No había ramas para limpiar", cleaned.length ? cleaned.slice(0, 6).join(", ") : "Las ramas actuales no están integradas en su remoto o no tienen remoto.")
+        },
+      },
+      { label: "Ver espacios de trabajo", icon: "worktree", run: showWorkspaceList },
       { label: "Ver historial", icon: "git-commit", run: () => openEditor({ kind: "graph", repo }) },
       { label: "Crear pull request", icon: "git-pull-request-create", run: () => openEditor({ kind: "prCreate", repo }) },
     ])

@@ -559,12 +559,14 @@ export function StatusBar() {
   const zoom = useZoom((s) => s.level)
   const featureList = useFeatures((s) => s.list)
   const runTerminalId = useFeatures((s) => s.runTerminalId)
+  const runWorkspaceId = useFeatures((s) => s.runWorkspaceId)
   const terminals = useTerminals((s) => s.terminals)
   const activeRoot = useProject((s) => s.root)
   const activeId = useFeatures((s) => s.activeWorkspace)
   const ws = featureList?.workspaces.find((w) => w.id === activeId) ?? featureList?.workspaces[0] ?? null
   const workspaceCount = featureList?.workspaces.length ?? 0
   const appRunning = isAppRunning(runTerminalId, terminals)
+  const runWorkspace = featureList?.workspaces.find((w) => w.id === runWorkspaceId) ?? null
   const runCommand = contextSettings(featureList, activeRoot)?.run ?? null
 
   const attentionMenu = (el: HTMLElement) =>
@@ -612,7 +614,7 @@ export function StatusBar() {
           <StatusItem
             icon={appRunning ? "debug-stop" : "play"}
             label={appRunning ? "app corriendo" : "correr app"}
-            title={appRunning ? "Detener la app (cierra su terminal y libera los puertos)" : runCommand ? `Correr: ${runCommand}` : "Elegir cómo se corre la app y correrla"}
+            title={appRunning ? `Detener la app${runWorkspace ? ` (corre desde ${workspaceTitle(runWorkspace)})` : ""} (cierra su terminal y libera los puertos)` : runCommand ? `Correr: ${runCommand}` : "Elegir cómo se corre la app y correrla"}
             tone={appRunning ? "busy" : undefined}
             onClick={() => void (appRunning ? stopApp() : runApp())}
           />

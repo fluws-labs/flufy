@@ -759,6 +759,12 @@ body.resizing-y * {
 .quick-star.on {
   color: var(--warn);
 }
+.quick-delete {
+  color: var(--conflict);
+}
+.quick-delete:hover {
+  color: var(--fg);
+}
 .quick-row {
   display: flex;
   align-items: center;

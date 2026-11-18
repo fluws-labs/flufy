@@ -5,11 +5,14 @@ use tauri::AppHandle;
 
 pub const SOLVER: &str = "support-solver";
 pub const SUPERVISOR: &str = "support-supervisor";
+pub const COORDINATOR: &str = "support-coordinator";
 pub fn reserved(id: &str) -> bool {
-    [SOLVER, SUPERVISOR].contains(&id)
+    [SOLVER, SUPERVISOR, COORDINATOR].contains(&id)
 }
 pub fn member(m: &Employee) -> bool {
-    (m.id == SOLVER && m.role == "Solucionador") || (m.id == SUPERVISOR && m.role == "Supervisor")
+    (m.id == SOLVER && m.role == "Solucionador")
+        || (m.id == SUPERVISOR && m.role == "Supervisor")
+        || (m.id == COORDINATOR && m.role == "Coordinador")
 }
 
 pub fn ensure(app: &AppHandle, id: &str, solver: bool) -> Result<Employee, String> {
@@ -50,6 +53,27 @@ pub fn ensure(app: &AppHandle, id: &str, solver: bool) -> Result<Employee, Strin
         .ok_or("No se pudo registrar el agente de apoyo".into())
 }
 
+pub fn ensure_coordinator(app: &AppHandle, id: &str) -> Result<Employee, String> {
+    update_run(app, id, |r| {
+        if let Some(m) = r.team.members.iter().find(|m| m.id == COORDINATOR) {
+            if !member(m) || m.tools.iter().any(|t| !["read", "glob", "grep"].contains(&t.as_str())) {
+                return Err("El ID reservado del Coordinador pertenece a otro perfil; no se cambiaron sus permisos".into());
+            }
+            return Ok(());
+        }
+        let mut a = runner::lead(r)?;
+        a.id = COORDINATOR.into();
+        a.name = "Coordinador".into();
+        a.role = "Coordinador".into();
+        a.tools = ["read", "glob", "grep"].iter().map(|s| s.to_string()).collect();
+        a.max_concurrent_tasks = 1;
+        a.instructions = "Leé el estado real del bloqueo del Lead y proponé una salida concreta. No implementes ni cambies permisos; no le pidas al usuario diagnosticar problemas técnicos.".into();
+        r.team.members.push(a);
+        Ok(())
+    })?;
+    run(app, id)?.team.members.into_iter().find(|m| m.id == COORDINATOR).ok_or("No se pudo registrar el Coordinador".into())
+}
+
 pub fn begin(
     app: &AppHandle,
     id: &str,
@@ -58,7 +82,7 @@ pub fn begin(
     task: Option<&str>,
     request: Option<&str>,
 ) -> Result<(Employee, String, String), String> {
-    let mut a = ensure(app, id, kind == "investigation")?;
+    let mut a = if kind == "run_coordination" { ensure_coordinator(app, id)? } else { ensure(app, id, kind == "investigation")? };
     if run(app, id)?.support_reports.len() >= 500 {
         return Err("Se alcanzó el límite de informes de apoyo de esta ejecución".into());
     }
@@ -66,7 +90,7 @@ pub fn begin(
     let current = run(app,id)?;
     let routing = if current.plan_v2.enabled && current.team.plan_v2.routing.enabled {
         let models = super::routing::catalog(&client.get_resilient("/config/providers")?);
-        let category = if kind == "investigation" { "deep" } else { "review" };
+        let category = if matches!(kind, "investigation" | "run_coordination") { "deep" } else { "review" };
         let (selected,receipt) = super::routing::select(&current.team.plan_v2.routing,&models,&a,category,!current.images.is_empty(),&[])
             .map_err(|e| match e { super::routing::RouteError::Unavailable(e)=>e,super::routing::RouteError::Capacity=>"No hay capacidad para la revisión".into() })?;
         a = selected; Some(receipt)
@@ -81,6 +105,8 @@ pub fn begin(
                 "objetivo inicial y resultado final"
             } else if kind == "task_review" {
                 "revisión e integración"
+            } else if kind == "run_coordination" {
+                "coordinación de un bloqueo"
             } else {
                 "investigación para el Lead"
             }
@@ -324,6 +350,57 @@ pub fn assess(app: &AppHandle, id: &str) -> Result<Value, String> {
     value["criteriaSatisfied"] = json!(approved(&typed));
     finish(app, id, &report, value.clone())?;
     Ok(value)
+}
+
+#[derive(Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunDecision {
+    pub action: String,
+    pub summary: String,
+    #[serde(default)]
+    pub guidance: String,
+    #[serde(default)]
+    pub user_request: Option<String>,
+}
+
+// When the run itself is blocked (not a single worker asking for help), the
+// Coordinator reads the real state and decides a bounded recovery. The runner
+// applies retry only through the normal control path, so it reconciles sessions
+// and never replays an uncertain worker.
+pub fn coordinate(app: &AppHandle, id: &str) -> Result<RunDecision, String> {
+    let r = run(app, id)?;
+    if !["blocked", "failed", "planning_blocked"].contains(&r.status.as_str()) {
+        return Err("El Coordinador sólo puede intervenir sobre una ejecución bloqueada".into());
+    }
+    if super::autonomy::requires_user(r.error.as_deref().unwrap_or("")) {
+        return Err("El bloqueo necesita una decisión del usuario; el Coordinador no la reemplaza".into());
+    }
+    let previous = r.support_reports.iter().filter(|s| s.kind == "run_coordination").count();
+    if previous >= 2 {
+        return Err("El Coordinador ya intervino dos veces en esta ejecución; se conserva el bloqueo para revisión".into());
+    }
+    if r.support_reports.iter().any(|s| s.kind == "run_coordination" && s.finished_at.is_none()) {
+        return Err("Ya hay una coordinación del bloqueo en curso".into());
+    }
+    let repo = r.team.allowed_repositories.first().cloned().unwrap_or_default();
+    let key = format!("run-coordinator:{}", previous + 1);
+    let (a, session, report) = begin(app, id, "run_coordination", &repo, None, Some(&key))?;
+    let prompt = format!(
+        "Sos el Coordinador de bloqueos del equipo. El Lead no puede avanzar y necesitás diagnosticar el estado real para proponer la salida más segura. No le pidas al usuario diagnosticar, ejecutar pruebas, elegir comandos ni repetir trabajo: eso lo resuelve el equipo. Leé archivos, evidencia, intentos y coordinación existente. Si es un permiso, credencial, control de PC apagado o una decisión irreversible que sólo el usuario puede tomar, devolvé action=blocked con userRequest concreto. Para un problema técnico, devolvé action=retry con guidance: una instrucción concreta para que el Lead retome sin repetir efectos ya observados. No inventes pruebas ni marques trabajo como aprobado.\nOBJETIVO: {}\nESTADO: {}\nERROR: {}\nTAREAS: {}\nCOORDINACIÓN: {}\nINFORMES PREVIOS: {}\nRespondé SOLO JSON: {{\"action\":\"retry|blocked\",\"summary\":\"causa comprobada y decisión\",\"guidance\":\"instrucción concreta para el Lead\",\"userRequest\":null|\"decisión exacta que falta\"}}.",
+        r.goal,
+        r.status,
+        r.error.clone().unwrap_or_default(),
+        serde_json::to_string(&super::domain::task_snapshot(&r)).unwrap_or_default(),
+        serde_json::to_string(&super::domain::coordination_history(&r)).unwrap_or_default(),
+        serde_json::to_string(&super::domain::support_snapshot(&r)).unwrap_or_default(),
+    );
+    let (typed, value) = response::<RunDecision>(app, id, &a, &session, &report, &repo, &prompt)?;
+    if !["retry", "blocked"].contains(&typed.action.as_str()) || typed.summary.trim().is_empty() {
+        failed(app, id, &report, "El Coordinador no devolvió una acción y un resumen válidos", true)?;
+        return Err("El Coordinador debe decidir retry o blocked con un resumen concreto".into());
+    }
+    finish(app, id, &report, value.clone())?;
+    Ok(typed)
 }
 
 #[cfg(test)]

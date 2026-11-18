@@ -165,6 +165,7 @@ export function Composer({
   const approveKey = sessionId ?? DRAFT_TAB
   const approveOn = useApprovals((s) => (approveKey in s.sessions ? s.sessions[approveKey] : s.autoApprove))
   const files = useFileIndex((s) => s.files)
+  const fileLoading = useFileIndex((s) => s.loading)
   const activeFile = useEditors((s) => {
     const g = s.groups.find((x) => x.id === s.activeGroupId)
     const t = g?.tabs.find((x) => x.id === g.activeId)
@@ -467,7 +468,7 @@ export function Composer({
         }
       }}
     >
-      {popover && suggestions.length > 0 && (
+      {popover && (
         <div className="composer-popover">
           <div className="composer-popover-title">{popover.kind === "mention" ? "Archivos" : "Comandos"}</div>
           {suggestions.map((s, i) => (
@@ -487,6 +488,22 @@ export function Composer({
               <span className="composer-suggestion-desc">{s.description}</span>
             </div>
           ))}
+          {suggestions.length === 0 && (
+            <div className="composer-suggestion empty">
+              <Icon name={popover.kind === "mention" ? "search" : "symbol-event"} />
+              <span className="composer-suggestion-desc">
+                {popover.kind === "mention"
+                  ? !root
+                    ? "Abrí un proyecto para buscar archivos."
+                    : fileLoading
+                      ? "Buscando archivos…"
+                      : files.length === 0
+                        ? "No hay archivos indexados en este proyecto."
+                        : `No hay archivos que coincidan con «${popover.query}».`
+                  : "No hay comandos que coincidan."}
+              </span>
+            </div>
+          )}
         </div>
       )}
       {(context.length > 0 || showActive) && (

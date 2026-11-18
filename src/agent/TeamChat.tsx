@@ -147,7 +147,7 @@ export function TeamChat({ chatId, initialView = "Chat", workspace = false, curr
       ? { label: "Continuar", action: "retry", title: "El equipo no puede avanzar", detail: "El Lead va a revisar la estrategia y separar las tareas sin repetir trabajo. El trabajo ya hecho se conserva.", secondary: { label: "Pedirle al Lead que lo resuelva", action: "lead" } }
       : { label: "Continuar", action: "retry", title: "El equipo se detuvo", detail: "Revisá el motivo y continuá; el trabajo ya hecho se conserva.", secondary: { label: "Pedirle al Lead que lo resuelva", action: "lead" } }
     : run.status === "running" && !activeSessions && (readyCount > 0 || reconciling) ? { label: "Continuar", action: "continue", title: reconciling ? "Hay sesiones por reconciliar" : `${readyCount} tarea${readyCount === 1 ? "" : "s"} lista${readyCount === 1 ? "" : "s"} para continuar`, detail: reconciling ? "Reconciliá el estado incierto y seguí sin repetir efectos." : "El equipo no tiene sesiones activas. Continuá para que retome las tareas listas." }
-    : ["completed", "awaiting_manual_qa"].includes(run.status) ? { label: "Revisar entrega", action: "deliver", title: "La entrega está lista", detail: "Revisá qué cambió, el escenario preparado y las evidencias." }
+    : ["completed", "awaiting_manual_qa"].includes(run.status) ? { label: "Ver resultados", action: "deliver", title: "Los resultados están listos", detail: "Abrí el resumen, los cambios y las evidencias." }
     : null
   return <section className={`team-chat${!workspace && (expanded || browser) ? " team-chat-expanded" : ""}${workspace ? " team-chat-workspace" : ""}`}>
     <header className="team-chat-header">
@@ -235,7 +235,7 @@ export function TeamChat({ chatId, initialView = "Chat", workspace = false, curr
             if (finished) items.push({ at: r.finishedAt ?? r.startedAt, key: `delivery-${r.id}`, node: <article className="team-chat-message team-conversation assistant">
               <small>Lead · {formatDateTime(r.finishedAt ?? r.startedAt)}</small>
               <div className="team-lead-message">
-                <p className="lead-brief">{delivered ? ([r.chatSummary?.done, r.chatSummary?.tested].filter(Boolean).join(" ") || "La entrega está lista para revisar.") : readableTeamError(runProblem(r) || "La ejecución se detuvo antes de terminar.")}</p>
+                <p className="lead-brief">{delivered ? ([r.chatSummary?.done, r.chatSummary?.tested].filter(Boolean).join(" ") || "Resultados y evidencias listos.") : readableTeamError(runProblem(r) || "La ejecución se detuvo antes de terminar.")}</p>
                 {delivered && <details className="lead-details"><summary>Qué se hizo y probó</summary><p className="selectable">{r.chatSummary?.tested || "La entrega quedó registrada en Resultados."}</p></details>}
                 {delivered && r.summary && <details className="lead-details"><summary>Detalles técnicos</summary><p className="selectable">{r.summary}</p></details>}
                 <div className="team-chat-actions">

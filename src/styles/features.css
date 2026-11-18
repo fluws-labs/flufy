@@ -751,3 +751,18 @@ span.feature-chevron {
 .feature-row.nested {
   margin-left: 14px;
 }
+
+.feature-base-tag {
+  flex-shrink: 0;
+  color: var(--fg-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 45%;
+}
+.feature-where {
+  gap: 5px;
+}
+.feature-where .mono {
+  max-width: 100%;
+}

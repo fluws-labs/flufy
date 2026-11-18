@@ -1,4 +1,7 @@
-use crate::proc::{blocking, Run};
+use crate::proc::{blocking, hide_console, Run};
+use std::io::Write;
+use std::process::{Command, Stdio};
+use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -190,6 +193,124 @@ fn pr_review_sync(repo: &str, number: u64, action: &str, body: &str) -> Result<S
 
 fn pr_ready_sync(repo: &str, number: u64) -> Result<String, String> {
     gh(repo, &["pr", "ready", &number.to_string()])
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ProtectedBranches {
+    pub default_branch: Option<String>,
+    pub protected: Vec<String>,
+}
+
+fn remote_slug(repo: &str) -> Result<(String, String), String> {
+    let url = Run::new("git", repo, &["remote", "get-url", "origin"]).quiet().exec()
+        .map_err(|e| format!("no pude leer el remoto origin: {}", e))?;
+    let url = url.trim();
+    let path = url.strip_prefix("git@github.com:")
+        .or_else(|| url.strip_prefix("https://github.com/"))
+        .or_else(|| url.strip_prefix("http://github.com/"))
+        .or_else(|| url.strip_prefix("ssh://git@github.com/"))
+        .ok_or("origin no apunta a github.com")?;
+    let path = path.trim_end_matches('/').trim_end_matches(".git");
+    let (owner, name) = path.split_once('/').ok_or("el remoto de GitHub no tiene owner/repo")?;
+    Ok((owner.to_string(), name.to_string()))
+}
+
+fn github_token(repo: &str) -> Option<String> {
+    let mut cmd = Command::new("git");
+    cmd.args(["credential", "fill"])
+        .current_dir(repo)
+        .env("GCM_INTERACTIVE", "never")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    hide_console(&mut cmd);
+    let mut child = cmd.spawn().ok()?;
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(b"protocol=https\nhost=github.com\n\n").ok()?;
+    }
+    let out = child.wait_with_output().ok()?;
+    if !out.status.success() { return None; }
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .find_map(|line| line.strip_prefix("password=").map(|value| value.trim().to_string()))
+        .filter(|value| !value.is_empty())
+}
+
+fn github_get(token: &str, url: &str) -> Result<Value, String> {
+    let response = ureq::get(url)
+        .set("Authorization", &format!("bearer {}", token))
+        .set("User-Agent", "flufy")
+        .set("Accept", "application/vnd.github+json")
+        .timeout(Duration::from_secs(8))
+        .call();
+    match response {
+        Ok(response) => response.into_json::<Value>().map_err(|e| format!("GitHub devolvió una respuesta inválida: {}", e)),
+        Err(error) => Err(format!("GitHub API: {}", error)),
+    }
+}
+
+fn parse_protection(repo_info: &Value, branches: &Value) -> ProtectedBranches {
+    let default_branch = repo_info["default_branch"].as_str().map(str::to_string);
+    let protected = branches.as_array()
+        .map(|items| items.iter()
+            .filter(|item| item["protected"].as_bool().unwrap_or(false))
+            .filter_map(|item| item["name"].as_str().map(str::to_string))
+            .collect())
+        .unwrap_or_default();
+    ProtectedBranches { default_branch, protected }
+}
+
+fn protected_branches_api(owner: &str, name: &str, token: &str) -> Result<ProtectedBranches, String> {
+    let repo_info = github_get(token, &format!("https://api.github.com/repos/{}/{}", owner, name))?;
+    let branches = github_get(token, &format!("https://api.github.com/repos/{}/{}/branches?per_page=100", owner, name))?;
+    Ok(parse_protection(&repo_info, &branches))
+}
+
+fn protected_branches_gh(repo: &str, owner: &str, name: &str) -> Result<ProtectedBranches, String> {
+    let repo_arg = format!("repos/{}/{}", owner, name);
+    let branches_arg = format!("repos/{}/{}/branches?per_page=100", owner, name);
+    let repo_info: Value = serde_json::from_str(&gh(repo, &["api", &repo_arg])?).map_err(|e| format!("respuesta de gh inválida: {}", e))?;
+    let branches: Value = serde_json::from_str(&gh(repo, &["api", &branches_arg])?).map_err(|e| format!("respuesta de gh inválida: {}", e))?;
+    Ok(parse_protection(&repo_info, &branches))
+}
+
+fn protected_branches_sync(repo: &str) -> Result<ProtectedBranches, String> {
+    let (owner, name) = remote_slug(repo)?;
+    if let Some(token) = github_token(repo) {
+        if let Ok(result) = protected_branches_api(&owner, &name, &token) {
+            return Ok(result);
+        }
+    }
+    protected_branches_gh(repo, &owner, &name)
+}
+
+#[tauri::command]
+pub async fn gh_protected_branches(repo: String) -> Result<ProtectedBranches, String> {
+    blocking(move || protected_branches_sync(&repo)).await
+}
+
+#[tauri::command]
+pub async fn gh_open_pr_heads(repo: String) -> Result<Vec<String>, String> {
+    blocking(move || open_pr_heads_sync(&repo)).await
+}
+
+fn open_pr_heads_sync(repo: &str) -> Result<Vec<String>, String> {
+    let (owner, name) = remote_slug(repo)?;
+    if let Some(token) = github_token(repo) {
+        if let Ok(value) = github_get(&token, &format!("https://api.github.com/repos/{}/{}/pulls?state=open&per_page=100", owner, name)) {
+            let heads = value.as_array()
+                .map(|items| items.iter().filter_map(|item| item["head"]["ref"].as_str().map(str::to_string)).collect())
+                .unwrap_or_default();
+            return Ok(heads);
+        }
+    }
+    let out = gh(repo, &["pr", "list", "--state", "open", "--limit", "100", "--json", "headRefName"])?;
+    let value: Value = serde_json::from_str(&out).map_err(|e| format!("respuesta de gh inválida: {}", e))?;
+    Ok(value.as_array()
+        .map(|items| items.iter().filter_map(|item| item["headRefName"].as_str().map(str::to_string)).collect())
+        .unwrap_or_default())
 }
 
 #[tauri::command]
