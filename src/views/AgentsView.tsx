@@ -1,7 +1,7 @@
-import { useMemo, useState } from "react"
+import { useCallback, useMemo, useState } from "react"
 import type { Session } from "@opencode-ai/sdk"
 import { deleteSession, newSession, renameSession, selectSession, sessionInProject, sessionInRoot, setSessionArchived, useAgent } from "../state/agent"
-import { useSessionMark } from "../state/unseen"
+import { sessionMark, useSessionMark, useUnseen } from "../state/unseen"
 import { useProject } from "../state/project"
 import { archivedSessionIds, archivedSessionOwner } from "../lib/sessions"
 import { openEditor } from "../state/editors"
@@ -12,6 +12,8 @@ import { openContextMenu } from "../components/ContextMenu"
 import { confirmAction } from "../components/Dialog"
 import { EmptyState, Icon, IconButton } from "../components/ui"
 import { useTeams } from "../state/teams"
+import { useApprovals } from "../state/approvals"
+import { teamChatActive } from "../team/chat-active"
 import { groupTeamSessions } from "../team/session-index"
 import { TeamSessionHistory } from "../team/TeamSessionHistory"
 
@@ -133,20 +135,46 @@ export function AgentsView() {
   const loaded = useAgent((s) => s.sessionsLoaded)
   const [query, setQuery] = useState("")
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
-  const [showArchived, setShowArchived] = useState(false)
+  const [view, setView] = useState<"active" | "all" | "archived">("active")
   const archived = useMemo(() => archivedSessionIds(sessions), [sessions])
-  const counts = useMemo(() => {
-    const count = (value: boolean) => {
-      const grouped = groupTeamSessions(sessions.filter(s => archived.has(s.id) === value), chats, allSessions)
-      const ids = new Set(grouped.normal.map(s => s.id))
-      return grouped.groups.length + grouped.normal.filter(s => !s.parentID || !ids.has(s.parentID)).length
+  const statuses = useAgent((s) => s.statuses)
+  const permissions = useAgent((s) => s.permissions)
+  const questions = useAgent((s) => s.questions)
+  const unseen = useUnseen((s) => s.ids)
+  const approvals = useApprovals()
+  const teamActive = useMemo(() => new Set(chats.filter(teamChatActive).map((chat) => chat.id)), [chats])
+  const activeSessions = useMemo(() => {
+    const source = { allSessions, permissions, questions, statuses }
+    const ids = new Set<string>()
+    for (const session of sessions) {
+      if (archived.has(session.id)) continue
+      const mark = sessionMark(source, unseen, session.id, approvals)
+      if (mark === "attention" || mark === "busy" || mark === "retry") ids.add(session.id)
     }
-    return { active: count(false), archived: count(true) }
-  }, [sessions, archived, chats, allSessions])
+    return ids
+  }, [sessions, archived, allSessions, permissions, questions, statuses, unseen, approvals])
+  const rowsFor = useCallback((mode: "active" | "all" | "archived") => {
+    const grouped = groupTeamSessions(sessions.filter((s) => archived.has(s.id) === (mode === "archived")), chats, allSessions)
+    if (mode !== "active") return { visible: grouped.normal, groups: grouped.groups }
+    const working = new Set(teamActive)
+    for (const chat of chats) if (chat.origin?.sessionId && activeSessions.has(chat.origin.sessionId)) working.add(chat.id)
+    const groups = grouped.groups.filter(g => working.has(g.id) || g.sessions.some(s => activeSessions.has(s.id)))
+    const present = new Set(groups.map(g => g.id))
+    const origins = new Set(chats.filter(c => c.origin?.sessionId && present.has(c.id)).map(c => c.origin!.sessionId))
+    const visible = grouped.normal.filter(s => activeSessions.has(s.id) && !origins.has(s.id))
+    return { visible, groups }
+  }, [sessions, archived, chats, allSessions, activeSessions, teamActive])
+  const counts = useMemo(() => {
+    const count = (mode: "active" | "all" | "archived") => {
+      const { visible, groups } = rowsFor(mode)
+      const ids = new Set(visible.map(s => s.id))
+      return groups.length + visible.filter(s => !s.parentID || !ids.has(s.parentID)).length
+    }
+    return { active: count("active"), all: count("all"), archived: count("archived") }
+  }, [rowsFor])
 
   const tree = useMemo(() => {
-    const grouped = groupTeamSessions(sessions.filter((s) => archived.has(s.id) === showArchived), chats, allSessions)
-    const visible = grouped.normal
+    const { visible, groups } = rowsFor(view)
     const ids = new Set(visible.map((s) => s.id))
     const children = new Map<string, Session[]>()
     for (const s of visible) {
@@ -157,9 +185,9 @@ export function AgentsView() {
     }
     const q = query.trim().toLowerCase()
     const roots = visible.filter((s) => (!s.parentID || !ids.has(s.parentID)) && (!q || (s.title ?? "").toLowerCase().includes(q)))
-    const groups = grouped.groups.filter(g => !q || g.title.toLowerCase().includes(q) || g.sessions.some(s => s.title.toLowerCase().includes(q)))
-    return { roots, children, groups }
-  }, [sessions, query, archived, showArchived, chats, allSessions])
+    const filtered = groups.filter(g => !q || g.title.toLowerCase().includes(q) || g.sessions.some(s => s.title.toLowerCase().includes(q)))
+    return { roots, children, groups: filtered }
+  }, [rowsFor, view, query])
 
   return (
     <div className="view agents-view">
@@ -178,10 +206,13 @@ export function AgentsView() {
         </span>
       </div>
       <div className="segmented session-filters" role="group" aria-label="Estado de las conversaciones">
-        <button type="button" className={!showArchived ? "active" : ""} aria-pressed={!showArchived} onClick={() => setShowArchived(false)}>
+        <button type="button" className={view === "active" ? "active" : ""} aria-pressed={view === "active"} onClick={() => setView("active")}>
           Activas ({counts.active})
         </button>
-        <button type="button" className={showArchived ? "active" : ""} aria-pressed={showArchived} onClick={() => setShowArchived(true)}>
+        <button type="button" className={view === "all" ? "active" : ""} aria-pressed={view === "all"} onClick={() => setView("all")}>
+          Todas ({counts.all})
+        </button>
+        <button type="button" className={view === "archived" ? "active" : ""} aria-pressed={view === "archived"} onClick={() => setView("archived")}>
           Archivadas ({counts.archived})
         </button>
       </div>
@@ -191,8 +222,8 @@ export function AgentsView() {
       </div>
       <div className="session-list">
         {loaded && tree.roots.length === 0 && tree.groups.length === 0 && (
-          <EmptyState icon={showArchived ? "archive" : "comment-discussion"} title={query ? "Sin resultados" : showArchived ? "No hay conversaciones archivadas" : "Todavía no hay sesiones"}>
-            {!query && (showArchived ? "Archivá una conversación para guardarla acá con todo su historial." : "Escribile al agente en el panel de la derecha.")}
+          <EmptyState icon={view === "archived" ? "archive" : view === "active" ? "pulse" : "comment-discussion"} title={query ? "Sin resultados" : view === "active" ? "No hay conversaciones activas" : view === "archived" ? "No hay conversaciones archivadas" : "Todavía no hay sesiones"}>
+            {!query && (view === "active" ? "Las que están trabajando o esperan tu respuesta aparecen acá. Las demás están en «Todas»." : view === "archived" ? "Archivá una conversación para guardarla acá con todo su historial." : "Escribile al agente en el panel de la derecha.")}
           </EmptyState>
         )}
         {tree.roots.map((s) => {
