@@ -260,7 +260,7 @@ test("modo equipo abre sin plantilla y muestra integrantes elegidos por el Lead 
   run.chatSummary = { done: "Creé los dos servicios y la pantalla.", tested: "Las pruebas de integración pasaron.", pending: "Nada pendiente." }
   run.summary = "Detalle técnico completo: comando interno node --check backend/server.js y puertos de la integración. ".repeat(15)
   await page.evaluate(async () => { const { refreshTeams } = await import(/* @vite-ignore */ "/src/state/teams.ts"); await refreshTeams() })
-  await expect(lead).toContainText("Espera tu revisión")
+  await expect(lead).toContainText("Completado")
   await expect(lead).not.toContainText("Necesita tu ayuda")
   await page.getByRole("button",{name:"Chat",exact:true}).click()
   await expect(page.locator(".team-chat-message").last()).toContainText("Creé los dos servicios")
