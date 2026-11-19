@@ -297,7 +297,7 @@ fn agent_config(state: &DesktopState) -> Value {
         "permission": { "*": "allow", "desktop_*": "allow", "browser_*": "allow", "teams_preview_*": "allow" },
         "agent": {
             "title": {
-                "model": "opencode/glm-5.3-flash-free",
+                "model": "opencode/big-pickle",
             },
             "escritorio": {
                 "mode": "primary",
