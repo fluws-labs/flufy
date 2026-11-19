@@ -715,7 +715,7 @@ mod tests {
         assert_eq!(esc["mode"], "primary");
         assert_eq!(esc["permission"]["desktop_*"], "allow");
         assert_eq!(esc["permission"]["browser_*"], "allow");
-        assert_eq!(config["agent"]["title"]["model"], "opencode/glm-5.3-flash-free");
+        assert_eq!(config["agent"]["title"]["model"], "opencode/big-pickle");
         let prompt = esc["prompt"].as_str().unwrap();
         assert!(prompt.starts_with("Sos el agente"));
         assert!(prompt.contains("# Manejar la PC del usuario"));
