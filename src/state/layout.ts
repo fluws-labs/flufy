@@ -2,7 +2,7 @@ import { create } from "zustand"
 import { loadJson, saveJson } from "../lib/persist"
 import { isStudioMode, STUDIO_MODES, type StudioMode } from "./studioModes"
 
-export type ViewId = "explorer" | "search" | "scm" | "agents" | "prs" | "routines" | "memory" | "teams"
+export type ViewId = "explorer" | "search" | "scm" | "agents" | "prs" | "routines" | "memory" | "teams" | "profile"
 export type PanelTab = "terminal" | "output"
 
 /** Disposición que cada modo de trabajo recuerda por separado. */
@@ -91,7 +91,7 @@ const clamp = (v: number, min: number, max: number) => Math.min(Math.max(v, min)
 
 // Un layout guardado con una vista que ya no existe (p. ej. "plane") dejaría
 // el sidebar en blanco: se vuelve a la vista por defecto.
-const KNOWN_VIEWS: readonly string[] = ["explorer", "search", "scm", "agents", "prs", "routines", "memory", "teams"]
+const KNOWN_VIEWS: readonly string[] = ["explorer", "search", "scm", "agents", "prs", "routines", "memory", "teams", "profile"]
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null
 

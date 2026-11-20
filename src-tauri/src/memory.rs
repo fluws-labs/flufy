@@ -12,6 +12,15 @@ const DIGEST_MAX: usize = 7000;
 const BODY_MAX: usize = 200_000;
 const FIELD_MAX: usize = 4_000;
 const CAPTURE_MESSAGES: usize = 60;
+pub const PROFILE_MAX: usize = 8_000;
+pub const LOG_TEXT_MAX: usize = 4_000;
+pub const LOG_KINDS: &[&str] = &["decision", "done", "blocked", "learned", "blocked-guard"];
+const LOG_RETENTION_DAYS: i64 = 365;
+static LOG_LOCK: Mutex<()> = Mutex::new(());
+
+const AGENT_PROFILE_DEFAULT: &str = "# Mi Flufy\n\nSos el agente personal del usuario en esta PC. Editá este perfil para definir el tono, el idioma y en qué trabaja.\n\n## Guía\n\n- \n";
+
+const AGENT_STATE_DEFAULT: &str = "{\n  \"version\": 1,\n  \"firstRun\": true,\n  \"pulse\": {\n    \"enabled\": false,\n    \"quietHours\": { \"from\": \"22:00\", \"to\": \"08:00\" },\n    \"maxPerDay\": 4\n  }\n}\n";
 
 pub fn instructions() -> &'static str {
     INSTRUCTIONS
@@ -58,6 +67,152 @@ pub fn root(app: &AppHandle) -> PathBuf {
     }
 }
 
+pub fn agent_root(app: &AppHandle) -> PathBuf {
+    root(app).join("agent")
+}
+
+pub(crate) fn atomic_write(path: &Path, content: &str) -> Result<(), String> {
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "agent".to_string());
+    let tmp = path.with_file_name(format!(".{}.{}.tmp", name, uuid::Uuid::new_v4()));
+    fs::write(&tmp, content).map_err(|e| e.to_string())?;
+    match fs::rename(&tmp, path) {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            let _ = fs::remove_file(&tmp);
+            Err(error.to_string())
+        }
+    }
+}
+
+fn ensure_agent(app: &AppHandle) {
+    let agent = agent_root(app);
+    for dir in [agent.clone(), agent.join("log"), agent.join("inbox")] {
+        let _ = fs::create_dir_all(&dir);
+    }
+    let profile = agent.join("profile.md");
+    if !profile.exists() {
+        let _ = atomic_write(&profile, AGENT_PROFILE_DEFAULT);
+    }
+    let state = agent.join("state.json");
+    if !state.exists() {
+        let _ = atomic_write(&state, AGENT_STATE_DEFAULT);
+    }
+    let log = agent.join("log").join("log.ndjson");
+    if !log.exists() {
+        let _ = atomic_write(&log, "");
+    }
+    let _ = prune_log(&log);
+    crate::agent::playbooks::ensure_defaults(app);
+}
+pub fn agent_state(app: &AppHandle) -> Value {
+    fs::read_to_string(agent_root(app).join("state.json"))
+        .ok()
+        .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+        .unwrap_or_else(|| serde_json::from_str(AGENT_STATE_DEFAULT).unwrap_or(Value::Null))
+}
+
+pub(crate) fn save_agent_state(app: &AppHandle, state: &Value) -> Result<(), String> {
+    atomic_write(&agent_root(app).join("state.json"), &serde_json::to_string_pretty(state).map_err(|e| e.to_string())?)
+}
+
+fn profile_text(app: &AppHandle) -> String {
+    read_text(&agent_root(app).join("profile.md"))
+}
+
+pub fn first_run(app: &AppHandle) -> bool {
+    agent_state(app)["firstRun"].as_bool().unwrap_or(true)
+}
+
+pub fn profile_get(app: &AppHandle) -> Value {
+    let state = agent_state(app);
+    json!({ "profile": profile_text(app), "firstRun": first_run(app), "pulse": state["pulse"].clone() })
+}
+
+pub fn profile_set(app: &AppHandle, profile: &str) -> Result<Value, String> {
+    if profile.chars().count() > PROFILE_MAX {
+        return Err(format!("El perfil no puede superar los {} caracteres.", PROFILE_MAX));
+    }
+    atomic_write(&agent_root(app).join("profile.md"), profile)?;
+    let mut state = agent_state(app);
+    state["firstRun"] = json!(false);
+    state["updated"] = json!(now());
+    save_agent_state(app, &state)?;
+    Ok(json!({ "ok": true }))
+}
+
+pub fn log_path(app: &AppHandle) -> PathBuf {
+    agent_root(app).join("log").join("log.ndjson")
+}
+
+pub fn log_append(app: &AppHandle, kind: &str, text: &str, session: Option<&str>, project: Option<&str>) -> Result<Value, String> {
+    let kind = if kind.trim().is_empty() { "done" } else { kind.trim() };
+    if !LOG_KINDS.contains(&kind) {
+        return Err(format!("kind inválido: {} (usá decision, done, blocked, learned o blocked-guard)", kind));
+    }
+    let text: String = text.trim().chars().take(LOG_TEXT_MAX).collect();
+    if text.is_empty() {
+        return Err("Falta el texto de la entrada.".into());
+    }
+    let _guard = LOG_LOCK.lock().unwrap();
+    let entry = log_entry(kind, &text, session, project);
+    let path = log_path(app);
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    prune_log(&path)?;
+    let mut content = fs::read_to_string(&path).unwrap_or_default();
+    content.push_str(&entry.to_string());
+    content.push('\n');
+    atomic_write(&path, &content)?;
+    Ok(entry)
+}
+
+fn log_entry(kind: &str, text: &str, session: Option<&str>, project: Option<&str>) -> Value {
+    json!({
+        "at": now(),
+        "kind": kind,
+        "text": text,
+        "session": session.map(|s| s.trim()).filter(|s| !s.is_empty()),
+        "project": project.map(|p| p.trim()).filter(|p| !p.is_empty()),
+    })
+}
+
+fn retained_log_line(line: &str) -> bool {
+    if line.trim().is_empty() {
+        return false;
+    }
+    let Ok(value) = serde_json::from_str::<Value>(line) else { return true };
+    let Some(at) = value["at"].as_str() else { return true };
+    let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(at) else { return true };
+    parsed.with_timezone(&chrono::Utc) >= chrono::Utc::now() - chrono::Duration::days(LOG_RETENTION_DAYS)
+}
+
+fn prune_log(path: &Path) -> Result<(), String> {
+    if !path.exists() {
+        return Ok(());
+    }
+    let content = fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let kept: Vec<&str> = content.lines().filter(|line| retained_log_line(line)).collect();
+    let next = if kept.is_empty() { String::new() } else { format!("{}\n", kept.join("\n")) };
+    if next != content {
+        atomic_write(path, &next)?;
+    }
+    Ok(())
+}
+pub fn log_entries(app: &AppHandle, limit: usize) -> Vec<Value> {
+    let all: Vec<Value> = fs::read_to_string(log_path(app))
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|value| value["text"].as_str().is_some_and(|text| !text.trim().is_empty()))
+        .collect();
+    let skip = all.len().saturating_sub(limit);
+    all.into_iter().skip(skip).collect()
+}
+
 pub fn start(app: &AppHandle) {
     let config = load(app);
     let root = config
@@ -74,6 +229,7 @@ pub fn start(app: &AppHandle) {
         let _ = fs::write(&prefs, "# Preferencias personales\n\n- (escribí acá las convenciones o preferencias que valgan para todos los proyectos)\n");
     }
     app.manage(MemoryState { config: Mutex::new(config) });
+    ensure_agent(app);
 }
 
 pub fn plugin_file(app: &AppHandle) -> Option<PathBuf> {
@@ -88,8 +244,9 @@ pub fn extend_config(app: &AppHandle, config: &mut Value) {
     let Some(plugin) = plugin_file(app) else { return };
     let url = format!("file://{}", plugin.to_string_lossy().replace('\\', "/"));
     let root = root(app).to_string_lossy().to_string();
+    let agent = agent_root(app).to_string_lossy().to_string();
     let config_path = config_path(app).map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
-    let entry = json!([url, { "root": root, "config": config_path }]);
+    let entry = json!([url, { "root": root, "config": config_path, "agent": agent }]);
     match config.get_mut("plugin") {
         Some(Value::Array(list)) => list.push(entry),
         _ => config["plugin"] = json!([entry]),
@@ -820,6 +977,22 @@ pub fn memory_session_enabled(app: AppHandle, session: String) -> bool {
     session_enabled(&app, &session)
 }
 
+#[tauri::command]
+pub fn agent_profile_get(app: AppHandle) -> Value {
+    profile_get(&app)
+}
+
+#[tauri::command]
+pub fn agent_profile_set(app: AppHandle, profile: String) -> Result<Value, String> {
+    profile_set(&app, &profile)
+}
+
+#[tauri::command]
+pub fn agent_log_list(app: AppHandle, limit: Option<usize>) -> Value {
+    let limit = limit.unwrap_or(50).clamp(1, 200);
+    json!({ "entries": log_entries(&app, limit) })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -876,5 +1049,28 @@ mod tests {
         assert!(existing_memory_file(&notes, "C:\\otra-nota", "md").is_err());
         assert!(note_file(&notes, "original", Some("borrada")).is_err());
         fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn log_entries_keep_project_and_prune_older_than_a_year() {
+        let entry = log_entry("done", "listo", Some("ses-1"), Some("C:/proyecto"));
+        assert_eq!(entry["kind"], "done");
+        assert_eq!(entry["project"], "C:/proyecto");
+        assert!(log_entry("done", "sin proyecto", None, None)["project"].is_null());
+
+        let old = (chrono::Utc::now() - chrono::Duration::days(400))
+            .format("%Y-%m-%dT%H:%M:%SZ")
+            .to_string();
+        let fresh = (chrono::Utc::now() - chrono::Duration::days(10))
+            .format("%Y-%m-%dT%H:%M:%SZ")
+            .to_string();
+        let content = format!(
+            "{{\"at\":\"{}\",\"text\":\"viejo\"}}\n{{\"at\":\"{}\",\"text\":\"nuevo\"}}\nlinea rota\n",
+            old, fresh
+        );
+        let kept: Vec<&str> = content.lines().filter(|line| retained_log_line(line)).collect();
+        assert!(!kept.iter().any(|line| line.contains("viejo")));
+        assert!(kept.iter().any(|line| line.contains("nuevo")));
+        assert!(kept.iter().any(|line| line.contains("linea rota")));
     }
 }

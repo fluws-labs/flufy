@@ -388,6 +388,93 @@ fn hub_api(app: &AppHandle, mut req: Request, url: &str, path: &str) {
         crate::memory::set_session(app, &session, enabled);
         return respond_json(req, 200, json!({ "ok": true, "enabled": enabled }));
     }
+    if method == "GET" && path == "/hub/agent" {
+        return respond_json(req, 200, crate::agent::hub_state(app));
+    }
+    if method == "GET" && path == "/hub/agent/browser" {
+        return match crate::desktop::browser::workspace("mission", None, false) {
+            Ok(value) => respond_json(req, 200, value),
+            Err(error) => respond_json(req, 409, json!({ "error": error })),
+        };
+    }
+    if method == "GET" && path == "/hub/agent/browser/read" {
+        let Some(page_id) = query_param(url, "pageId").and_then(|value| value.parse::<u64>().ok()) else {
+            return respond_json(req, 400, json!({ "error": "Falta pageId" }));
+        };
+        return match crate::desktop::browser::page_text(page_id) {
+            Ok(text) => respond_json(req, 200, json!({ "text": text })),
+            Err(error) => respond_json(req, 409, json!({ "error": error })),
+        };
+    }
+    if method == "POST" && path == "/hub/agent/browser/assign" {
+        let body = read_json(&mut req);
+        let Some(page_id) = body["pageId"].as_u64() else {
+            return respond_json(req, 400, json!({ "error": "Falta pageId" }));
+        };
+        return match crate::desktop::browser::workspace("mission", Some(page_id), false) {
+            Ok(value) => respond_json(req, 200, value),
+            Err(error) => respond_json(req, 409, json!({ "error": error })),
+        };
+    }
+    if method == "POST" && path == "/hub/agent/missions" {
+        let body = read_json(&mut req);
+        let mission = match serde_json::from_value::<crate::agent::missions::Mission>(body["mission"].clone()) {
+            Ok(mission) => mission,
+            Err(error) => return respond_json(req, 400, json!({ "error": format!("Misión inválida: {}", error) })),
+        };
+        return match crate::agent::missions::save(app, mission) {
+            Ok(saved) => respond_json(req, 200, json!(saved)),
+            Err(error) => respond_json(req, 409, json!({ "error": error })),
+        };
+    }
+    if method == "GET" && path == "/hub/agent/inbox" {
+        let include = query_param(url, "includeAcked").as_deref() == Some("1");
+        return respond_json(req, 200, json!({ "items": crate::agent::inbox::list(app, include) }));
+    }
+    if method == "POST" && path.starts_with("/hub/agent/inbox/") && path.ends_with("/ack") {
+        let id = path.trim_start_matches("/hub/agent/inbox/").trim_end_matches("/ack");
+        return match crate::agent::inbox::ack(app, id) {
+            Ok(()) => respond_json(req, 200, json!({ "ok": true })),
+            Err(error) => respond_json(req, 409, json!({ "error": error })),
+        };
+    }
+    if method == "POST" && path.starts_with("/hub/agent/inbox/") && path.ends_with("/decide") {
+        let id = path.trim_start_matches("/hub/agent/inbox/").trim_end_matches("/decide").to_string();
+        let body = read_json(&mut req);
+        let decision = body["decision"].as_str().unwrap_or_default().to_string();
+        let note = body["note"].as_str().map(|value| value.to_string());
+        let item = match crate::agent::inbox::decide(app, &id, &decision, note.as_deref()) {
+            Ok(item) => item,
+            Err(error) => return respond_json(req, 409, json!({ "error": error })),
+        };
+        let mut mission = serde_json::Value::Null;
+        if let Some(mission_id) = item.mission_id.clone() {
+            mission = match crate::agent::missions::decide(app, &mission_id, &decision, Some(&item.title)) {
+                Ok(()) => json!({ "ok": true }),
+                Err(error) => json!({ "error": error }),
+            };
+        }
+        return respond_json(req, 200, json!({ "ok": true, "item": item, "mission": mission }));
+    }
+    if method == "POST" && path == "/hub/agent/absence/prepare" {
+        return match crate::agent::absence::prepare(app) {
+            Ok(state) => respond_json(req, 200, json!(state)),
+            Err(error) => respond_json(req, 409, json!({ "error": error })),
+        };
+    }
+    if method == "POST" && path == "/hub/agent/absence/stop" {
+        return match crate::agent::absence::stop(app) {
+            Ok(state) => respond_json(req, 200, json!(state)),
+            Err(error) => respond_json(req, 409, json!({ "error": error })),
+        };
+    }
+    if method == "POST" && path.starts_with("/hub/agent/missions/") && path.ends_with("/run") {
+        let id = path.trim_start_matches("/hub/agent/missions/").trim_end_matches("/run");
+        return match crate::agent::missions::launch(app, id, true) {
+            Ok(()) => respond_json(req, 200, json!({ "ok": true })),
+            Err(error) => respond_json(req, 409, json!({ "error": error })),
+        };
+    }
     if method == "POST" && path.starts_with("/hub/routines/") && path.ends_with("/run") {
         let id = path.trim_start_matches("/hub/routines/").trim_end_matches("/run");
         return match routines::launch(app, id, true) {

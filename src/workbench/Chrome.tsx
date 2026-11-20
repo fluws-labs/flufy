@@ -63,12 +63,14 @@ import { UpdateButton } from "../components/Updates"
 import { MODE_PRESETS } from "../state/modePresets"
 import { useStudio, type StudioMode } from "../state/studio"
 import { usePreviewTaskId } from "../agent/preview-identity"
+import { pendingInboxCount, useAgentProfile } from "../state/agentProfile"
 
 const VIEWS: Array<{ id: ViewId; icon: string; title: string; keys: string }> = [
   { id: "explorer", icon: "files", title: "Explorador", keys: "Ctrl+Shift+E" },
   { id: "search", icon: "search", title: "Buscar", keys: "Ctrl+Shift+F" },
   { id: "scm", icon: "source-control", title: "Control de código", keys: "Ctrl+Shift+G" },
   { id: "agents", icon: "comment-discussion", title: "Sesiones del agente", keys: "Ctrl+Shift+A" },
+  { id: "profile", icon: "account", title: "Mi Flufy", keys: "" },
   { id: "teams", icon: "checklist", title: "Equipos IA", keys: "" },
   { id: "prs", icon: "git-pull-request", title: "Pull requests", keys: "" },
   { id: "routines", icon: "calendar", title: "Rutinas", keys: "" },
@@ -84,14 +86,15 @@ export function ActivityBar() {
   const sessions = useAgent((s) => s.allSessions).filter(sessionInProject)
   const unseenIds = useUnseen((s) => s.ids)
   const unseen = sessions.filter((s) => !s.parentID && s.id in unseenIds).length
+  const inboxPending = useAgentProfile((s) => pendingInboxCount(s.inbox))
   return (
     <nav className="activity-bar">
       <button type="button" className="activity-item commands" title="Comandos (Ctrl+Shift+P)" onClick={() => showQuickOpen(">")}>
         <Icon name="symbol-event" />
       </button>
       {VIEWS.map((v) => {
-        const badge = v.id === "scm" ? changes : v.id === "agents" ? attention || busy || unseen : 0
-        const tone = v.id !== "agents" ? "" : attention ? " attention" : !busy && unseen ? " done" : ""
+        const badge = v.id === "scm" ? changes : v.id === "agents" ? attention || busy || unseen : v.id === "profile" ? inboxPending : 0
+        const tone = v.id === "agents" ? (attention ? " attention" : !busy && unseen ? " done" : "") : v.id === "profile" && inboxPending > 0 ? " attention" : ""
         return (
           <button
             key={v.id}

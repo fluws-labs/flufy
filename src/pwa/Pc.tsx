@@ -21,7 +21,7 @@ function machineLine(s: PcStatus): string {
   return parts.join(" · ")
 }
 
-export function PcCard({ status: initial, onChange }: { status: PcStatus; onChange?: () => void }) {
+export function PcCard({ status: initial, onChange, initialScreen = false }: { status: PcStatus; onChange?: () => void; initialScreen?: boolean }) {
   const [local, setLocal] = useState<{ from: PcStatus; value: PcStatus } | null>(null)
   const status = local && local.from === initial ? local.value : initial
   const setStatus = useCallback((value: PcStatus) => setLocal({ from: initial, value }), [initial])
@@ -30,7 +30,7 @@ export function PcCard({ status: initial, onChange }: { status: PcStatus; onChan
   const [notice, setNotice] = useState<string | null>(null)
   const [confirmStop, setConfirmStop] = useState(false)
   const [open, setOpen] = useState(false)
-  const [screen, setScreen] = useState(false)
+  const [screen, setScreen] = useState(initialScreen)
 
   usePoll(
     async () => {
@@ -245,5 +245,31 @@ export function ScreenSheet({ onClose, initialTarget = null }: { onClose: () => 
         </>
       )}
     </Sheet>
+  )
+}
+
+export function ControlScreen({ back }: { back: () => void }) {
+  const [status, setStatus] = useState<PcStatus | null>(null)
+  const [error, setError] = useState("")
+
+  useEffect(() => {
+    hub<PcStatus>("GET", "/desktop")
+      .then((value) => setStatus(value))
+      .catch((value) => setError(errorText(value)))
+  }, [])
+
+  return (
+    <main className="screen">
+      <header className="topbar">
+        <button type="button" className="icon-btn" aria-label="Volver" onClick={back}>
+          <Icon name="arrow-left" />
+        </button>
+        <h1>Control de la PC</h1>
+        <span className="spacer" />
+      </header>
+      {error && <div className="alert">{error}</div>}
+      {!status && !error && <p className="muted">Cargando el control…</p>}
+      {status && <PcCard status={status} initialScreen />}
+    </main>
   )
 }

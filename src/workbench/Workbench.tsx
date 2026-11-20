@@ -10,6 +10,7 @@ import { initApprovals } from "../state/approvals"
 import { initUnseen } from "../state/unseen"
 import { startUsagePolling } from "../state/usage"
 import { startRoutines } from "../state/routines"
+import { startAgentProfile } from "../state/agentProfile"
 import { startTeams } from "../state/teams"
 import { startAutoSpeech } from "../state/auto-speech"
 import { startResources } from "../state/resources"
@@ -37,6 +38,7 @@ import { AgentsView } from "../views/AgentsView"
 import { PullRequestsView } from "../views/PullRequestsView"
 import { RoutinesView } from "../views/RoutinesView"
 import { MemoryView } from "../views/MemoryView"
+import { ProfileView } from "../views/ProfileView"
 import { Sash } from "../components/Sash"
 import { QuickInput } from "../components/QuickInput"
 import { ContextMenuHost } from "../components/ContextMenu"
@@ -59,6 +61,7 @@ const VIEW_COMPONENTS: Record<ViewId, () => React.ReactElement> = {
   routines: RoutinesView,
   teams: TeamsView,
   memory: MemoryView,
+  profile: ProfileView,
 }
 
 let booted = false
@@ -81,6 +84,7 @@ function boot() {
     void loadAgentMeta()
     startUsagePolling()
     startRoutines()
+    startAgentProfile()
     startTeams()
     startAutoSpeech()
     startResources()

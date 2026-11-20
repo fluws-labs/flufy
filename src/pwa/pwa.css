@@ -1561,3 +1561,94 @@ body.pip-dragging {
   width: 100%;
   accent-color: var(--accent);
 }
+
+/* Mi Flufy: misiones, ausencia y bandeja en el PWA */
+.agent-screen .agent-card {
+  align-items: flex-start;
+  flex-direction: column;
+}
+.agent-card .card-text p {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.4;
+}
+.agent-card .card-text small {
+  line-height: 1.4;
+}
+.agent-preview {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding: 8px;
+  border-radius: 8px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  color: var(--fg);
+}
+.agent-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  width: 100%;
+}
+.agent-absence {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-raised);
+}
+.agent-absence.ok {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+.agent-absence.warn {
+  border-color: var(--warn, #e3b341);
+}
+.agent-absence.fail {
+  border-color: var(--danger, #e05c5c);
+}
+.agent-absence small {
+  color: var(--muted);
+}
+.agent-checks {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+}
+.agent-check {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  gap: 8px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.agent-check > span {
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 10px;
+  color: var(--muted);
+}
+.agent-check.ok > span {
+  color: var(--accent);
+}
+.agent-check.warn > span {
+  color: var(--warn, #e3b341);
+}
+.agent-check.fail > span {
+  color: var(--danger, #e05c5c);
+}
+.agent-check div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow-wrap: anywhere;
+}
+.agent-check small {
+  color: var(--muted);
+  font-size: 12px;
+}

@@ -141,6 +141,24 @@ fn handle(app: &AppHandle, event: &Value) {
         let request_id = props["id"].as_str().unwrap_or_default().to_string();
         let root = root_session(app, session);
         if crate::approvals::auto_approve(app, &root) && !request_id.is_empty() {
+            if let Some(reason) = crate::agent::guard::evaluate(&directory, props) {
+                let app = app.clone();
+                let props = props.clone();
+                let reason = reason.clone();
+                let directory = directory.clone();
+                let session = session.to_string();
+                std::thread::spawn(move || {
+                    if let Err(error) = reply_permission_reject(&app, &request_id, &directory, &reason) {
+                        log::warn!("[guard] no se pudo rechazar {}: {}", request_id, error);
+                    }
+                    let _ = crate::memory::log_append(&app, "blocked-guard", &crate::agent::inbox::blocked_text(&reason, &props), Some(&session), Some(&directory));
+                    let _ = app.emit(
+                        "agent://blocked-guard",
+                        json!({ "id": request_id, "sessionID": session, "reason": reason, "directory": directory }),
+                    );
+                });
+                return;
+            }
             let app = app.clone();
             let props = props.clone();
             let directory = directory.clone();
@@ -160,6 +178,15 @@ fn handle(app: &AppHandle, event: &Value) {
 fn reply_permission_once(app: &AppHandle, id: &str, directory: &str) -> Result<(), String> {
     let server = ensure_server(app)?;
     Opencode::new(&server, directory).post(&format!("/permission/{}/reply", id), json!({ "reply": "once" }))?;
+    Ok(())
+}
+
+fn reply_permission_reject(app: &AppHandle, id: &str, directory: &str, reason: &str) -> Result<(), String> {
+    let server = ensure_server(app)?;
+    Opencode::new(&server, directory).post(
+        &format!("/permission/{}/reply", id),
+        json!({ "reply": "reject", "message": reason }),
+    )?;
     Ok(())
 }
 

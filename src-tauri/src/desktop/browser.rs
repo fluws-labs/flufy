@@ -616,6 +616,42 @@ pub fn workspace(session: &str, page_id: Option<u64>, quiet: bool) -> Result<Val
     serde_json::from_str(&text_of(&result)).map_err(|e| format!("No se pudo leer el espacio de Chrome: {}", e))
 }
 
+pub fn page_text(page_id: u64) -> Result<String, String> {
+    let result = call_session(
+        "mission",
+        "mission",
+        "evaluate_script",
+        json!({
+            "pageId": page_id,
+            "function": "() => (document.body?.innerText ?? '').slice(0, 20000)"
+        }),
+    )?;
+    if result["isError"].as_bool().unwrap_or(false) {
+        return Err(text_of(&result));
+    }
+    Ok(result["content"]
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item["text"].as_str())
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .unwrap_or_default())
+}
+
+#[tauri::command]
+pub async fn agent_browser_assign(app: tauri::AppHandle, page_id: u64) -> Result<Value, String> {
+    super::gate(&app)?;
+    if !super::config(&app).browser {
+        return Err("El navegador está desactivado".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || workspace("mission", Some(page_id), false))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
 #[tauri::command]
 pub async fn browser_workspace(app: tauri::AppHandle, session: String, page_id: Option<u64>, quiet: Option<bool>) -> Result<Value, String> {
     if session.trim().is_empty() { return Err("Falta la conversación del navegador".into()); }

@@ -4,11 +4,14 @@ import { Home, type Route } from "./Home"
 import { SessionScreen } from "./Session"
 import { Icon } from "./ui"
 import { TeamsScreen } from "./Teams"
-
+import { AgentScreen } from "./Agent"
+import { ControlScreen } from "./Pc"
 type Toast = { title: string; body: string; url: string }
 
 function routeFromUrl(raw: string): Route | null {
   const url = new URL(raw, window.location.origin)
+  if (url.searchParams.has("control")) return { kind: "control" }
+  if (url.searchParams.has("agent")) return { kind: "agent" }
   if (url.searchParams.has("teams")) return { kind: "teams", chatId: url.searchParams.get("chat") ?? undefined, runId: url.searchParams.get("run") ?? undefined }
   const project = url.searchParams.get("p")
   const id = url.searchParams.get("s")
@@ -19,11 +22,15 @@ function initialRoute(): Route {
   const deep = routeFromUrl(window.location.href)
   if (!deep) return { kind: "home" }
   if (deep.kind === "teams") return deep
+  if (deep.kind === "agent" || deep.kind === "control") {
+    window.history.replaceState(null, "", "/")
+    window.history.pushState({ agent: true }, "")
+    return deep
+  }
   window.history.replaceState(null, "", "/")
   window.history.pushState({ session: true }, "")
   return deep
 }
-
 const TOKEN = readToken()
 const START = initialRoute()
 
@@ -78,7 +85,7 @@ export function App() {
 
   const open = useCallback(
     (r: Route) => {
-      const query = r.kind === "teams" ? new URLSearchParams({ teams: "1", ...(r.chatId ? { chat: r.chatId } : {}), ...(r.runId ? { run: r.runId } : {}) }) : r.kind === "session" ? new URLSearchParams({ p: r.project, s: r.id }) : new URLSearchParams()
+      const query = r.kind === "teams" ? new URLSearchParams({ teams: "1", ...(r.chatId ? { chat: r.chatId } : {}), ...(r.runId ? { run: r.runId } : {}) }) : r.kind === "agent" ? new URLSearchParams({ agent: "1" }) : r.kind === "control" ? new URLSearchParams({ control: "1" }) : r.kind === "session" ? new URLSearchParams({ p: r.project, s: r.id }) : new URLSearchParams()
       window.history.pushState({ session: true }, "", `/${query.size ? `?${query}` : ""}`)
       go(r)
       setToast(null)
@@ -150,6 +157,10 @@ export function App() {
         />
       ) : route.kind === "teams" ? (
         <TeamsScreen route={route} back={goHome} open={open} />
+      ) : route.kind === "agent" ? (
+        <AgentScreen back={goHome} open={open} />
+      ) : route.kind === "control" ? (
+        <ControlScreen back={() => open({ kind: "agent" })} />
       ) : (
         <Home open={open} viewed={viewed} />
       )}

@@ -52,6 +52,7 @@ fn handle(app: &AppHandle, mut req: Request, token: &str) {
         "/mcp/worktrees" => Channel::Worktrees,
         "/mcp/teams" => Channel::Teams,
         "/mcp/memory" => Channel::Memory,
+        "/mcp/agent" => Channel::Agent,
         "/mcp/self" => Channel::Plane,
         "/mcp/code" => Channel::Code,
         _ => return reply(req, 404, Some(&json!({ "error": "no existe" }))),

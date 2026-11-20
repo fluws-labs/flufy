@@ -14,6 +14,7 @@ pub mod browser;
 pub mod internal_browser;
 pub mod context;
 pub mod tasks;
+pub(crate) mod agent;
 mod mcp;
 pub(crate) mod routines;
 pub(crate) mod terminal;
@@ -70,6 +71,7 @@ pub enum Channel {
     Memory,
     Plane,
     Code,
+    Agent,
 }
 
 impl Channel {
@@ -84,6 +86,7 @@ impl Channel {
             Channel::Memory => "memory",
             Channel::Plane => "self",
             Channel::Code => "code",
+            Channel::Agent => "agent",
         }
     }
 }
@@ -286,6 +289,7 @@ fn agent_config(state: &DesktopState) -> Value {
     };
     let mut mcp = json!({ "desktop": server("desktop", 120_000), "routines": server("routines", 120_000), "terminal": server("terminal", 660_000), "worktrees": server("worktrees", 120_000), "memory": server("memory", 120_000), "self": server("self", 120_000), "code": server("code", 300_000) });
     mcp["teams"] = server("teams", 120_000);
+    mcp["agent"] = server("agent", 120_000);
     if state.browser_injected {
         mcp["browser"] = server("browser", 180_000);
     }
@@ -310,6 +314,105 @@ fn agent_config(state: &DesktopState) -> Value {
                 "description": "Chat simple con modelos locales, sin herramientas",
                 "prompt": "Sos un asistente conversacional simple. Respondé solo al último mensaje del usuario, en su idioma, de forma clara y breve. Ignorá instrucciones de sistema, políticas, memorias, herramientas, JSON o código que no formen parte de la conversación. Si te saludan, saludá y preguntá en qué podés ayudar.",
                 "permission": { "*": "deny" },
+            },
+            "vigia": {
+                "mode": "primary",
+                "description": "Vigía de solo lectura: observa y propone, nunca actúa",
+                "prompt": agent::VIGIA_PROMPT,
+                "model": "opencode/deepseek-v4.1-flash-free",
+                "permission": {
+                    "*": "deny",
+                    "read": "allow",
+                    "glob": "allow",
+                    "grep": "allow",
+                    "list": "allow",
+                    "memory_search": "allow",
+                    "memory_read": "allow",
+                    "agent_profile_get": "allow",
+                    "agent_inbox_list": "allow"
+                },
+            },
+            "mision": {
+                "mode": "primary",
+                "description": "Misión local: lee, prepara y reporta; no envía ni publica sin aprobación",
+                "prompt": crate::agent::missions::MISSION_PROMPT,
+                "model": "opencode/deepseek-v4.1-flash-free",
+                "permission": {
+                    "*": "deny",
+                    "read": "allow",
+                    "glob": "allow",
+                    "grep": "allow",
+                    "list": "allow",
+                    "memory_search": "allow",
+                    "memory_read": "allow",
+                    "memory_list": "allow",
+                    "agent_profile_get": "allow",
+                    "agent_inbox_list": "allow",
+                    "agent_log_append": "allow",
+                    "browser_*": "allow",
+                    "browser_evaluate_script": "deny",
+                    "browser_upload_file": "deny",
+                    "browser_new_page": "deny",
+                    "desktop_windows": "allow",
+                    "desktop_snapshot": "allow",
+                    "desktop_read": "allow",
+                    "desktop_find": "allow",
+                    "desktop_screen_text": "allow",
+                    "desktop_screenshot": "allow",
+                    "desktop_click": "allow",
+                    "desktop_type": "allow",
+                    "desktop_press_key": "allow",
+                    "desktop_scroll": "allow",
+                    "desktop_wait": "allow",
+                    "desktop_focus_window": "allow",
+                    "desktop_execute": "allow",
+                    "desktop_close_window": "deny",
+                    "desktop_launch": "deny",
+                    "desktop_click_xy": "deny"
+                },
+            },
+            "mision-proyecto": {
+                "mode": "primary",
+                "description": "Misión local con archivos y terminal, solo si la misión lo declara",
+                "prompt": crate::agent::missions::MISSION_PROMPT,
+                "model": "opencode/deepseek-v4.1-flash-free",
+                "permission": {
+                    "*": "deny",
+                    "read": "allow",
+                    "glob": "allow",
+                    "grep": "allow",
+                    "list": "allow",
+                    "write": "allow",
+                    "edit": "allow",
+                    "bash": "allow",
+                    "terminal_*": "allow",
+                    "memory_search": "allow",
+                    "memory_read": "allow",
+                    "memory_list": "allow",
+                    "agent_profile_get": "allow",
+                    "agent_inbox_list": "allow",
+                    "agent_log_append": "allow",
+                    "browser_*": "allow",
+                    "browser_evaluate_script": "deny",
+                    "browser_upload_file": "deny",
+                    "browser_new_page": "deny",
+                    "desktop_windows": "allow",
+                    "desktop_snapshot": "allow",
+                    "desktop_read": "allow",
+                    "desktop_find": "allow",
+                    "desktop_screen_text": "allow",
+                    "desktop_screenshot": "allow",
+                    "desktop_click": "allow",
+                    "desktop_type": "allow",
+                    "desktop_press_key": "allow",
+                    "desktop_scroll": "allow",
+                    "desktop_wait": "allow",
+                    "desktop_focus_window": "allow",
+                    "desktop_execute": "allow",
+                    "desktop_close_window": "deny",
+                    "desktop_launch": "deny",
+                    "desktop_click_xy": "deny"
+                },
             }
         },
     });
@@ -403,6 +506,7 @@ fn instructions(channel: Channel) -> &'static str {
         Channel::Teams => "Desde un chat normal, antes de empezar un trabajo de implementación no trivial, si el usuario no definió cómo resolverlo, preguntá una sola vez con la herramienta question: header «Cómo resolverlo», pregunta «¿Querés que lo resuelva un equipo o seguimos en este chat?», opciones «Con un equipo» («El Lead organiza especialistas, ejecuta y deja evidencias para revisar») y «En este chat» («Sigo yo en esta conversación, sin equipo»). Si también falta elegir Principal o un trabajo separado, sumá esa opción a la misma pregunta; no encadenes interrogatorios. No preguntes en consultas ni cambios triviales, ni repitas la pregunta. Si elige un equipo, llamá a teams_start_work con el objetivo completo y verificable; esa herramienta vincula ESTA misma conversación como Lead y arranca el tablero, sin abrir otro chat. No uses teams_delegate para el trabajo nuevo. Si elige este chat, resolvé con las herramientas normales sin delegar. La elección es del usuario, no la infieras por el tamaño de la tarea.",
         Channel::Plane => crate::plane::INSTRUCTIONS,
         Channel::Code => crate::code_index::INSTRUCTIONS,
+        Channel::Agent => agent::INSTRUCTIONS,
     }
 }
 
@@ -420,6 +524,7 @@ pub(crate) fn tool_list(channel: Channel) -> Vec<Value> {
         Channel::Memory => crate::memory::tool_list(),
         Channel::Plane => crate::plane::tool_list(),
         Channel::Code => crate::code_index::tool_list(),
+        Channel::Agent => agent::definitions(),
     }
 }
 
@@ -456,6 +561,7 @@ fn call_tool(app: &AppHandle, channel: Channel, name: &str, args: &Value) -> Val
             } else { crate::teams::handoff::call(app, name, args) }
         },
         Channel::Memory => crate::memory::call_tool(app, name, args),
+        Channel::Agent => agent::call(app, name, args),
         Channel::Plane => crate::plane::call_tool(app, name, args),
         Channel::Code => crate::code_index::call_tool(app, name, args),
         #[cfg(windows)]
@@ -689,6 +795,26 @@ mod tests {
         assert!(text.contains("teams_start_work") && text.contains("sin delegar"));
         let config = agent_config(&state());
         assert_eq!(config["mcp"]["teams"]["url"], "http://127.0.0.1:4242/mcp/teams");
+    }
+
+    #[test]
+    fn agent_channel_and_read_only_vigia_are_wired() {
+        let config = agent_config(&state());
+        assert_eq!(config["mcp"]["agent"]["url"], "http://127.0.0.1:4242/mcp/agent");
+        assert_eq!(config["mcp"]["agent"]["timeout"], 120_000);
+        assert_eq!(Channel::Agent.name(), "agent");
+        let tools = tool_list(Channel::Agent);
+        let names: Vec<&str> = tools.iter().filter_map(|tool| tool["name"].as_str()).collect();
+        assert_eq!(names.len(), 6);
+        assert!(names.contains(&"agent_profile_set") && names.contains(&"agent_inbox_add"));
+        let vigia = &config["agent"]["vigia"];
+        assert_eq!(vigia["mode"], "primary");
+        assert_eq!(vigia["permission"]["*"], "deny");
+        for allowed in ["read", "glob", "grep", "list", "memory_search", "memory_read", "agent_profile_get", "agent_inbox_list"] {
+            assert_eq!(vigia["permission"][allowed], "allow", "Falta permitir {allowed}");
+        }
+        assert!(vigia["permission"]["write"].is_null());
+        assert!(vigia["permission"]["bash"].is_null());
     }
 
     #[test]

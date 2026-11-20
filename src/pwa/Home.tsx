@@ -29,7 +29,7 @@ import { PcCard } from "./Pc"
 import { QuotaHub, type QuotaBarHandle } from "./Quota"
 import { Icon, Md, OfflineBanner, useLive, usePoll } from "./ui"
 
-export type Route = { kind: "home" } | { kind: "session"; project: string; id: string; title: string } | { kind: "teams"; chatId?: string; runId?: string }
+export type Route = { kind: "home" } | { kind: "agent" } | { kind: "control" } | { kind: "session"; project: string; id: string; title: string } | { kind: "teams"; chatId?: string; runId?: string }
 
 const MAX_PROJECTS = 12
 const FIRST_PAGE = 6
@@ -351,6 +351,7 @@ export function Home({ open, viewed }: { open: (r: Route) => void; viewed: strin
           <Icon name={push.status?.kind === "on" ? "bell" : "bell-slash"} />
         </button>
       </header>
+      <button className="btn" onClick={() => open({ kind: "agent" })}><Icon name="account" /> Mi Flufy</button>
       <button className="btn" onClick={() => open({ kind: "teams" })}><Icon name="checklist" /> Trabajos y tablero</button>
       {offline && <OfflineBanner reason={offline} cachedAt={staleAt} onRetry={() => void load()} />}
       {error && <div className="alert">{error}</div>}

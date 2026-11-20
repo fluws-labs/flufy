@@ -248,11 +248,13 @@ pub fn memory_for_run(app: &AppHandle, run_id: &str) -> bool {
 /// The native session registry, never model arguments, assigns every team
 /// session to the single Chrome workspace selected for its chat.
 pub(crate) fn browser_session(app: &AppHandle, session: &str) -> String {
+    if crate::agent::missions::is_mission_session(session) {
+        return "mission".to_string();
+    }
     app.try_state::<TeamsState>().and_then(|state| state.store.lock().ok().and_then(|s|
         browser_owner(&s, session)))
         .unwrap_or_else(|| session.to_string())
 }
-
 pub(crate) fn browser_can_recover(app: &AppHandle, session: &str) -> bool {
     app.try_state::<TeamsState>().and_then(|state| state.store.lock().ok().map(|s|
         s.chats.iter().any(|c| c.messages.iter().any(|m| m.session_id.as_deref()==Some(session)) || c.runs.iter().flat_map(|r| &r.tasks).flat_map(|t| &t.attempts).any(|a| a.session_id.as_deref()==Some(session))))).unwrap_or(false)

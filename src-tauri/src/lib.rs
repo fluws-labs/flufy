@@ -1,3 +1,4 @@
+#![recursion_limit = "256"]
 use serde::Serialize;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
@@ -8,6 +9,7 @@ use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 
 pub mod accounts;
+pub mod agent;
 pub mod approvals;
 pub mod code_index;
 pub mod desktop;
@@ -110,7 +112,7 @@ async fn reload_engine(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-fn current_project(app: &tauri::AppHandle) -> String {
+pub(crate) fn current_project(app: &tauri::AppHandle) -> String {
     let state = app.state::<ServerState>();
     let mut project = state.project.lock().unwrap();
     if project.is_none() {
@@ -536,6 +538,7 @@ pub fn run() {
             desktop::context::desktop_context_prepare,
             desktop::browse::browse_status,
             desktop::browser::browser_workspace,
+            desktop::browser::agent_browser_assign,
             desktop::browser::browser_chrome_workspace,
             desktop::internal_browser::browser_internal_open,
             desktop::internal_browser::browser_internal_control,
@@ -561,6 +564,26 @@ pub fn run() {
             memory::memory_search_cmd,
             memory::memory_set_session,
             memory::memory_session_enabled,
+            memory::agent_profile_get,
+            memory::agent_profile_set,
+            memory::agent_log_list,
+            agent::inbox::agent_inbox_state,
+            agent::inbox::agent_inbox_ack,
+            agent::inbox::agent_inbox_decide,
+            agent::missions::agent_missions_list,
+            agent::missions::agent_mission_get,
+            agent::missions::agent_mission_save,
+            agent::missions::agent_mission_delete,
+            agent::missions::agent_mission_run,
+            agent::missions::agent_mission_decide,
+            agent::absence::agent_absence_status,
+            agent::absence::agent_absence_prepare,
+            agent::absence::agent_absence_stop,
+            agent::playbooks::agent_playbooks_list,
+            agent::playbooks::agent_playbook_read,
+            agent::playbooks::agent_playbook_save,
+            agent::pulse::agent_pulse_get,
+            agent::pulse::agent_pulse_set,
             plane::plane_list,
             plane::plane_read,
             plane::plane_write,
@@ -595,9 +618,12 @@ pub fn run() {
             resources::start(app.handle());
             desktop::start(app.handle());
             routines::start(app.handle());
+            agent::pulse::start(app.handle());
             teams::start(app.handle());
             push::start(app.handle());
+            agent::missions::start(app.handle());
             remote::start(app.handle());
+            agent::absence::resume(app.handle());
             approvals::start(app.handle());
             live::start(app.handle());
             hub::setup(app.handle())?;
