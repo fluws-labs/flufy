@@ -65,9 +65,7 @@ function durationLabel(start: number, end?: number | null): string {
   return rest ? `${hours} h ${rest} min` : `${hours} h`
 }
 
-function openMissionChat(mission: AgentMission, currentProject: string | null) {
-  const session = mission.state.sessionId
-  if (!session) return
+function openMissionSession(mission: AgentMission, session: string, currentProject: string | null) {
   const directory = mission.project ?? currentProject ?? ""
   const open = async () => {
     try {
@@ -79,6 +77,10 @@ function openMissionChat(mission: AgentMission, currentProject: string | null) {
     }
   }
   void open()
+}
+
+function openMissionChat(mission: AgentMission, currentProject: string | null) {
+  if (mission.state.sessionId) openMissionSession(mission, mission.state.sessionId, currentProject)
 }
 
 const MISSION_STATUS: Record<string, string> = {
@@ -373,7 +375,48 @@ function AutomationRow({ mission, selected, onSelect, project }: { mission: Agen
   )
 }
 
-function RunHistory({ mission }: { mission: AgentMission }) {
+function RunReportDialog({ mission, run, onClose, onOpenSession }: { mission: AgentMission; run: AgentMissionRun; onClose: () => void; onOpenSession: (session: string) => void }) {
+  const summary = agendaResult(run)
+  const raw = (run.summary ?? "").trim()
+  const showRaw = !!raw && raw !== summary
+  return (
+    <div className="mi-overlay" onMouseDown={onClose}>
+      <div className="mi-dialog mi-run-dialog" role="dialog" aria-modal="true" aria-label={`Resumen de ${mission.title}`} onMouseDown={(event) => event.stopPropagation()}>
+        <header className="mi-settings-head">
+          <div>
+            <span className="mi-eyebrow">CORRIDA</span>
+            <h2>{mission.title}</h2>
+            <p className="mi-muted">{RUN_STATUS[run.status] ?? run.status} · {agendaWhen(run.finishedAt)} · {durationLabel(run.startedAt, run.finishedAt)}</p>
+          </div>
+          <button type="button" className="icon-button" title="Cerrar" aria-label="Cerrar" onClick={onClose}><Icon name="close" /></button>
+        </header>
+        <section className="mi-run-report-section">
+          <span className="mi-eyebrow">RESUMEN</span>
+          <p>{run.error || summary || "La corrida terminó sin un resumen escrito."}</p>
+        </section>
+        {showRaw && (
+          <details className="mi-run-raw">
+            <summary>Ver informe crudo</summary>
+            <pre>{raw}</pre>
+          </details>
+        )}
+        <div className="mi-brief-actions">
+          {run.sessionId ? (
+            <button type="button" className="btn btn-sm btn-primary" onClick={() => onOpenSession(run.sessionId!)}>
+              <Icon name="comment-discussion" /> Abrir reporte completo
+            </button>
+          ) : (
+            <span className="mi-muted">Esta corrida no tiene una sesión guardada.</span>
+          )}
+          <button type="button" className="btn btn-sm" onClick={onClose}>Cerrar</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function RunHistory({ mission, onOpenSession }: { mission: AgentMission; onOpenSession: (session: string) => void }) {
+  const [report, setReport] = useState<AgentMissionRun | null>(null)
   const runs = mission.state.runs ?? []
   const active = mission.status === "running"
   const lastSession = !!mission.state.sessionId && !active && runs.length === 0
@@ -403,16 +446,24 @@ function RunHistory({ mission }: { mission: AgentMission }) {
           </div>
         </article>
       )}
-      {runs.map((run: AgentMissionRun) => (
-        <article key={run.id} className={`mi-run ${run.status}`}>
-          <span className={`mi-dot ${run.status}`} />
-          <div>
-            <strong>{RUN_STATUS[run.status] ?? run.status}</strong>
-            <small>{durationLabel(run.startedAt, run.finishedAt)} · {shortAgo(run.finishedAt)}</small>
-            {run.error ? <p className="mi-run-error">{run.error}</p> : run.summary ? <p>{run.summary}</p> : null}
-          </div>
-        </article>
-      ))}
+      {runs.map((run: AgentMissionRun) => {
+        const summary = agendaResult(run)
+        return (
+          <article key={run.id} className={`mi-run ${run.status}`}>
+            <span className={`mi-dot ${run.status}`} />
+            <div>
+              <strong>{RUN_STATUS[run.status] ?? run.status}</strong>
+              <small>{durationLabel(run.startedAt, run.finishedAt)} · {shortAgo(run.finishedAt)}</small>
+              {run.error ? <p className="mi-run-error">{run.error}</p> : summary ? <p>{summary}</p> : null}
+              <div className="mi-run-actions">
+                <button type="button" className="btn btn-xs" onClick={() => setReport(run)}>Ver resumen</button>
+                {run.sessionId && <button type="button" className="btn btn-xs" onClick={() => onOpenSession(run.sessionId!)}>Reporte completo</button>}
+              </div>
+            </div>
+          </article>
+        )
+      })}
+      {report && <RunReportDialog mission={mission} run={report} onClose={() => setReport(null)} onOpenSession={(sessionId) => { setReport(null); onOpenSession(sessionId) }} />}
     </section>
   )
 }
@@ -442,6 +493,8 @@ function MissionDetail({ mission, models }: { mission: AgentMission; models: Pro
     autoRequested.current = true
     void generateAgentMissionBrief(mission.id).then((brief) => { if (!brief) setAutoBriefError(true) })
   }, [mission.id, mission.state.brief, autoBrief, canBrief, mission.status])
+
+  const openRunSession = (sessionId: string) => openMissionSession(mission, sessionId, currentProject)
 
   const toggle = () => {
     const status = mission.status === "armed" ? "paused" : "armed"
@@ -583,7 +636,7 @@ function MissionDetail({ mission, models }: { mission: AgentMission; models: Pro
 
       {tab === "summary" && (
         <div className="mi-detail-section">
-          <RunHistory mission={mission} />
+          <RunHistory mission={mission} onOpenSession={openRunSession} />
           {mission.artifacts && mission.artifacts.length > 0 && (
             <section className="mi-detail-section">
               <header className="mi-detail-section-head"><strong>Artefactos</strong></header>
@@ -598,7 +651,7 @@ function MissionDetail({ mission, models }: { mission: AgentMission; models: Pro
           )}
         </div>
       )}
-      {tab === "runs" && <RunHistory mission={mission} />}
+      {tab === "runs" && <RunHistory mission={mission} onOpenSession={openRunSession} />}
 
     </div>
   )

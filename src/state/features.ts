@@ -32,6 +32,7 @@ import {
   loadOtherSessions,
   newSession,
   onForeignSession,
+  openSessionInDirectory,
   selectSession,
   sessionInRoot,
   setKnownDirectories,
@@ -298,6 +299,13 @@ export function initFeatures(): void {
 async function openSessionIn(directory: string, sessionID: string): Promise<void> {
   const feature = findFeature(directory)
   if (!feature || feature.missing) {
+    // Missions run in a normal project, not a feature worktree. Open the
+    // session from its own directory instead of rejecting it as stale.
+    if (await openSessionInDirectory(directory, sessionID)) {
+      useLayout.getState().toggleAgent(true)
+      focusComposer()
+      return
+    }
     notify.warning("Esa conversación es de una feature que ya no está disponible")
     return
   }
