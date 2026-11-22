@@ -79,6 +79,13 @@ function check() {
   return version
 }
 
+function extractZip(archive, destination) {
+  mkdirSync(destination, { recursive: true })
+  // bsdtar ships with Windows and extracts ZIP without the PowerShell Archive
+  // module, whose Expand-Archive fails on newer .NET runtimes.
+  execFileSync("tar", ["-xf", archive, "-C", destination], { stdio: "inherit" })
+}
+
 async function engine() {
   if (process.platform !== "win32") throw new Error("El motor de esta release es Windows x64")
   const dir = mkdtempSync(join(tmpdir(), "guillecode-engine-"))
@@ -90,9 +97,7 @@ async function engine() {
     const archive = join(dir, "engine.zip"), extracted = join(dir, "extracted")
     writeFileSync(archive, bytes)
     // Pass paths as environment variables rather than interpolating PowerShell code.
-    execFileSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "Import-Module Microsoft.PowerShell.Archive; Expand-Archive -LiteralPath $env:GC_ENGINE_ZIP -DestinationPath $env:GC_ENGINE_DIR"], {
-      env: { ...process.env, GC_ENGINE_ZIP: archive, GC_ENGINE_DIR: extracted }, stdio: "inherit",
-    })
+    extractZip(archive, extracted)
     const findExe = (dir) => readdirSync(dir, { withFileTypes: true }).flatMap((e) => e.isDirectory() ? findExe(join(dir, e.name)) : e.name === "opencode.exe" ? [join(dir, e.name)] : [])
     const files = findExe(extracted)
     if (files.length !== 1) throw new Error("El archivo del motor no contiene exactamente un opencode.exe")
@@ -116,10 +121,7 @@ async function whisper() {
     const archive = join(dir, "whisper.zip")
     const extracted = join(dir, "extracted")
     writeFileSync(archive, bytes)
-    execFileSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "Import-Module Microsoft.PowerShell.Archive; Expand-Archive -LiteralPath $env:GC_WHISPER_ZIP -DestinationPath $env:GC_WHISPER_DIR"], {
-      env: { ...process.env, GC_WHISPER_ZIP: archive, GC_WHISPER_DIR: extracted },
-      stdio: "inherit",
-    })
+    extractZip(archive, extracted)
     // El zip trae todo dentro de una carpeta Release/; lo aplanamos.
     const walk = (base) => readdirSync(base, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(join(base, e.name)) : [join(base, e.name)]))
     const files = walk(extracted)
@@ -146,10 +148,7 @@ async function piper() {
     const archive = join(dir, "piper.zip")
     const extracted = join(dir, "extracted")
     writeFileSync(archive, bytes)
-    execFileSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "Import-Module Microsoft.PowerShell.Archive; Expand-Archive -LiteralPath $env:GC_PIPER_ZIP -DestinationPath $env:GC_PIPER_DIR"], {
-      env: { ...process.env, GC_PIPER_ZIP: archive, GC_PIPER_DIR: extracted },
-      stdio: "inherit",
-    })
+    extractZip(archive, extracted)
     // El zip trae todo dentro de una carpeta piper/; la copiamos tal cual
     // porque piper.exe resuelve espeak-ng-data y sus DLLs desde su carpeta.
     const walk = (base) => readdirSync(base, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(join(base, e.name)) : [join(base, e.name)]))
