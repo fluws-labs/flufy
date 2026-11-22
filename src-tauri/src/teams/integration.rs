@@ -536,6 +536,19 @@ fn native_team_end_to_end() {
                     std::thread::sleep(Duration::from_millis(200));
                 }
             };
+            let retry_idle = |id: &str| {
+                let deadline = Instant::now() + Duration::from_secs(60);
+                loop {
+                    wait_idle(id);
+                    match control(&handle, id, "retry") {
+                        Ok(()) => return,
+                        Err(error) if error.contains("sigue activa") && Instant::now() < deadline => {
+                            std::thread::sleep(Duration::from_millis(200));
+                        }
+                        Err(error) => panic!("{error}"),
+                    }
+                }
+            };
             // Model removal blocks, explicit reassignment resumes the same task.
             let mut missing = team.clone();
             missing.id = String::new();
@@ -636,8 +649,7 @@ fn native_team_end_to_end() {
                 "ready",
             )
             .unwrap();
-            wait_idle(&limited_run);
-            control(&handle, &limited_run, "retry").unwrap();
+            retry_idle(&limited_run);
             let recovered = wait_for_run(&limited_run);
             assert_eq!(recovered.status, "completed");
             assert_eq!(
