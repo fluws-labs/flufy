@@ -17,8 +17,8 @@ const POLL_SECS: u64 = 5;
 const MAX_RUN_MS: i64 = 120 * 60_000;
 const SUMMARY_CHARS: usize = 4000;
 const SUPERVISOR_CHECK: Duration = Duration::from_secs(15);
-const SUPERVISOR_STALL_MS: i64 = 90_000;
-const SUPERVISOR_LOOP_LIMIT: u32 = 3;
+const SUPERVISOR_STALL_MS: i64 = 180_000;
+const SUPERVISOR_LOOP_LIMIT: u32 = 5;
 const SUPERVISOR_MAX_CORRECTIONS: u32 = 2;
 const SUPERVISOR_REVIEW_MS: i64 = 120_000;
 const SUPERVISOR_PROMPT: &str = "Supervisor de Flufy: la corrida se está repitiendo o quedó sin avance. No repitas la última acción ni vuelvas a leer lo mismo. Resumí en una línea qué ya está hecho, elegí un paso distinto que acerque al objetivo y avanzá. Si no podés avanzar, cerrá con el contrato JSON en status blocked y explicá el bloqueo. No inventes resultados.";
@@ -912,6 +912,19 @@ fn message_count(messages: &Value) -> usize {
     messages.as_array().map(Vec::len).unwrap_or(0)
 }
 
+fn has_running_tool(messages: &Value) -> bool {
+    messages
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|message| message["info"]["role"] == "assistant")
+        .flat_map(|message| message["parts"].as_array().into_iter().flatten())
+        .any(|part| {
+            part["type"] == "tool"
+                && matches!(part["state"]["status"].as_str(), Some("running" | "pending"))
+        })
+}
+
 fn last_step_signature(messages: &Value) -> Option<String> {
     let list = messages.as_array()?;
     for message in list.iter().rev() {
@@ -919,17 +932,26 @@ fn last_step_signature(messages: &Value) -> Option<String> {
             continue;
         }
         for part in message["parts"].as_array().into_iter().flatten().rev() {
-            if part["type"] == "tool" {
-                let tool = part["tool"].as_str().unwrap_or("tool");
-                let input = part["state"]["input"].to_string();
-                return Some(format!("{tool}:{}", input.chars().take(400).collect::<String>()));
-            }
             if part["type"] == "text" {
-                let text = part["text"].as_str().unwrap_or("").trim();
-                if !text.is_empty() {
-                    return Some(format!("text:{}", text.chars().take(400).collect::<String>()));
+                // Streaming text is progress, not a tool loop. Reset the tool
+                // signature instead of treating the same text as repetition.
+                if !part["text"].as_str().unwrap_or("").trim().is_empty() {
+                    return None;
                 }
+                continue;
             }
+            if part["type"] != "tool" {
+                continue;
+            }
+            let status = part["state"]["status"].as_str().unwrap_or("");
+            if matches!(status, "running" | "pending") {
+                // A long lint/build is still one tool call. It only counts as
+                // repetition after it finished and the same call is repeated.
+                return None;
+            }
+            let tool = part["tool"].as_str().unwrap_or("tool");
+            let input = part["state"]["input"].to_string();
+            return Some(format!("{tool}:{}", input.chars().take(400).collect::<String>()));
         }
     }
     None
@@ -1121,13 +1143,16 @@ fn execute_with_model(app: &AppHandle, mission: &Mission, model_override: Option
                     last_count = count;
                     last_progress = now_ms();
                 }
+                if signature.is_some() && signature != last_signature {
+                    last_progress = now_ms();
+                }
                 if signature.is_some() && signature == last_signature {
                     repeated += 1;
                 } else {
                     repeated = 0;
                     last_signature = signature;
                 }
-                let stalled = count == previous_count && now_ms() - last_progress > SUPERVISOR_STALL_MS;
+                let stalled = count == previous_count && !has_running_tool(&messages) && now_ms() - last_progress > SUPERVISOR_STALL_MS;
                 let looping = repeated >= SUPERVISOR_LOOP_LIMIT;
                 if stalled || looping {
                     if corrections >= SUPERVISOR_MAX_CORRECTIONS {
@@ -2021,5 +2046,39 @@ mod tests {
         let second = trigger_signal(&trigger).unwrap();
         assert_ne!(first, second);
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn supervisor_does_not_count_a_running_tool_as_a_loop() {
+        let messages = json!([{
+            "info": { "role": "assistant" },
+            "parts": [{ "type": "tool", "tool": "terminal_terminal_run", "state": { "status": "running", "input": { "command": "npm run lint" } } }]
+        }]);
+        assert!(has_running_tool(&messages));
+        assert!(last_step_signature(&messages).is_none());
+    }
+
+    #[test]
+    fn supervisor_signature_uses_only_completed_tools() {
+        let running = json!([{
+            "info": { "role": "assistant" },
+            "parts": [{ "type": "tool", "tool": "terminal_terminal_run", "state": { "status": "running", "input": { "command": "npm run lint" } } }]
+        }]);
+        assert!(last_step_signature(&running).is_none());
+
+        let completed = json!([{
+            "info": { "role": "assistant" },
+            "parts": [{ "type": "tool", "tool": "terminal_terminal_run", "state": { "status": "completed", "input": { "command": "npm run lint" } } }]
+        }]);
+        assert_eq!(
+            last_step_signature(&completed).as_deref(),
+            Some("terminal_terminal_run:{\"command\":\"npm run lint\"}")
+        );
+
+        let text = json!([{
+            "info": { "role": "assistant" },
+            "parts": [{ "type": "text", "text": "Estoy revisando el resultado" }]
+        }]);
+        assert!(last_step_signature(&text).is_none());
     }
 }
