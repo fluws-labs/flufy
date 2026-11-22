@@ -1008,6 +1008,10 @@
 .workbench-main.profile-chat .mi-detail-pane {
   padding: 18px 18px 32px;
 }
+.workbench-main.profile-chat .mi-detail-head h2 {
+  font-size: 18px;
+  line-height: 1.25;
+}
 .workbench-main.profile-chat .mi-detail-head p {
   display: -webkit-box;
   overflow: hidden;
@@ -1485,10 +1489,14 @@
 }
 .mi-meta-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr)) minmax(220px, 1.4fr);
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: 10px;
   padding: 16px 0;
   border-bottom: 1px solid var(--border);
+}
+.mi-meta-grid .select-trigger {
+  width: 100%;
+  min-width: 0;
 }
 .mi-meta-grid > div {
   display: flex;
