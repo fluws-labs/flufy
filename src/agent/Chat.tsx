@@ -8,6 +8,7 @@ import { Icon, Spinner } from "../components/ui"
 import { openImage } from "../state/lightbox"
 import { openContextMenu } from "../components/ContextMenu"
 import {
+  BOT_ADMIN_MARKER,
   compactAndContinue,
   ensureSessionView,
   focusComposer,
@@ -22,9 +23,12 @@ import {
   useAgent,
   type ChatMessage,
 } from "../state/agent"
+import { useSessionRuntime } from "../state/session-runtime"
 import { isRetryableProviderError, isUpstreamBufferError, latestFailedAssistant, providerErrorMessage } from "../lib/autoretry"
 import { openFile } from "../state/editors"
 import { useProject } from "../state/project"
+import { loadAgentMissions, saveAgentMission, type AgentMissionSchedule } from "../state/agentProfile"
+import { useLayout } from "../state/layout"
 import { notify } from "../state/toasts"
 import { clockTime } from "../lib/time"
 import { normalizePath, relativePath, resolvePath } from "../lib/paths"
@@ -143,7 +147,7 @@ function Steps({ parts, live }: { parts: StepPart[]; live: boolean }) {
   )
 }
 
-function renderParts(parts: Part[], live: boolean, teamSession: boolean): ReactNode[] {
+function renderParts(parts: Part[], live: boolean, teamSession: boolean, session: Session): ReactNode[] {
   const nodes: ReactNode[] = []
   let group: StepPart[] = []
   const flush = () => {
@@ -158,7 +162,7 @@ function renderParts(parts: Part[], live: boolean, teamSession: boolean): ReactN
     if (isStep(p)) group.push(p)
     else {
       flush()
-      nodes.push(<PartView key={p.id} part={p} live={live} teamSession={teamSession} />)
+      nodes.push(<PartView key={p.id} part={p} live={live} teamSession={teamSession} session={session} />)
     }
   }
   flush()
@@ -192,16 +196,238 @@ function FileChip({ part }: { part: Extract<Part, { type: "file" }> }) {
   )
 }
 
-const PartView = memo(function PartView({ part, live, teamSession = false }: { part: Part; live: boolean; teamSession?: boolean }) {
+const MISSION_CONTRACT_STATUS: Record<string, string> = {
+  ok: "Completada",
+  blocked: "Bloqueada",
+  "needs-approval": "Espera tu aprobación",
+  "needs-hands": "Te necesita",
+}
+
+type MissionContractData = {
+  status?: string
+  summary?: string
+  items?: Array<{ kind?: string; title?: string; body?: string; untrusted?: boolean }>
+  approval?: { title?: string; preview?: string; risk?: string }
+  handoff?: { reason?: string; detail?: string; url?: string }
+}
+
+function parseMissionContract(text: string): { data: MissionContractData; raw: string; before: string; after: string } | null {
+  const pattern = /```(?:json)?\s*([\s\S]*?)```/gi
+  const matches = [...text.matchAll(pattern)]
+  for (let index = matches.length - 1; index >= 0; index--) {
+    const match = matches[index]
+    try {
+      const data = JSON.parse(match[1].trim()) as MissionContractData
+      if (!data || typeof data !== "object" || typeof data.status !== "string" || (!Array.isArray(data.items) && typeof data.summary !== "string")) continue
+      const start = match.index ?? 0
+      return { data, raw: match[0], before: text.slice(0, start), after: text.slice(start + match[0].length) }
+    } catch {
+      continue
+    }
+  }
+  return null
+}
+
+function MissionContract({ data, raw, before, after }: { data: MissionContractData; raw: string; before: string; after: string }) {
+  const status = data.status ?? "ok"
+  return (
+    <div className="mission-contract">
+      {before.trim() && <Markdown text={before.trim()} />}
+      <div className={`mission-contract-head ${status}`}>
+        <Icon name={status === "ok" ? "pass-filled" : status === "blocked" ? "warning" : "bell-dot"} />
+        <strong>Resultado de la misión</strong>
+        <span>{MISSION_CONTRACT_STATUS[status] ?? status}</span>
+      </div>
+      {data.summary && (
+        <div className="mission-contract-summary">
+          <Markdown text={data.summary} />
+        </div>
+      )}
+      {data.items && data.items.length > 0 && (
+        <ol className="mission-contract-items">
+          {data.items.map((item, index) => (
+            <li key={`${item.title ?? "item"}-${index}`}>
+              <div className="mission-contract-item-head">
+                <strong>{item.title || `Resultado ${index + 1}`}</strong>
+                {item.untrusted && <span className="mission-contract-untrusted">Fuente externa</span>}
+              </div>
+              {item.body && <Markdown text={item.body} />}
+            </li>
+          ))}
+        </ol>
+      )}
+      {data.approval && (
+        <div className="mission-contract-approval">
+          <strong>{data.approval.title || "Aprobación pendiente"}</strong>
+          {data.approval.preview && <p>{data.approval.preview}</p>}
+          {data.approval.risk && <small>Riesgo: {data.approval.risk}</small>}
+        </div>
+      )}
+      {data.handoff && (
+        <div className="mission-contract-approval">
+          <strong>Necesita tus manos: {data.handoff.reason || "intervención"}</strong>
+          {data.handoff.detail && <p>{data.handoff.detail}</p>}
+          {data.handoff.url && <small>{data.handoff.url}</small>}
+        </div>
+      )}
+      <details className="mission-contract-raw">
+        <summary>Ver JSON del contrato</summary>
+        <pre>{raw}</pre>
+      </details>
+      {after.trim() && <Markdown text={after.trim()} />}
+    </div>
+  )
+}
+
+type MissionDraftData = {
+  kind?: string
+  title?: string
+  goal?: string
+  schedule?: AgentMissionSchedule
+  model?: { providerID: string; modelID: string } | null
+  autonomy?: string
+  computer?: { browser?: string; desktop?: boolean; files?: boolean; terminal?: boolean }
+  notes?: string
+}
+
+function draftSchedule(schedule?: AgentMissionSchedule): AgentMissionSchedule {
+  if (schedule?.kind === "daily" && schedule.time) return schedule
+  if (schedule?.kind === "interval" && schedule.hours > 0) return schedule
+  if (schedule?.kind === "weekly" && schedule.time && Array.isArray(schedule.days) && schedule.days.length > 0) return schedule
+  return { kind: "daily", time: "08:30" }
+}
+
+function draftScheduleLabel(schedule: AgentMissionSchedule): string {
+  if (schedule.kind === "daily") return `Todos los días a las ${schedule.time}`
+  if (schedule.kind === "interval") return `Cada ${schedule.hours} horas`
+  const days = schedule.days.map((day) => ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"][day] ?? "?").join(", ")
+  return `${days} a las ${schedule.time}`
+}
+
+function parseMissionDraft(text: string): { data: MissionDraftData; raw: string; before: string; after: string } | null {
+  const pattern = /```(?:[\w-]+)?\s*([\s\S]*?)```/gi
+  const matches = [...text.matchAll(pattern)]
+  for (let index = matches.length - 1; index >= 0; index--) {
+    const match = matches[index]
+    try {
+      const data = JSON.parse(match[1].trim()) as MissionDraftData
+      const valid = data && typeof data === "object" && typeof data.title === "string" && typeof data.goal === "string"
+      if (!valid) continue
+      if (data.kind !== "mission-draft" && !data.schedule) continue
+      const start = match.index ?? 0
+      return { data, raw: match[0], before: text.slice(0, start), after: text.slice(start + match[0].length) }
+    } catch {
+      continue
+    }
+  }
+  return null
+}
+
+function MissionDraftCard({ data, raw, before, after, session }: { data: MissionDraftData; raw: string; before: string; after: string; session: Session }) {
+  const [saving, setSaving] = useState(false)
+  const [created, setCreated] = useState(false)
+  const [dismissed, setDismissed] = useState(false)
+  if (dismissed) return <>{before.trim() && <Markdown text={before.trim()} />}{after.trim() && <Markdown text={after.trim()} />}</>
+  const project = session.directory ?? useProject.getState().project ?? useProject.getState().root ?? ""
+  const schedule = draftSchedule(data.schedule)
+  const title = data.title?.trim() ?? ""
+  const goal = data.goal?.trim() ?? ""
+  const ready = !!title && !!goal && !!project
+  const create = async () => {
+    if (!ready || saving || created) return
+    setSaving(true)
+    const saved = await saveAgentMission({
+      title,
+      goal,
+      status: "armed",
+      schedule,
+      policy: { reads: "auto", drafts: "auto", commits: "approval" },
+      model: data.model ?? null,
+      autonomy: data.autonomy === "manual" ? "manual" : "alta",
+      computer: {
+        browser: data.computer?.browser || "borrowed",
+        desktop: data.computer?.desktop === true,
+        files: data.computer?.files !== false,
+        terminal: data.computer?.terminal !== false,
+      },
+      project,
+      botId: "flufy",
+      originSessionId: session.id,
+    })
+    setSaving(false)
+    if (!saved) {
+      notify.error("No se pudo crear la misión", "Revisá el título, el objetivo y el horario.")
+      return
+    }
+    setCreated(true)
+    await loadAgentMissions()
+    notify.success("Misión creada", "Mi Flufy se va a encargar de esto. La conversación queda solo como referencia.")
+  }
+  return (
+    <div className="mission-draft">
+      {before.trim() && <Markdown text={before.trim()} />}
+      <div className="mission-draft-head">
+        <Icon name="hubot" />
+        <div>
+          <strong>Misión propuesta para Mi Flufy</strong>
+          <small>{project || "Sin proyecto"} · borrador, todavía no corre</small>
+        </div>
+      </div>
+      <div className="mission-draft-body">
+        <h3>{title || "Falta el título"}</h3>
+        <p>{goal || "Falta el objetivo"}</p>
+        <div className="mission-draft-meta">
+          <span><Icon name="calendar" /> {draftScheduleLabel(schedule)}</span>
+          <span><Icon name="server" /> {data.model ? `${data.model.providerID} · ${data.model.modelID}` : "Modelo predeterminado"}</span>
+          <span><Icon name="shield" /> {data.autonomy === "manual" ? "Manual" : "Alta"}</span>
+        </div>
+        {data.notes?.trim() && <p className="mission-draft-notes">{data.notes.trim()}</p>}
+      </div>
+      {created ? (
+        <div className="mission-draft-done">
+          <Icon name="pass-filled" />
+          <span>Misión creada. Ya está en Mi Flufy.</span>
+          <button type="button" className="btn btn-xs btn-primary" onClick={() => useLayout.getState().showView("profile", false)}>Ver en Mi Flufy</button>
+        </div>
+      ) : (
+        <div className="mission-draft-actions">
+          <button type="button" className="btn btn-sm btn-primary" disabled={!ready || saving} onClick={() => void create()}>
+            <Icon name={saving ? "loading" : "check"} spin={saving} /> Crear y activar
+          </button>
+          <button type="button" className="btn btn-sm" disabled={saving} onClick={() => setDismissed(true)}>Descartar</button>
+          {!ready && <small>Falta título, objetivo o proyecto.</small>}
+        </div>
+      )}
+      <details className="mission-draft-raw">
+        <summary>Ver propuesta completa</summary>
+        <pre>{raw}</pre>
+      </details>
+      {after.trim() && <Markdown text={after.trim()} />}
+    </div>
+  )
+}
+
+const PartView = memo(function PartView({ part, live, teamSession = false, session }: { part: Part; live: boolean; teamSession?: boolean; session: Session }) {
   switch (part.type) {
-    case "text":
+    case "text": {
       if (part.synthetic || !part.text.trim() || isDesktopContextText(part.text)) return null
+      const draft = teamSession ? null : parseMissionDraft(part.text)
+      const contract = teamSession ? null : parseMissionContract(part.text)
       return (
         <div className="msg-text">
-          {teamSession ? <TeamResponse text={part.text} live={live} /> : <Markdown text={part.text} />}
+          {draft ? (
+            <MissionDraftCard data={draft.data} raw={draft.raw} before={draft.before} after={draft.after} session={session} />
+          ) : contract ? (
+            <MissionContract data={contract.data} raw={contract.raw} before={contract.before} after={contract.after} />
+          ) : teamSession ? (
+            <TeamResponse text={part.text} live={live} />
+          ) : (
+            <Markdown text={part.text} />
+          )}
           {live && part.time && !part.time.end && <span className="stream-cursor" />}
         </div>
       )
+    }
     case "reasoning":
       return <Reasoning text={part.text} active={live && !part.time?.end} />
     case "tool":
@@ -215,7 +441,6 @@ const PartView = memo(function PartView({ part, live, teamSession = false }: { p
       return null
   }
 })
-
 function AssistantFooter({ message, onRetry, onCompact, working }: { message: ChatMessage; onRetry?: () => void; onCompact?: () => void; working?: boolean }) {
   const info = message.info
   if (info.role !== "assistant") return null
@@ -332,10 +557,11 @@ const INTERNAL_MARKER = "[FLUFY_EQUIPO_INTERNO]"
 
 export function Chat({ session, busy, teamSession: forcedTeamSession }: { session: Session; busy: boolean; teamSession?: boolean }) {
   const view = useAgent((s) => s.views[session.id])
+  const botAdmin = useSessionRuntime(session.id).botAdmin === true
   const messages = useMemo(() => {
     const raw = view?.messages ?? []
     const hidden = new Set(raw
-      .filter((message) => message.info.role === "user" && message.parts.some((part) => part.type === "text" && part.text.trimStart().startsWith(INTERNAL_MARKER)))
+      .filter((message) => message.info.role === "user" && message.parts.some((part) => part.type === "text" && [INTERNAL_MARKER, BOT_ADMIN_MARKER].some((marker) => part.text.trimStart().startsWith(marker))))
       .map((message) => message.info.id))
     const parent = (message: ChatMessage) => (message.info as { parentID?: string }).parentID
     return raw.filter((message) => !hidden.has(message.info.id) && !(parent(message) && hidden.has(parent(message)!)))
@@ -455,7 +681,16 @@ export function Chat({ session, busy, teamSession: forcedTeamSession }: { sessio
         <div ref={topRef} className="chat-top-sentinel">
           {view.hasMore && <span>cargando historia…</span>}
         </div>
-        {messages.length === 0 && !busy && (
+        {botAdmin && (
+          <div className="chat-special-banner" role="note">
+            <Icon name="hubot" />
+            <div>
+              <strong>Administrador de bots</strong>
+              <span>Gestiona bots y sus misiones. Las rutinas son del proyecto y no se asignan a bots; no ejecuta nada sin tu confirmación.</span>
+            </div>
+          </div>
+        )}
+        {messages.length === 0 && !busy && !botAdmin && (
           <div className="chat-empty">
             <Icon name="sparkle" />
             <span>Escribí abajo para arrancar. Podés adjuntar archivos con @ y selecciones con Ctrl+L.</span>
@@ -486,7 +721,7 @@ export function Chat({ session, busy, teamSession: forcedTeamSession }: { sessio
                   <div className="msg-user-bubble">
                     <div className="msg-parts">
                       {m.parts.map((p) => (
-                        <PartView key={p.id} part={p} live={false} />
+                        <PartView key={p.id} part={p} live={false} session={session} />
                       ))}
                     </div>
                     <div className="msg-user-meta">
@@ -512,7 +747,7 @@ export function Chat({ session, busy, teamSession: forcedTeamSession }: { sessio
                 ) : (
                   <div className="msg-assistant-body">
                     <div className="msg-parts">
-                      {renderParts(m.parts, live, teamSession)}
+                      {renderParts(m.parts, live, teamSession, session)}
                       {live && m.parts.every((p) => p.type === "step-start") && (
                         <div className="thinking">
                           <span />

@@ -69,6 +69,9 @@ export function Select<T extends string>({
   icon,
   className,
   title,
+  disabled,
+  ariaLabel,
+  id,
 }: {
   value: T
   options: SelectOption<T>[]
@@ -77,6 +80,9 @@ export function Select<T extends string>({
   icon?: string
   className?: string
   title?: string
+  disabled?: boolean
+  ariaLabel?: string
+  id?: string
 }) {
   const [open, setOpen] = useState(false)
   const [active, setActive] = useState(0)
@@ -126,12 +132,15 @@ export function Select<T extends string>({
     <>
       <button
         ref={trigger}
+        id={id}
         type="button"
-        className={`select-trigger${open ? " open" : ""}${className ? ` ${className}` : ""}`}
+        disabled={disabled}
+        className={`select-trigger${open ? " open" : ""}${disabled ? " disabled" : ""}${className ? ` ${className}` : ""}`}
         title={title}
         aria-haspopup="listbox"
         aria-expanded={open}
-        onClick={() => (open ? setOpen(false) : show())}
+        aria-label={ariaLabel}
+        onClick={() => (disabled ? undefined : open ? setOpen(false) : show())}
         onKeyDown={onKeyDown}
       >
         {(current?.icon ?? icon) && <Icon name={current?.icon ?? icon!} className="select-lead" />}

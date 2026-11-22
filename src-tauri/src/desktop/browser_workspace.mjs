@@ -46,6 +46,16 @@ export class Workspaces {
   async scope(context, meta) {
     await this.load()
     let pages = await this.inventory(context, meta.isolated)
+    const auto = process.env.GUILLECODE_AUTO_ASSIGN
+    const existing = auto ? this.sessions[meta.session] : null
+    const existingValid = !!existing && Array.isArray(existing.targets) && pages.some(page => existing.targets.includes(page.target) && page.windowId === existing.windowId)
+    if (!meta.action && auto && meta.session === auto && (!existing || !existingValid)) {
+      const first = pages[0]
+      if (first) {
+        this.sessions[meta.session] = { windowId: first.windowId, targets: pages.filter(p => p.windowId === first.windowId).map(p => p.target), selected: first.target }
+        await this.save()
+      }
+    }
     if (meta.isolated) {
       // This MCP connection is attached only to this team's own WebView2 profile.
       this.sessions[meta.session] ??= { actors: {} }

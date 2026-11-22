@@ -1,0 +1,220 @@
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use std::path::PathBuf;
+use tauri::{AppHandle, Emitter};
+
+#[derive(Serialize, Deserialize, Clone, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct BotCapabilities {
+    pub browser: String,
+    pub desktop: bool,
+    pub files: bool,
+    pub terminal: bool,
+}
+
+impl BotCapabilities {
+    fn defaults() -> Self {
+        BotCapabilities { browser: "borrowed".into(), desktop: false, files: true, terminal: true }
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Bot {
+    pub id: String,
+    pub name: String,
+    pub role: String,
+    pub instructions: String,
+    pub model: Option<crate::routines::ModelRef>,
+    pub fallback_model: Option<crate::routines::ModelRef>,
+    pub autonomy: String,
+    pub capabilities: BotCapabilities,
+    pub enabled: bool,
+    pub color: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+impl Default for Bot {
+    fn default() -> Self {
+        let now = now_ms();
+        Bot {
+            id: String::new(),
+            name: String::new(),
+            role: String::new(),
+            instructions: String::new(),
+            model: None,
+            fallback_model: None,
+            autonomy: "alta".into(),
+            capabilities: BotCapabilities::defaults(),
+            enabled: true,
+            color: None,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+}
+
+fn now_ms() -> i64 {
+    chrono::Local::now().timestamp_millis()
+}
+
+fn bots_dir(app: &AppHandle) -> PathBuf {
+    crate::memory::agent_root(app).join("bots")
+}
+
+fn bot_path(app: &AppHandle, id: &str) -> PathBuf {
+    bots_dir(app).join(format!("{}.json", id))
+}
+
+fn slug(name: &str) -> String {
+    let mut out = String::new();
+    for ch in name.trim().to_lowercase().chars() {
+        if ch.is_ascii_alphanumeric() { out.push(ch) }
+        else if (ch == ' ' || ch == '-' || ch == '_') && !out.ends_with('-') { out.push('-') }
+    }
+    out.trim_matches('-').chars().take(48).collect()
+}
+
+fn load_one(path: &PathBuf) -> Option<Bot> {
+    let bot: Bot = serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
+    if bot.id.trim().is_empty() || bot.name.trim().is_empty() { return None; }
+    Some(bot)
+}
+
+fn default_bot() -> Bot {
+    let mut bot = Bot::default();
+    bot.id = "flufy".into();
+    bot.name = "Mi Flufy".into();
+    bot.role = "Agente principal".into();
+    bot
+}
+
+fn ensure_default(app: &AppHandle) -> Result<(), String> {
+    let dir = bots_dir(app);
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let has = std::fs::read_dir(&dir)
+        .map(|entries| entries.filter_map(|e| e.ok()).any(|e| e.path().extension().is_some_and(|ext| ext == "json")))
+        .unwrap_or(false);
+    if !has {
+        crate::memory::atomic_write(&bot_path(app, "flufy"), &serde_json::to_string_pretty(&default_bot()).map_err(|e| e.to_string())?)?;
+    }
+    Ok(())
+}
+
+pub fn list(app: &AppHandle) -> Vec<Bot> {
+    let _ = ensure_default(app);
+    let mut bots = std::fs::read_dir(bots_dir(app))
+        .map(|entries| entries.filter_map(|e| e.ok()).filter_map(|e| load_one(&e.path())).collect::<Vec<_>>())
+        .unwrap_or_default();
+    bots.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    bots
+}
+
+pub fn get(app: &AppHandle, id: Option<&str>) -> Option<Bot> {
+    let id = id.unwrap_or("flufy");
+    list(app).into_iter().find(|bot| bot.id == id)
+}
+
+pub fn get_or_default(app: &AppHandle, id: Option<&str>) -> Bot {
+    get(app, id).or_else(|| get(app, Some("flufy"))).unwrap_or_else(default_bot)
+}
+
+fn emit_changed(app: &AppHandle) {
+    let _ = app.emit("agent://bots-changed", json!({}));
+}
+
+pub fn save(app: &AppHandle, input: &Value) -> Result<Bot, String> {
+    let existing = input["id"].as_str().and_then(|id| get(app, Some(id)));
+    let name = input["name"].as_str().map(str::trim).filter(|name| !name.is_empty()).ok_or("El bot necesita un nombre.")?;
+    let id = match input["id"].as_str().map(str::trim).filter(|id| !id.is_empty()) {
+        Some(id) => id.to_string(),
+        None => {
+            let base = slug(name);
+            if base.is_empty() { return Err("No pude generar un id para el bot.".into()); }
+            let mut candidate = base.clone();
+            let mut index = 2;
+            while bot_path(app, &candidate).exists() {
+                candidate = format!("{}-{}", base, index);
+                index += 1;
+            }
+            candidate
+        }
+    };
+    let now = now_ms();
+    let mut bot = existing.unwrap_or_else(|| Bot { id: id.clone(), created_at: now, updated_at: now, ..Bot::default() });
+    bot.id = id;
+    bot.name = name.chars().take(80).collect();
+    bot.role = input["role"].as_str().unwrap_or("").chars().take(120).collect();
+    bot.instructions = input["instructions"].as_str().unwrap_or("").chars().take(6000).collect();
+    bot.autonomy = if input["autonomy"].as_str() == Some("manual") { "manual".into() } else { "alta".into() };
+    bot.enabled = input["enabled"].as_bool().unwrap_or(true);
+    bot.color = input["color"].as_str().map(|value| value.chars().take(32).collect());
+    if let Some(model) = input.get("model") {
+        if model.is_null() {
+            bot.model = None;
+        } else if model.is_object() {
+            let provider = model["providerID"].as_str().unwrap_or("");
+            let model_id = model["modelID"].as_str().unwrap_or("");
+            bot.model = if provider.is_empty() || model_id.is_empty() { None } else { Some(crate::routines::ModelRef { provider_id: provider.into(), model_id: model_id.into() }) };
+        }
+    }
+    if let Some(model) = input.get("fallbackModel") {
+        if model.is_null() {
+            bot.fallback_model = None;
+        } else if model.is_object() {
+            let provider = model["providerID"].as_str().unwrap_or("");
+            let model_id = model["modelID"].as_str().unwrap_or("");
+            bot.fallback_model = if provider.is_empty() || model_id.is_empty() { None } else { Some(crate::routines::ModelRef { provider_id: provider.into(), model_id: model_id.into() }) };
+        }
+    }
+    if let Some(caps) = input.get("capabilities").filter(|value| value.is_object()) {
+        bot.capabilities = BotCapabilities {
+            browser: caps["browser"].as_str().filter(|value| ["borrowed", "own", "internal"].contains(value)).unwrap_or("borrowed").into(),
+            desktop: caps["desktop"].as_bool().unwrap_or(false),
+            files: caps["files"].as_bool().unwrap_or(true),
+            terminal: caps["terminal"].as_bool().unwrap_or(true),
+        };
+    }
+    bot.updated_at = now;
+    std::fs::create_dir_all(bots_dir(app)).map_err(|e| e.to_string())?;
+    crate::memory::atomic_write(&bot_path(app, &bot.id), &serde_json::to_string_pretty(&bot).map_err(|e| e.to_string())?)?;
+    emit_changed(app);
+    Ok(bot)
+}
+
+#[tauri::command]
+pub fn agent_bots_list(app: AppHandle) -> Vec<Bot> {
+    list(&app)
+}
+
+#[tauri::command]
+pub fn agent_bot_save(app: AppHandle, bot: Value) -> Result<Bot, String> {
+    save(&app, &bot)
+}
+
+#[tauri::command]
+pub fn agent_bot_get(app: AppHandle, id: String) -> Option<Bot> {
+    get(&app, Some(&id))
+}
+
+#[allow(dead_code)]
+pub fn bot_prompt(app: &AppHandle, id: Option<&str>) -> String {
+    let bot = get_or_default(app, id);
+    if bot.instructions.trim().is_empty() {
+        format!("## Bot\nNombre: {}\nRol: {}\n", bot.name, bot.role)
+    } else {
+        format!("## Bot\nNombre: {}\nRol: {}\nInstrucciones del bot:\n{}\n", bot.name, bot.role, bot.instructions)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn slug_is_stable_and_safe() {
+        assert_eq!(slug("Revisor de calidad"), "revisor-de-calidad");
+        assert_eq!(slug("  Mi Flufy!  "), "mi-flufy");
+    }
+}

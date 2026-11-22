@@ -25,6 +25,27 @@ export type AgentMissionSchedule =
   | { kind: "daily"; time: string }
   | { kind: "weekly"; days: number[]; time: string }
 
+export type AgentMissionBrief = {
+  headline: string
+  summary: string
+  findings: string[]
+  decisions: string[]
+  confidence?: string | null
+  sources: string[]
+  sessionId?: string | null
+  createdAt: number
+}
+
+export type AgentMissionRun = {
+  id: string
+  sessionId?: string | null
+  startedAt: number
+  finishedAt: number
+  status: string
+  summary?: string | null
+  error?: string | null
+}
+
 export type AgentMission = {
   version: number
   id: string
@@ -33,6 +54,13 @@ export type AgentMission = {
   project?: string | null
   status: string
   playbook?: string | null
+  model?: { providerID: string; modelID: string } | null
+  autonomy?: string | null
+  reviewModel?: { providerID: string; modelID: string } | null
+  autoBrief?: boolean
+  botId?: string | null
+  originSessionId?: string | null
+  originRoutineId?: string | null
   artifacts?: Array<{ kind?: string; title?: string; url?: string; path?: string; verified?: boolean }>
   schedule: AgentMissionSchedule
   budget: { minutesPerRun: number; runsPerDay: number; tokensPerDay: number }
@@ -41,6 +69,9 @@ export type AgentMission = {
     nextRunAt?: number | null
     lastRunAt?: number | null
     lastStatus?: string | null
+    lastError?: string | null
+    brief?: AgentMissionBrief | null
+    runs?: AgentMissionRun[]
     attempts: number
     sessionId?: string | null
     pendingInboxId?: string | null
@@ -231,6 +262,22 @@ export async function dismissAgentInboxItem(id: string): Promise<void> {
   }
 }
 
+export async function decideAgentInboxItem(item: AgentInboxItem, decision: "approved" | "rejected" | "resume"): Promise<void> {
+  if (!isTauri) return
+  useAgentProfile.setState({ dismissing: item.id, inboxError: null })
+  try {
+    await call("agent_inbox_decide", { id: item.id, decision })
+    if (item.missionId) {
+      await call("agent_mission_decide", { id: item.missionId, decision, ...(decision === "resume" ? {} : { title: item.title }) }).catch(() => undefined)
+    }
+    await loadAgentInbox()
+    await loadAgentMissions()
+  } catch (e) {
+    useAgentProfile.setState({ inboxError: errorMessage(e) })
+  } finally {
+    useAgentProfile.setState({ dismissing: null })
+  }
+}
 export async function loadAgentPulse(): Promise<void> {
   if (!isTauri) return
   try {
@@ -301,6 +348,35 @@ export async function runAgentMission(id: string): Promise<void> {
   }
 }
 
+export async function resumeAgentMission(id: string, note?: string): Promise<void> {
+  if (!isTauri) return
+  useAgentProfile.setState({ busyMission: id, missionsError: null })
+  try {
+    await call("agent_mission_decide", { id, decision: "resume", ...(note?.trim() ? { title: note.trim() } : {}) })
+    await loadAgentMissions()
+    await loadAgentInbox()
+  } catch (e) {
+    useAgentProfile.setState({ missionsError: errorMessage(e) })
+  } finally {
+    useAgentProfile.setState({ busyMission: null })
+  }
+}
+
+export async function generateAgentMissionBrief(id: string): Promise<AgentMissionBrief | null> {
+  if (!isTauri) return null
+  useAgentProfile.setState({ busyMission: id, missionsError: null })
+  try {
+    const brief = await call<AgentMissionBrief>("agent_mission_brief", { id })
+    await loadAgentMissions()
+    await loadAgentInbox()
+    return brief
+  } catch (e) {
+    useAgentProfile.setState({ missionsError: errorMessage(e) })
+    return null
+  } finally {
+    useAgentProfile.setState({ busyMission: null })
+  }
+}
 export async function loadAgentAbsence(): Promise<void> {
   if (!isTauri) return
   try {

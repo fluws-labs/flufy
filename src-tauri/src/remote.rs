@@ -391,6 +391,27 @@ fn hub_api(app: &AppHandle, mut req: Request, url: &str, path: &str) {
     if method == "GET" && path == "/hub/agent" {
         return respond_json(req, 200, crate::agent::hub_state(app));
     }
+    if method == "GET" && path == "/hub/agent/models" {
+        let project = crate::current_project(app);
+        if project.trim().is_empty() {
+            return respond_json(req, 200, json!({ "models": [] }));
+        }
+        let server = match ensure_server(app) {
+            Ok(server) => server,
+            Err(error) => return respond_json(req, 409, json!({ "error": error })),
+        };
+        let client = crate::oc::Opencode::new(&server, &project);
+        return match client.get("/config/providers") {
+            Ok(catalog) => {
+                let models = crate::accounts::available_models(&catalog)
+                    .into_iter()
+                    .map(|(provider_id, model_id)| json!({ "providerID": provider_id, "modelID": model_id }))
+                    .collect::<Vec<_>>();
+                respond_json(req, 200, json!({ "models": models }))
+            }
+            Err(error) => respond_json(req, 409, json!({ "error": error })),
+        };
+    }
     if method == "GET" && path == "/hub/agent/browser" {
         return match crate::desktop::browser::workspace("mission", None, false) {
             Ok(value) => respond_json(req, 200, value),
@@ -416,11 +437,18 @@ fn hub_api(app: &AppHandle, mut req: Request, url: &str, path: &str) {
             Err(error) => respond_json(req, 409, json!({ "error": error })),
         };
     }
+    if method == "POST" && path == "/hub/agent/bots" {
+        let body = read_json(&mut req);
+        return match crate::agent::bots::save(app, &body["bot"]) {
+            Ok(saved) => respond_json(req, 200, json!({ "bot": saved })),
+            Err(error) => respond_json(req, 409, json!({ "error": error })),
+        };
+    }
     if method == "POST" && path == "/hub/agent/missions" {
         let body = read_json(&mut req);
         let mission = match serde_json::from_value::<crate::agent::missions::Mission>(body["mission"].clone()) {
             Ok(mission) => mission,
-            Err(error) => return respond_json(req, 400, json!({ "error": format!("Misión inválida: {}", error) })),
+            Err(error) => return respond_json(req, 400, json!({ "error": format!("Misi��n invǭlida: {}", error) })),
         };
         return match crate::agent::missions::save(app, mission) {
             Ok(saved) => respond_json(req, 200, json!(saved)),

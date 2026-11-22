@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react"
+import type { Part } from "@opencode-ai/sdk"
 import {
   compactSession,
   contextUsage,
@@ -8,6 +9,7 @@ import {
   queuedUserIds,
   rememberPreviewTask,
   selectSession,
+  sendPrompt,
   sessionInProject,
   setSessionArchived,
   useAgent,
@@ -22,6 +24,7 @@ import { useProject } from "../state/project"
 import { openEditor } from "../state/editors"
 import { useResources } from "../state/resources"
 import { Chat } from "./Chat"
+import { MISSION_DRAFT_PROMPT } from "./missionDraft"
 import { Composer } from "./Composer"
 import { SessionTabs } from "./SessionTabs"
 import { ChangesBar, PermissionCard, QuestionCard, TodoList } from "./Interactions"
@@ -51,6 +54,15 @@ const SUGGESTIONS = [
   { icon: "git-pull-request", title: "Revisar mis cambios", text: "/review" },
 ]
 
+async function startMissionDraft(sessionId: string | null, root: string | null): Promise<void> {
+  if (!sessionId) return
+  try {
+    await sendPrompt("Quiero convertir esta conversación en una misión.", root, null, sessionId, undefined, MISSION_DRAFT_PROMPT)
+  } catch (cause) {
+    notify.error("No pude proponer la misión", cause instanceof Error ? cause.message : String(cause))
+  }
+}
+
 export function SessionPane({ sessionId, variant, onPreviewOpen, emptyState, preferences }: { sessionId: string | null; variant: "panel" | "editor"; onPreviewOpen?: () => void; emptyState?: ReactNode; preferences?: ReactNode }) {
   const session = useAgent((s) => s.allSessions.find((x) => x.id === sessionId) ?? null)
   const status = useAgent((s) => (sessionId ? (s.statuses[sessionId]?.type ?? "idle") : "idle"))
@@ -61,6 +73,23 @@ export function SessionPane({ sessionId, variant, onPreviewOpen, emptyState, pre
   const allSessions = useAgent((s) => s.allSessions)
   const todos = useAgent((s) => (sessionId ? s.todos[sessionId] : undefined))
   const view = useAgent((s) => (sessionId ? s.views[sessionId] : undefined))
+  const [missionHintDismissed, setMissionHintDismissed] = useState(false)
+  const missionHint = useMemo(() => {
+    const messages = view?.messages ?? []
+    for (let index = messages.length - 1; index >= 0; index--) {
+      const message = messages[index]
+      if (message.info.role !== "user") continue
+      const text = message.parts
+        .filter((part): part is Extract<Part, { type: "text" }> => part.type === "text" && !part.synthetic)
+        .map((part) => part.text)
+        .join(" ")
+        .trim()
+      if (!text) continue
+      return /(todos los d[ií]as|cada d[ií]a|cada semana|todas las semanas|cada mes|todos los (lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bados?|domingos?))/i.test(text)
+    }
+    return false
+  }, [view])
+  useEffect(() => setMissionHintDismissed(false), [sessionId])
   const sessions = useMemo(() => allSessions.filter(sessionInProject), [allSessions])
   const root = useProject((s) => s.root)
   const busy = status === "busy" || status === "retry"
@@ -270,7 +299,17 @@ export function SessionPane({ sessionId, variant, onPreviewOpen, emptyState, pre
             <button type="button" className="btn btn-xs" onClick={() => void setSessionArchived(archived.id, false)}>Restaurar</button>
           </div>
         ) : (
-          <Composer sessionId={sessionId} busy={busy} compact={variant === "panel"} usage={usage} onPreviewOpen={onPreviewOpen} preferences={preferences} />
+          <>
+            {missionHint && !missionHintDismissed && session && !session.title.startsWith("Misión") && (
+              <div className="mission-suggest">
+                <Icon name="rocket" />
+                <span>¿Querés que Mi Flufy se encargue de esto todos los días?</span>
+                <button type="button" className="btn btn-xs btn-primary" onClick={() => { setMissionHintDismissed(true); void startMissionDraft(sessionId, root) }}>Convertir en misión</button>
+                <button type="button" className="btn btn-xs" onClick={() => setMissionHintDismissed(true)}>Ahora no</button>
+              </div>
+            )}
+            <Composer sessionId={sessionId} busy={busy} compact={variant === "panel"} usage={usage} onPreviewOpen={onPreviewOpen} preferences={preferences} />
+          </>
         )}
       </div>
     </div>
@@ -308,6 +347,13 @@ export function AgentPanel({ previewOpen = false, onPreviewOpen = () => {}, onPr
               <Icon name="loading" spin /> {busyCount}
             </span>
           )}
+          {!teamChatId && (activeId ? (
+            <IconButton
+              icon="rocket"
+              title="Convertir esta conversación en una misión de Mi Flufy"
+              onClick={() => void startMissionDraft(activeId, root)}
+            />
+          ) : null)}
           {!teamChatId && (activeId ? (
             <IconButton
               icon="multiple-windows"

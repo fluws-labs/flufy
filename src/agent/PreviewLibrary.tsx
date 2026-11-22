@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Icon } from '../components/ui'
+import { Select } from '../components/fields'
 import { errorMessage } from '../lib/tauri'
 import { formatDateTime } from '../lib/time'
 import { loadPreviewLibrary, type PreviewLibraryResult, type SavedPreview } from '../preview/library'
@@ -34,7 +35,7 @@ export function PreviewLibrary({ projectRoot, onOpen, onClose }: { projectRoot: 
   })
   return createPortal(<dialog ref={dialog} className="preview-library" aria-label="Diseños guardados" onCancel={event => { event.preventDefault(); onClose() }}>
     <header><div><h2><Icon name="library" /> Diseños</h2><p>Los diseños guardados de este proyecto, con su conversación y sus revisiones.</p></div><button type="button" className="btn btn-sm" onClick={onClose}>Cerrar diseños</button></header>
-    <div className="preview-library-tools"><label>Buscar diseños<input type="search" value={query} onChange={event => setQuery(event.target.value)} placeholder="Nombre, conversación o tarea…" /></label><label>Estado<select value={filter} onChange={event => setFilter(event.target.value)}><option value="all">Todos</option><option value="draft">Borradores</option><option value="approved">Aprobados</option></select></label><button type="button" className="btn btn-sm" onClick={() => setRefresh(value => value + 1)}>Recargar diseños</button></div>
+    <div className="preview-library-tools"><label>Buscar diseños<input type="search" value={query} onChange={event => setQuery(event.target.value)} placeholder="Nombre, conversación o tarea…" /></label><label>Estado<Select ariaLabel="Estado de los diseños" value={filter} options={[{ value: 'all', label: 'Todos' }, { value: 'draft', label: 'Borradores' }, { value: 'approved', label: 'Aprobados' }]} onChange={setFilter} /></label><button type="button" className="btn btn-sm" onClick={() => setRefresh(value => value + 1)}>Recargar diseños</button></div>
     <div className="preview-library-body">
       {error && <p role="alert">No se pudieron cargar los diseños: {error}</p>}
       {!result && !error && <p role="status">Cargando diseños guardados…</p>}

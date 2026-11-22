@@ -110,6 +110,7 @@ pub fn enabled(app: &tauri::AppHandle, workspace: &str) -> bool {
         && config.browse
         && !workspace.is_empty()
         && !workspace.starts_with("team:")
+        && workspace != "mission-own"
         && !super::internal_browser::selected(workspace)
         && available(app)
 }

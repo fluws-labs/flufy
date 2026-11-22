@@ -269,6 +269,13 @@ fn execute(app: &AppHandle, routine: &Routine, run_id: &str) -> Result<Outcome, 
     }
     let messages = client.get(&format!("/session/{}/message", session_id))?;
     let last = messages.as_array().and_then(|list| list.iter().rev().find(|m| m["info"]["role"] == "assistant"));
+    if last.is_none() && !seen_busy {
+        return Ok(Outcome {
+            status: "error",
+            summary: String::new(),
+            error: Some("La rutina no inició: la sesión quedó vacía. Revisá el agente y el modelo de la rutina.".into()),
+        });
+    }
     let summary: String = last.map(text_of).unwrap_or_default().chars().take(SUMMARY_CHARS).collect();
     let error = last.and_then(|m| {
         let e = &m["info"]["error"];

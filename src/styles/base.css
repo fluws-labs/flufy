@@ -10,6 +10,8 @@
   color-scheme: dark;
   /* Superficies: fondo, panel, elevado */
   --bg-app: #0a0e15;
+  --bg: var(--bg-app);
+  --bg-inset: var(--bg-raised);
   --bg-side: #10151f;
   --bg-raised: #171e2b;
   --bg-elevated: #1d2635;
@@ -537,6 +539,11 @@ textarea.input {
 .select-trigger:hover {
   border-color: var(--border-hover);
   background: var(--bg-raised);
+}
+.select-trigger.disabled,
+.select-trigger:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 .select-trigger:focus-visible,
 .select-trigger.open {

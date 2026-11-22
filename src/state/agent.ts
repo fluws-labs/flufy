@@ -39,6 +39,7 @@ export type ChatMessage = { info: Message; parts: Part[] }
 // El chat flotante (burbuja) trabaja siempre con el agente que maneja la PC: el
 // usuario ve la pantalla y el agente actúa directo, sin delegar en un subagente.
 export const BUBBLE_AGENT = "escritorio"
+export const BOT_ADMIN_MARKER = "[FLUFY_ADMIN_BOTS]"
 
 export type PermissionRequest = {
   id: string
@@ -253,7 +254,7 @@ function flush() {
 }
 
 export function isHelperSession(s: Session): boolean {
-  return s.title?.startsWith(HELPER_TITLE_PREFIX) ?? false
+  return s.title?.startsWith(HELPER_TITLE_PREFIX) || s.title?.startsWith("Supervisor · ") || false
 }
 
 function sortSessions(list: Session[]): Session[] {
@@ -1094,6 +1095,10 @@ export function selectSession(id: string | null) {
     foreignSessionHandler(foreign, id)
     return
   }
+  applySession(id)
+}
+
+function applySession(id: string | null) {
   if (useStudio.getState().mode === "team") useStudio.getState().setMode("research")
   useAgent.setState((s) => {
     if (!id) {
@@ -1112,6 +1117,22 @@ export function selectSession(id: string | null) {
     return { activeSessionId: id, openSessionIds: open, context: sessionRuntime(id).context ?? [], composerFocus: s.composerFocus + 1 }
   })
   if (id) void ensureSessionView(id)
+}
+
+export async function openSessionInDirectory(directory: string, sessionID: string): Promise<boolean> {
+  const dir = directory.trim()
+  if (!dir || !sessionID) return false
+  try {
+    const list = await listSessionsIn(dir)
+    if (!list.some((session) => session.id === sessionID)) return false
+    if (!knownDirectories.some((known) => samePath(known, dir))) knownDirectories.push(dir)
+    rememberSessionDirectory(sessionID, dir)
+    useAgent.setState((s) => ({ allSessions: sortSessions(mergeDirectorySessions(s.allSessions, dir, list)) }))
+    applySession(sessionID)
+    return true
+  } catch {
+    return false
+  }
 }
 
 export function memoryFor(sessionId: string | null): boolean {
@@ -1358,6 +1379,7 @@ export async function sendPrompt(
   activeFile: string | null,
   sessionId: string | null,
   previewAdjustment?: PreviewAdjustment,
+  hiddenPrompt?: string,
 ): Promise<string | null> {
   if (sessionId) invalidateContinuity(sessionId)
   if (previewAdjustment && (!root || !sessionId || previewTaskKey(root, sessionId) !== previewTaskKey(previewAdjustment.identity.project, previewAdjustment.identity.conversationId))) {
@@ -1483,6 +1505,7 @@ export async function sendPrompt(
   } else {
     const parts: PromptPart[] = []
     if (trimmed) parts.push({ type: "text", text: trimmed })
+    if (hiddenPrompt?.trim()) parts.push({ type: "text", text: hiddenPrompt.trim(), synthetic: true })
     parts.push(...contextParts)
     await api("POST", `/session/${id}/prompt_async`, {
       messageID: retryMessageID(),

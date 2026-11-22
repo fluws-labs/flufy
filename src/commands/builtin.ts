@@ -143,6 +143,7 @@ export function registerBuiltinCommands(): void {
     },
     { id: "workbench.view.scm", title: "Control de código", category: "Ver", icon: "source-control", keys: ["ctrl+shift+g"], run: () => useLayout.getState().showView("scm", false) },
     { id: "workbench.view.agents", title: "Sesiones del agente", category: "Ver", icon: "comment-discussion", keys: ["ctrl+shift+a"], run: () => useLayout.getState().showView("agents", false) },
+    { id: "workbench.view.profile", title: "Mi Flufy", category: "Ver", icon: "account", run: () => useLayout.getState().showView("profile", false) },
     { id: "workbench.view.teams", title: "Trabajos", category: "Ver", icon: "checklist", run: () => useLayout.getState().showView("teams", false) },
     { id: "agent.newTeam", title: "Nuevo chat de equipo", category: "Agente", icon: "organization", run: () => void newTeamChat() },
     { id: "agent.fallbackModels", title: "Modelos Fallback", category: "Agente", icon: "list-ordered", run: () => void openFallbackModels() },

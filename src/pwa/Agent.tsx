@@ -1,22 +1,49 @@
 import { useCallback, useEffect, useState } from "react"
 import { hub } from "./api"
 import type { Route } from "./Home"
-import { Icon } from "./ui"
+import { Icon, Sheet } from "./ui"
 
 type Mission = {
   id: string
   title: string
   goal: string
   status: string
+  botId?: string | null
   artifacts?: Array<{ kind?: string; title?: string; url?: string; path?: string }>
   schedule: { kind: string; time?: string; hours?: number; days?: number[] }
   state: { nextRunAt?: number | null; lastStatus?: string | null }
 }
 
+type BotCapabilities = { browser: string; desktop: boolean; files: boolean; terminal: boolean }
+type BotModel = { providerID: string; modelID: string }
+type Bot = {
+  id: string
+  name: string
+  role: string
+  instructions: string
+  model?: BotModel | null
+  fallbackModel?: BotModel | null
+  autonomy: string
+  capabilities: BotCapabilities
+  enabled: boolean
+}
+
+type BotDraft = {
+  id?: string
+  name: string
+  role: string
+  instructions: string
+  model?: BotModel | null
+  fallbackModel?: BotModel | null
+  autonomy: string
+  capabilities: BotCapabilities
+  enabled: boolean
+}
+
 type Check = { id: string; status: string; detail: string; fix?: string }
 type Absence = { enabled: boolean; ready: boolean; checks: Check[] }
 type Inbox = { id: string; title: string; body: string; kind: string; session?: string; directory?: string; preview?: string; risk?: string; missionId?: string; decision?: string }
-type AgentView = { missions: Mission[]; absence: Absence; inbox: Inbox[] }
+type AgentView = { missions: Mission[]; bots: Bot[]; absence: Absence; inbox: Inbox[] }
 
 const STATUS: Record<string, string> = {
   draft: "Borrador",
@@ -53,10 +80,127 @@ function message(error: unknown): string {
   return error instanceof Error && error.message ? error.message : "No pude completar la acción."
 }
 
+function emptyBotDraft(): BotDraft {
+  return {
+    name: "",
+    role: "",
+    instructions: "",
+    model: null,
+    fallbackModel: null,
+    autonomy: "alta",
+    capabilities: { browser: "borrowed", desktop: false, files: true, terminal: true },
+    enabled: true,
+  }
+}
+
+function modelKey(model?: BotModel | null): string {
+  return model ? `${model.providerID}/${model.modelID}` : ""
+}
+
+function parseModelKey(value: string): BotModel | null {
+  const index = value.indexOf("/")
+  if (index <= 0) return null
+  return { providerID: value.slice(0, index), modelID: value.slice(index + 1) }
+}
+
+function BotToggle({ label, value, onChange }: { label: string; value: boolean; onChange: (value: boolean) => void }) {
+  return (
+    <button type="button" className="bot-toggle-row" aria-pressed={value} onClick={() => onChange(!value)}>
+      <span className={`toggle ${value ? "on" : ""}`} />
+      <span>{label}</span>
+    </button>
+  )
+}
+
+function BotEditor({ draft, models, saving, error, onChange, onClose, onSave }: { draft: BotDraft; models: BotModel[]; saving: boolean; error: string; onChange: (draft: BotDraft) => void; onClose: () => void; onSave: () => void }) {
+  const set = (patch: Partial<BotDraft>) => onChange({ ...draft, ...patch })
+  const capabilities = draft.capabilities
+  const setCapabilities = (patch: Partial<BotCapabilities>) => set({ capabilities: { ...capabilities, ...patch } })
+  const optionsFor = (model?: BotModel | null) => {
+    const key = modelKey(model)
+    const options = [{ value: "", label: "Modelo del agente" }, ...models.map((item) => ({ value: modelKey(item), label: `${item.modelID} · ${item.providerID}` }))]
+    if (key && !options.some((option) => option.value === key)) options.push({ value: key, label: `${model!.modelID} · ${model!.providerID}` })
+    return options
+  }
+  return (
+    <Sheet
+      title={draft.id ? "Editar bot" : "Nuevo bot"}
+      className="bot-sheet"
+      onClose={onClose}
+      actions={<button type="button" className="btn btn-sm primary" disabled={saving || !draft.name.trim()} onClick={onSave}>{saving ? "Guardando…" : "Guardar"}</button>}
+    >
+      {error && <div className="alert" role="alert">{error}</div>}
+      <label className="bot-field">
+        <span>Nombre</span>
+        <input className="bot-input" value={draft.name} placeholder="Ej. Growth Quiero Menú" onChange={(event) => set({ name: event.target.value })} />
+      </label>
+      <label className="bot-field">
+        <span>Rol</span>
+        <input className="bot-input" value={draft.role} placeholder="Qué hace y de qué se ocupa" onChange={(event) => set({ role: event.target.value })} />
+      </label>
+      <label className="bot-field">
+        <span>Instrucciones</span>
+        <textarea className="bot-textarea" value={draft.instructions} placeholder="Identidad, prioridades, límites y forma de trabajar." onChange={(event) => set({ instructions: event.target.value })} />
+      </label>
+      <div className="bot-grid bot-model-grid">
+        <label className="bot-field">
+          <span>Modelo</span>
+          <select className="bot-select" value={modelKey(draft.model)} onChange={(event) => set({ model: parseModelKey(event.target.value) })}>
+            {optionsFor(draft.model).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+          </select>
+        </label>
+        <label className="bot-field">
+          <span>Fallback</span>
+          <select className="bot-select" value={modelKey(draft.fallbackModel)} onChange={(event) => set({ fallbackModel: parseModelKey(event.target.value) })}>
+            {optionsFor(draft.fallbackModel).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+          </select>
+        </label>
+      </div>
+      <div className="bot-grid">
+        <label className="bot-field">
+          <span>Autonomía</span>
+          <select className="bot-select" value={draft.autonomy} onChange={(event) => set({ autonomy: event.target.value })}>
+            <option value="alta">Alta</option>
+            <option value="manual">Manual</option>
+          </select>
+        </label>
+        <label className="bot-field">
+          <span>Chrome</span>
+          <select className="bot-select" value={capabilities.browser} onChange={(event) => setCapabilities({ browser: event.target.value })}>
+            <option value="borrowed">Prestado</option>
+            <option value="own">Propio</option>
+            <option value="internal">Interno</option>
+          </select>
+        </label>
+      </div>
+      <div className="bot-field">
+        <span>Capacidades</span>
+        <div className="bot-toggles">
+          <BotToggle label="Archivos" value={capabilities.files} onChange={(value) => setCapabilities({ files: value })} />
+          <BotToggle label="Terminal" value={capabilities.terminal} onChange={(value) => setCapabilities({ terminal: value })} />
+          <BotToggle label="Escritorio" value={capabilities.desktop} onChange={(value) => setCapabilities({ desktop: value })} />
+        </div>
+      </div>
+      <BotToggle label="Bot activo" value={draft.enabled} onChange={(value) => set({ enabled: value })} />
+      <p className="muted bot-note">Las instrucciones y capacidades se usan en sus próximas misiones. Las rutinas nativas son del proyecto y no se asignan a bots.</p>
+    </Sheet>
+  )
+}
+
 export function AgentScreen({ back, open }: { back: () => void; open: (route: Route) => void }) {
   const [data, setData] = useState<AgentView | null>(null)
   const [error, setError] = useState("")
   const [busy, setBusy] = useState("")
+  const [botDraft, setBotDraft] = useState<BotDraft | null>(null)
+  const [botError, setBotError] = useState("")
+  const [savingBot, setSavingBot] = useState(false)
+  const [models, setModels] = useState<BotModel[]>([])
+
+  useEffect(() => {
+    void hub<{ models?: BotModel[] }>("GET", "/agent/models")
+      .then((result) => setModels(Array.isArray(result.models) ? result.models : []))
+      .catch(() => undefined)
+  }, [])
 
   const load = useCallback(async () => {
     try {
@@ -94,6 +238,49 @@ export function AgentScreen({ back, open }: { back: () => void; open: (route: Ro
     open({ kind: "session", project: item.directory ?? "", id: item.session, title: item.title })
   }
 
+  const editBot = (bot: Bot) => {
+    setBotError("")
+    setBotDraft({
+      id: bot.id,
+      name: bot.name,
+      role: bot.role,
+      instructions: bot.instructions,
+      model: bot.model ?? null,
+      fallbackModel: bot.fallbackModel ?? null,
+      autonomy: bot.autonomy || "alta",
+      capabilities: { ...bot.capabilities },
+      enabled: bot.enabled !== false,
+    })
+  }
+
+  const saveBot = async () => {
+    if (!botDraft || !botDraft.name.trim() || savingBot) return
+    setSavingBot(true)
+    setBotError("")
+    try {
+      await hub("POST", "/hub/agent/bots", {
+        bot: {
+          id: botDraft.id,
+          name: botDraft.name.trim(),
+          role: botDraft.role.trim(),
+          instructions: botDraft.instructions.trim(),
+          model: botDraft.model ?? null,
+          fallbackModel: botDraft.fallbackModel ?? null,
+          autonomy: botDraft.autonomy,
+          capabilities: botDraft.capabilities,
+          enabled: botDraft.enabled,
+        },
+      })
+      await load()
+      setBotDraft(null)
+    } catch (e) {
+      setBotError(message(e))
+    } finally {
+      setSavingBot(false)
+    }
+  }
+
+  const bots = data?.bots ?? []
   const absence = data?.absence
   const fails = absence?.checks.filter((check) => check.status === "fail").length ?? 0
   const warns = absence?.checks.filter((check) => check.status === "warn").length ?? 0
@@ -114,6 +301,41 @@ export function AgentScreen({ back, open }: { back: () => void; open: (route: Ro
       {!data && !error && <div className="loading">Cargando Mi Flufy…</div>}
       {data && (
         <>
+          <div className="agent-section-head">
+            <h2 className="section-title"><Icon name="hubot" /> Bots <span className="agent-count">{bots.length}</span></h2>
+            <button type="button" className="btn btn-sm" onClick={() => { setBotError(""); setBotDraft(emptyBotDraft()) }}>
+              <Icon name="add" /> Nuevo
+            </button>
+          </div>
+          {bots.length === 0 ? (
+            <p className="muted">Todavía no hay bots.</p>
+          ) : (
+            bots.map((bot) => {
+              const count = data.missions.filter((mission) => (mission.botId ?? "flufy") === bot.id).length
+              return (
+                <div className="card agent-card bot-card" key={bot.id}>
+                  <div className="bot-card-head">
+                    <span className={`bot-avatar ${bot.enabled ? "on" : "off"}`}><Icon name="hubot" /></span>
+                    <div className="card-text">
+                      <strong>{bot.name}</strong>
+                      <small>{bot.role || "Sin rol"} · {bot.model?.modelID || "modelo del agente"}{bot.fallbackModel?.modelID ? ` → ${bot.fallbackModel.modelID}` : ""}</small>
+                      <div className="bot-meta">
+                        <span className={`bot-pill ${bot.enabled ? "on" : "off"}`}>{bot.enabled ? "Activo" : "Pausado"}</span>
+                        <span className="bot-pill">{bot.autonomy === "manual" ? "Manual" : "Autonomía alta"}</span>
+                        <span className="bot-pill">{count} {count === 1 ? "misión" : "misiones"}</span>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="agent-actions">
+                    <button type="button" className="btn btn-sm primary" onClick={() => editBot(bot)}>
+                      <Icon name="edit" /> Editar bot
+                    </button>
+                  </div>
+                </div>
+              )
+            })
+          )}
+
           <h2 className="section-title"><Icon name="checklist" /> Misiones</h2>
           {data.missions.length === 0 ? (
             <p className="muted">Todavía no hay misiones.</p>
@@ -243,6 +465,17 @@ export function AgentScreen({ back, open }: { back: () => void; open: (route: Ro
             ))
           )}
         </>
+      )}
+      {botDraft && (
+        <BotEditor
+          draft={botDraft}
+          models={models}
+          saving={savingBot}
+          error={botError}
+          onChange={setBotDraft}
+          onClose={() => setBotDraft(null)}
+          onSave={() => void saveBot()}
+        />
       )}
     </main>
   )

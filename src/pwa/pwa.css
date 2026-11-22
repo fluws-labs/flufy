@@ -1563,18 +1563,33 @@ body.pip-dragging {
 }
 
 /* Mi Flufy: misiones, ausencia y bandeja en el PWA */
+.agent-screen {
+  overflow-x: clip;
+}
 .agent-screen .agent-card {
   align-items: flex-start;
   flex-direction: column;
+  min-width: 0;
+}
+.agent-card .card-text {
+  min-width: 0;
+  max-width: 100%;
 }
 .agent-card .card-text p {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 5;
   margin: 2px 0 0;
   color: var(--muted);
   font-size: 13px;
   line-height: 1.4;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 .agent-card .card-text small {
   line-height: 1.4;
+  overflow-wrap: anywhere;
 }
 .agent-preview {
   white-space: pre-wrap;
@@ -1651,4 +1666,164 @@ body.pip-dragging {
 .agent-check small {
   color: var(--muted);
   font-size: 12px;
+}
+
+/* Bots en el PWA: lista compacta y editor en hoja */
+.agent-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.agent-section-head .section-title {
+  margin: 0;
+}
+.agent-count {
+  display: inline-grid;
+  place-items: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  color: var(--fg-dim);
+  font-size: 11px;
+  font-weight: 600;
+  vertical-align: 1px;
+}
+.bot-card {
+  gap: 10px;
+  min-width: 0;
+}
+.bot-card-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  width: 100%;
+  min-width: 0;
+}
+.bot-card .card-text {
+  min-width: 0;
+  overflow: hidden;
+}
+.bot-card .card-text strong,
+.bot-card .card-text small {
+  max-width: 100%;
+}
+.bot-meta {
+  min-width: 0;
+}
+.bot-avatar {
+  width: 42px;
+  height: 42px;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 13px;
+  background: var(--accent-bg);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+  color: var(--accent);
+  font-size: 20px;
+}
+.bot-avatar.off {
+  background: var(--bg-hover);
+  border-color: var(--border);
+  color: var(--fg-faint);
+}
+.bot-card .card-text small {
+  white-space: normal;
+}
+.bot-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 4px;
+}
+.bot-pill {
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--fg-dim);
+  font-size: 10.5px;
+  line-height: 1.5;
+}
+.bot-pill.on {
+  color: var(--green);
+  border-color: color-mix(in srgb, var(--green) 35%, var(--border));
+  background: color-mix(in srgb, var(--green) 9%, transparent);
+}
+.bot-pill.off {
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 35%, var(--border));
+}
+.bot-sheet {
+  max-height: 94dvh;
+}
+.bot-sheet .sheet-body {
+  gap: 14px;
+}
+.bot-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--fg-dim);
+  font-size: 12.5px;
+  font-weight: 550;
+}
+.bot-input,
+.bot-textarea,
+.bot-select {
+  width: 100%;
+  min-height: 46px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-raised);
+  color: var(--fg);
+  font: inherit;
+  font-size: 16px;
+  outline: none;
+}
+.bot-input:focus,
+.bot-textarea:focus,
+.bot-select:focus {
+  border-color: var(--accent);
+}
+.bot-textarea {
+  min-height: 180px;
+  resize: vertical;
+  line-height: 1.5;
+}
+.bot-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.bot-model-grid {
+  grid-template-columns: 1fr;
+}
+.bot-toggles {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px 12px;
+  padding: 4px 0;
+}
+.bot-toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 42px;
+  padding: 4px 0;
+  color: var(--fg);
+  font-size: 14px;
+  text-align: left;
+}
+.bot-note {
+  margin: 0;
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  line-height: 1.45;
 }

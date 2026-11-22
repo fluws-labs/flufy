@@ -249,7 +249,7 @@ pub fn memory_for_run(app: &AppHandle, run_id: &str) -> bool {
 /// session to the single Chrome workspace selected for its chat.
 pub(crate) fn browser_session(app: &AppHandle, session: &str) -> String {
     if crate::agent::missions::is_mission_session(session) {
-        return "mission".to_string();
+        return crate::desktop::browser::mission_workspace(app);
     }
     app.try_state::<TeamsState>().and_then(|state| state.store.lock().ok().and_then(|s|
         browser_owner(&s, session)))

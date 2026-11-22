@@ -166,12 +166,15 @@ export function Workbench() {
   const ready = useProject((s) => s.ready)
   const root = useProject((s) => s.root)
   const sidebarVisible = useLayout((s) => s.sidebarVisible)
+  const activeView = useLayout((s) => s.activeView)
   const sidebarWidth = useLayout((s) => s.sizes.sidebarWidth)
   const agentVisible = useLayout((s) => s.agentVisible)
   const agentWidth = useLayout((s) => s.sizes.agentWidth)
   const focusChat = useLayout((s) => s.focusChat)
   const chatExpanded = useLayout(s => s.chatExpanded)
   const focusStudioChat = chatExpanded && (studioMode === "research" || studioMode === "team")
+  const profileFull = activeView === "profile"
+  const profileWithChat = profileFull && agentVisible
   const start = useRef(0)
 
   useEffect(() => {
@@ -207,10 +210,40 @@ export function Workbench() {
   return (
     <div className={`workbench studio-workbench${studioMode === "code" ? " code-reading-mode" : ""}`}>
       <TitleBar />
-      <div className={`workbench-main${focusChat ? " focus-chat" : ""}`}>
+      <div className={`workbench-main${focusChat ? " focus-chat" : ""}${profileFull ? " profile-full" : ""}${profileWithChat ? " profile-chat" : ""}`}>
         <ActivityBar />
-        {sidebarVisible && !focusStudioChat && (
+        {profileWithChat ? (
           <>
+            {!focusChat && (
+              <main className="center profile-stage">
+                <ProfileView />
+              </main>
+            )}
+            {!focusChat && (
+              <Sash
+                orientation="vertical"
+                onDrag={(delta) => {
+                  if (start.current === 0) start.current = useLayout.getState().sizes.agentWidth
+                  useLayout.getState().setAgentWidth(start.current - delta)
+                }}
+                onDragEnd={() => {
+                  start.current = 0
+                }}
+                onDoubleClick={() => useLayout.getState().applyPreset(agentWidth > window.innerWidth * 0.5 ? "balanced" : "agent")}
+              />
+            )}
+            <div className="agent-slot" style={focusChat ? { flex: 1 } : { width: previewOpen ? Math.max(agentWidth, 720) : agentWidth }}>
+              <AgentPanel previewOpen={previewOpen} onPreviewOpen={() => setPreviewOpen(true)} onPreviewClose={() => setPreviewOpen(false)} />
+            </div>
+          </>
+        ) : profileFull ? (
+          <main className="center profile-stage">
+            <ProfileView />
+          </main>
+        ) : (
+          <>
+            {sidebarVisible && !focusStudioChat && (
+              <>
             <div className="side-bar-slot" style={{ width: sidebarWidth }}>
               <SideBar />
             </div>
@@ -249,6 +282,8 @@ export function Workbench() {
             <div className="agent-slot" style={focusChat || !root ? { flex: 1 } : { width: previewOpen ? Math.max(agentWidth, 720) : agentWidth }}>
               <AgentPanel previewOpen={previewOpen} onPreviewOpen={() => setPreviewOpen(true)} onPreviewClose={() => setPreviewOpen(false)} />
             </div>
+          </>
+            )}
           </>
         )}
       </div>
