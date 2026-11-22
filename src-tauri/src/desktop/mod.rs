@@ -805,8 +805,10 @@ mod tests {
         assert_eq!(Channel::Agent.name(), "agent");
         let tools = tool_list(Channel::Agent);
         let names: Vec<&str> = tools.iter().filter_map(|tool| tool["name"].as_str()).collect();
-        assert_eq!(names.len(), 6);
+        assert_eq!(names.len(), 13);
         assert!(names.contains(&"agent_profile_set") && names.contains(&"agent_inbox_add"));
+        assert!(names.contains(&"agent_bots_list") && names.contains(&"agent_mission_create"));
+        assert!(names.contains(&"agent_mission_assign") && names.contains(&"agent_mission_run"));
         let vigia = &config["agent"]["vigia"];
         assert_eq!(vigia["mode"], "primary");
         assert_eq!(vigia["permission"]["*"], "deny");
