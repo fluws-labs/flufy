@@ -18,6 +18,7 @@ const MAX_RUN_MS: i64 = 120 * 60_000;
 const SUMMARY_CHARS: usize = 4000;
 const SUPERVISOR_CHECK: Duration = Duration::from_secs(15);
 const SUPERVISOR_STALL_MS: i64 = 180_000;
+const SUPERVISOR_FIRST_RESPONSE_MS: i64 = 120_000;
 const SUPERVISOR_LOOP_LIMIT: u32 = 5;
 const SUPERVISOR_MAX_CORRECTIONS: u32 = 2;
 const SUPERVISOR_REVIEW_MS: i64 = 120_000;
@@ -925,6 +926,15 @@ fn has_running_tool(messages: &Value) -> bool {
         })
 }
 
+fn has_assistant_output(messages: &Value) -> bool {
+    messages
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|message| message["info"]["role"] == "assistant")
+        .any(|message| message["parts"].as_array().map(|parts| !parts.is_empty()).unwrap_or(false))
+}
+
 fn last_step_signature(messages: &Value) -> Option<String> {
     let list = messages.as_array()?;
     for message in list.iter().rev() {
@@ -1138,6 +1148,16 @@ fn execute_with_model(app: &AppHandle, mission: &Mission, model_override: Option
             if let Ok(messages) = client.get(&format!("/session/{}/message", session_id)) {
                 let count = message_count(&messages);
                 let previous_count = last_count;
+                let assistant_output = has_assistant_output(&messages);
+                if !assistant_output && now_ms() - phase_started > SUPERVISOR_FIRST_RESPONSE_MS {
+                    let _ = client.post(&format!("/session/{}/abort", session_id), json!({}));
+                    return Err(format!(
+                        "El modelo {}/{} no respondió en {} segundos. Se reintenta con el fallback si está configurado.",
+                        model.provider_id,
+                        model.model_id,
+                        SUPERVISOR_FIRST_RESPONSE_MS / 1000
+                    ));
+                }
                 let signature = last_step_signature(&messages);
                 if count > last_count {
                     last_count = count;
@@ -1152,7 +1172,10 @@ fn execute_with_model(app: &AppHandle, mission: &Mission, model_override: Option
                     repeated = 0;
                     last_signature = signature;
                 }
-                let stalled = count == previous_count && !has_running_tool(&messages) && now_ms() - last_progress > SUPERVISOR_STALL_MS;
+                let stalled = assistant_output
+                    && count == previous_count
+                    && !has_running_tool(&messages)
+                    && now_ms() - last_progress > SUPERVISOR_STALL_MS;
                 let looping = repeated >= SUPERVISOR_LOOP_LIMIT;
                 if stalled || looping {
                     if corrections >= SUPERVISOR_MAX_CORRECTIONS {
@@ -2056,6 +2079,16 @@ mod tests {
         }]);
         assert!(has_running_tool(&messages));
         assert!(last_step_signature(&messages).is_none());
+    }
+
+    #[test]
+    fn supervisor_distinguishes_no_response_from_a_stalled_agent() {
+        let prompt = json!([{ "info": { "role": "user" }, "parts": [{ "type": "text", "text": "objetivo" }] }]);
+        assert!(!has_assistant_output(&prompt));
+        let empty = json!([{ "info": { "role": "assistant" }, "parts": [] }]);
+        assert!(!has_assistant_output(&empty));
+        let started = json!([{ "info": { "role": "assistant" }, "parts": [{ "type": "step-start" }] }]);
+        assert!(has_assistant_output(&started));
     }
 
     #[test]
