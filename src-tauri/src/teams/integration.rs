@@ -512,6 +512,30 @@ fn native_team_end_to_end() {
                     std::thread::sleep(Duration::from_millis(200));
                 }
             };
+            let wait_idle = |id: &str| {
+                let deadline = Instant::now() + Duration::from_secs(30);
+                loop {
+                    let r = run(&handle, id).unwrap();
+                    let statuses = c.get("/session/status").unwrap();
+                    let sessions = r
+                        .plan_session_id
+                        .iter()
+                        .cloned()
+                        .chain(r.tasks.iter().flat_map(|task| task.attempts.iter().filter_map(|attempt| attempt.session_id.clone())))
+                        .collect::<Vec<_>>();
+                    let busy = sessions.iter().any(|session| {
+                        statuses[session.as_str()]["type"]
+                            .as_str()
+                            .map(|status| status != "idle")
+                            .unwrap_or(false)
+                    });
+                    if !busy {
+                        return;
+                    }
+                    assert!(Instant::now() < deadline, "las sesiones del run siguen activas: {:?}", statuses);
+                    std::thread::sleep(Duration::from_millis(200));
+                }
+            };
             // Model removal blocks, explicit reassignment resumes the same task.
             let mut missing = team.clone();
             missing.id = String::new();
@@ -612,6 +636,7 @@ fn native_team_end_to_end() {
                 "ready",
             )
             .unwrap();
+            wait_idle(&limited_run);
             control(&handle, &limited_run, "retry").unwrap();
             let recovered = wait_for_run(&limited_run);
             assert_eq!(recovered.status, "completed");
