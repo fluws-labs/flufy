@@ -61,6 +61,16 @@ pub(super) fn profile(session: &str) -> Result<PathBuf, String> {
 }
 
 pub(super) fn selected(session: &str) -> bool {
+    if session.starts_with("team:") {
+        // Teams prefer the real Chrome (Browse). The internal browser only
+        // takes over while the user enabled it and it has pages open in this
+        // session, or when Browse is not usable and it is the fallback.
+        let enabled = profile(session).is_ok_and(|p| p.join("enabled").is_file());
+        if enabled && registry().lock().unwrap().pages.iter().any(|page| page.session == session) {
+            return true;
+        }
+        return !crate::proc::app().is_some_and(|app| super::browse::usable(app));
+    }
     profile(session).is_ok_and(|p| p.join("enabled").is_file())
 }
 
@@ -252,6 +262,7 @@ pub async fn browser_internal_open(
     if !super::config(&app).browser {
         return Err("Activá las herramientas del navegador en Control de la PC".into());
     }
+    let session = crate::teams::browser_session(&app, &session);
     profile(&session)?;
     registry()
         .lock()
@@ -287,7 +298,9 @@ pub async fn browser_internal_open(
 
 #[tauri::command]
 pub fn browser_internal_pages(app: tauri::AppHandle, session: String) -> Result<Value, String> {
-    profile(&session)?;    Ok(json!(registry()
+    let session = crate::teams::browser_session(&app, &session);
+    profile(&session)?;
+    Ok(json!(registry()
         .lock()
         .unwrap()
         .pages
@@ -305,6 +318,7 @@ pub async fn browser_internal_view(
     bounds: Option<Bounds>,
     generation: Option<u64>,
 ) -> Result<(), String> {
+    let session = crate::teams::browser_session(&app, &session);
     profile(&session)?;
     static PRESENTATION: Mutex<()> = Mutex::new(());
     let _presentation = PRESENTATION.lock().unwrap();
@@ -377,6 +391,7 @@ pub async fn browser_internal_view(
 
 #[tauri::command]
 pub fn browser_internal_off(app: tauri::AppHandle, session: String) -> Result<(), String> {
+    let session = crate::teams::browser_session(&app, &session);
     let dir = profile(&session)?;
     let _ = std::fs::remove_file(dir.join("enabled"));
     let labels: Vec<String> = registry()
@@ -402,6 +417,7 @@ pub fn browser_internal_control(
     label: String,
     action: String,
 ) -> Result<(), String> {
+    let session = crate::teams::browser_session(&app, &session);
     profile(&session)?;
     if !registry()
         .lock()

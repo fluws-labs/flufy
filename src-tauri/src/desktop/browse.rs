@@ -6,8 +6,10 @@
 //! keeps the existing numeric `pageId` contract of the Chrome DevTools bridge
 //! and maps it to the tab ids Browse returns.
 //!
-//! Only conversations that do not use the internal WebView2 browser (teams)
-//! reach this module; `browser.rs` keeps the Chrome DevTools path for those.
+//! Conversations reach this module whenever they have not selected the internal
+//! WebView2 browser, including team sessions. `browser.rs` keeps the Chrome
+//! DevTools path for conversations that use the internal browser or do not have
+//! Browse installed.
 
 use crate::proc::hide_console;
 use serde::Serialize;
@@ -102,17 +104,20 @@ pub fn available(app: &tauri::AppHandle) -> bool {
     binary(Some(app)).is_some()
 }
 
-/// Conversations that use the internal WebView2 browser, or teams, keep the
-/// Chrome DevTools bridge: Browse cannot attach to WebView2 surfaces.
-pub fn enabled(app: &tauri::AppHandle, workspace: &str) -> bool {
+/// Browse can be used at all in this installation: enabled and installed.
+pub fn usable(app: &tauri::AppHandle) -> bool {
     let config = super::config(app);
-    config.browser
-        && config.browse
+    config.browser && config.browse && available(app)
+}
+
+/// Conversations that use the internal WebView2 browser keep the Chrome
+/// DevTools bridge: Browse cannot attach to WebView2 surfaces. Team sessions
+/// use Browse too when their chat has not selected the internal browser.
+pub fn enabled(app: &tauri::AppHandle, workspace: &str) -> bool {
+    usable(app)
         && !workspace.is_empty()
-        && !workspace.starts_with("team:")
         && workspace != "mission-own"
         && !super::internal_browser::selected(workspace)
-        && available(app)
 }
 
 fn stop_process() {
