@@ -779,6 +779,13 @@ fn load(app: &AppHandle) -> Vec<Mission> {
             mission.updated_at = now;
             let _ = persist(app, mission);
         }
+        let stale_brief = mission.state.brief.is_some()
+            && mission.state.last_status.as_deref() != Some("ok");
+        if stale_brief {
+            mission.state.brief = None;
+            mission.updated_at = now;
+            let _ = persist(app, mission);
+        }
         if backfill_progress(mission, now) {
             mission.updated_at = now;
             let _ = persist(app, mission);
@@ -1948,6 +1955,11 @@ fn apply(app: &AppHandle, mission: &Mission, outcome: MissionOutcome, project: &
         item.state.runs.truncate(20);
         item.state.approved = None;
         item.state.approval_title = approval_title_out.clone();
+        if outcome.status != ContractStatus::Ok {
+            // A previous successful brief must not look like the result of a
+            // newer blocked run.
+            item.state.brief = None;
+        }
         item.state.queued_at = if next_status == "queued" { Some(now) } else { None };
         item.state.progress = Some(progress.clone());
         item.state.no_progress_runs = no_progress_runs;
