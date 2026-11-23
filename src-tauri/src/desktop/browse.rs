@@ -116,6 +116,7 @@ pub fn usable(app: &tauri::AppHandle) -> bool {
 pub fn enabled(app: &tauri::AppHandle, workspace: &str) -> bool {
     usable(app)
         && !workspace.is_empty()
+        && workspace != "mission"
         && workspace != "mission-own"
         && !super::internal_browser::selected(workspace)
 }

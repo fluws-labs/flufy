@@ -900,6 +900,37 @@ fn text_of(message: &Value) -> String {
         .unwrap_or_default()
 }
 
+fn assistant_result(messages: &Value) -> (String, Option<String>) {
+    let list = messages.as_array();
+    let mut fallback_text: Option<String> = None;
+    let mut contract_text: Option<String> = None;
+    let mut error: Option<String> = None;
+    for message in list.into_iter().flatten().rev().filter(|message| message["info"]["role"] == "assistant") {
+        if error.is_none() {
+            let value = &message["info"]["error"];
+            error = value["data"]["message"].as_str().or(value["name"].as_str()).map(String::from);
+        }
+        let text = text_of(message);
+        if text.trim().is_empty() {
+            continue;
+        }
+        if fallback_text.is_none() {
+            fallback_text = Some(text.clone());
+        }
+        if parse_contract(&text).is_some() {
+            contract_text = Some(text);
+            break;
+        }
+    }
+    let text = contract_text
+        .or(fallback_text)
+        .unwrap_or_default()
+        .chars()
+        .take(SUMMARY_CHARS)
+        .collect();
+    (text, error)
+}
+
 pub fn parse_contract(text: &str) -> Option<Value> {
     let mut cursor = text.len();
     while let Some(start) = text[..cursor].rfind('{') {
@@ -1574,14 +1605,7 @@ fn execute_with_model(app: &AppHandle, mission: &Mission, model_override: Option
         }
     }
     let messages = client.get(&format!("/session/{}/message", session_id))?;
-    let last = messages
-        .as_array()
-        .and_then(|list| list.iter().rev().find(|message| message["info"]["role"] == "assistant"));
-    let text: String = last.map(text_of).unwrap_or_default().chars().take(SUMMARY_CHARS).collect();
-    let error = last.and_then(|message| {
-        let value = &message["info"]["error"];
-        value["data"]["message"].as_str().or(value["name"].as_str()).map(String::from)
-    });
+    let (text, error) = assistant_result(&messages);
     if let Some(error) = error {
         return Ok(MissionOutcome {
             status: ContractStatus::Blocked,
@@ -2541,6 +2565,19 @@ mod tests {
         let value = parse_contract(text).unwrap();
         assert_eq!(value["status"], "ok");
         assert_eq!(value["summary"], "listo");
+    }
+
+    #[test]
+    fn a_contract_before_an_empty_final_message_is_still_read() {
+        let messages = json!([
+            { "info": { "role": "assistant" }, "parts": [{ "type": "text", "text": "texto previo" }] },
+            { "info": { "role": "assistant" }, "parts": [{ "type": "text", "text": "```json\n{\"status\":\"blocked\",\"summary\":\"sin ventana de Chrome\",\"items\":[]}\n```" }] },
+            { "info": { "role": "assistant" }, "parts": [] }
+        ]);
+        let (text, error) = assistant_result(&messages);
+        assert!(text.contains("sin ventana de Chrome"));
+        assert!(error.is_none());
+        assert!(parse_contract(&text).is_some());
     }
 
     #[test]
