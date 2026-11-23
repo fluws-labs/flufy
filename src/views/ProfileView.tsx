@@ -1110,7 +1110,7 @@ function SettingsPanel({ onClose }: { onClose: () => void }) {
     try {
       const data = await call<{ mode?: string }>("agent_browser_mode_set", { mode })
       if (data?.mode === "own" || data?.mode === "borrowed") setBrowserMode(data.mode)
-      notify.info("Chrome de misiones", mode === "own" ? "Se usará un perfil dedicado. Iniciá sesión una vez cuando se abra." : "Se usará tu Chrome actual con una pestaña asignada.")
+      notify.info("Chrome de misiones", mode === "own" ? "Se usará un perfil dedicado. Iniciá sesión una vez cuando se abra." : "Se usará tu Chrome actual; Flufy abre una ventana nueva automáticamente.")
     } catch (cause) {
       notify.error("No se pudo cambiar el Chrome de misiones", cause instanceof Error ? cause.message : String(cause))
     }
@@ -1175,7 +1175,7 @@ function SettingsPanel({ onClose }: { onClose: () => void }) {
               ariaLabel="Chrome de misiones"
               value={browserMode}
               options={[
-                { value: "borrowed", label: "Prestado: una pestaña de tu Chrome" },
+                { value: "borrowed", label: "Prestado: Flufy abre una ventana nueva en tu Chrome" },
                 { value: "own", label: "Propio: perfil dedicado (recomendado para autonomía)" },
               ]}
               onChange={(value) => void changeBrowserMode(value as "borrowed" | "own")}

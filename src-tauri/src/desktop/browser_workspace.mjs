@@ -73,7 +73,7 @@ export class Workspaces {
       w.windowId = 0; w.targets = pages.map(p => p.target)
       if (!w.targets.includes(w.selected)) w.selected = w.targets[0]
     }
-    if (!meta.isolated && !meta.action && meta.autoRecover && meta.session.startsWith('team:')) {
+    if (!meta.isolated && meta.action !== 'assign' && meta.autoRecover && (meta.session.startsWith('team:') || meta.session === 'mission' || meta.session === 'mission-own')) {
       await this.createTab(meta.session, async () => {
         pages = await this.inventory(context, meta.isolated)
         const prior = this.sessions[meta.session]
@@ -86,7 +86,7 @@ export class Workspaces {
         finally { await client.detach() }
         pages = await this.inventory(context, meta.isolated)
         const created = pages.find(p => p.target === targetId)
-        if (!created || pages.some(p => p.target !== targetId && p.windowId === created.windowId)) throw new Error('No pude confirmar una ventana nueva exclusiva del equipo. No se tomó control de otra ventana.')
+        if (!created || pages.some(p => p.target !== targetId && p.windowId === created.windowId)) throw new Error('No pude confirmar una ventana nueva exclusiva. No se tomó control de otra ventana.')
         this.sessions[meta.session] = { windowId: created.windowId, targets: [targetId], selected: targetId, recovered: true }
         await this.save()
       })

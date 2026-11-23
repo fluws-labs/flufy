@@ -1116,7 +1116,7 @@ fn progress_from_outcome(
     progress
 }
 
-fn build_prompt(mission: &Mission, playbook: Option<&str>, profile: Option<&str>, bot: Option<&str>) -> String {
+fn build_prompt(mission: &Mission, playbook: Option<&str>, profile: Option<&str>, bot: Option<&str>, browser_mode: Option<&str>) -> String {
     let playbook = playbook.unwrap_or("Sin playbook: seguí el objetivo, usá solo las herramientas indicadas en Computadora y respetá la política; pedí aprobación para acciones irreversibles.");
     let chain = mission
         .state
@@ -1152,9 +1152,18 @@ fn build_prompt(mission: &Mission, playbook: Option<&str>, profile: Option<&str>
         })
         .unwrap_or_default();
     let playbook = format!("{}\n\n{}", playbook, approved);
+    let browser = browser_mode
+        .filter(|mode| !mode.trim().is_empty())
+        .unwrap_or(mission.computer.browser.as_str());
+    let browser = match browser {
+        "own" => "propio (Flufy abre una ventana dedicada automáticamente; no pidas que te asignen una)",
+        "borrowed" => "prestado (Flufy abre una ventana nueva automáticamente en tu Chrome; no pidas que te asignen una)",
+        "internal" => "interno",
+        other if other.trim().is_empty() => "prestado (Flufy abre una ventana nueva automáticamente en tu Chrome; no pidas que te asignen una)",
+        other => other,
+    };
     let computer = format!(
-        "\n## Computadora\n- Navegador: {}\n- Escritorio: {}\n- Archivos: {}\n- Terminal: {}\n",
-        if mission.computer.browser.is_empty() { "prestado" } else { &mission.computer.browser },
+        "\n## Computadora\n- Navegador: {browser}\n- Escritorio: {}\n- Archivos: {}\n- Terminal: {}\n- Si necesitás el navegador, empezá con `browser_list_pages`: Flufy abre o recupera la ventana automáticamente. No cierres por falta de ventana asignada ni pidas que la asignen.\n",
         if mission.computer.desktop { "sí" } else { "no" },
         if mission.computer.files { "sí" } else { "no" },
         if mission.computer.terminal { "sí" } else { "no" },
@@ -1402,11 +1411,13 @@ fn execute_with_model(app: &AppHandle, mission: &Mission, model_override: Option
         .filter(|name| !name.trim().is_empty())
         .and_then(|name| crate::agent::playbooks::read(app, name).ok());
     let bot_prompt = crate::agent::bots::bot_prompt(app, mission.bot_id.as_deref());
+    let browser_mode = crate::desktop::browser::mission_mode(app);
     let prompt = build_prompt(
         mission,
         playbook.as_deref(),
         crate::memory::profile_get(app)["profile"].as_str(),
         Some(bot_prompt.as_str()),
+        Some(browser_mode.as_str()),
     );
     let title = format!("Misión · {} · {}", mission.title, Local::now().format("%d/%m %H:%M"));
     let session = client.post("/session", json!({ "title": title }))?;
@@ -2456,7 +2467,7 @@ mod tests {
             advanced: true,
             updated_at: 1,
         });
-        let prompt = build_prompt(&item, None, None, None);
+        let prompt = build_prompt(&item, None, None, None, None);
         assert!(prompt.contains("Estado del trabajo"));
         assert!(prompt.contains("Publicar la landing"));
         assert!(prompt.contains("No repitas"));
@@ -2563,7 +2574,7 @@ mod tests {
     #[test]
     fn prompt_includes_goal_policy_and_contract() {
         let item = mission("armed", MissionSchedule::Daily { time: "08:30".into() });
-        let prompt = build_prompt(&item, Some("Leer Gmail"), None, None);
+        let prompt = build_prompt(&item, Some("Leer Gmail"), None, None, None);
         assert!(prompt.contains("Briefing"));
         assert!(prompt.contains("Leer Gmail"));
         assert!(prompt.contains("needs-approval"));

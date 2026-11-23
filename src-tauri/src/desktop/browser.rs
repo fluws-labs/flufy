@@ -625,7 +625,8 @@ fn call_session_recovery_inner(session: &str, workspace: &str, name: &str, mut a
     if session.is_empty() { return Err("Falta la conversación del navegador".into()); }
     if !SCOPED_TOOLS.contains(&original_name(name).as_str()) { return Err("Esta herramienta no está limitada a la ventana Chrome asignada".into()); }
     if !args.is_object() { return Err("Los argumentos del navegador deben ser un objeto".into()); }
-    args["_guillecode"] = json!({ "session": workspace, "actor": session, "autoRecover": recover && workspace.starts_with("team:") && original_name(name) == "list_pages" });
+    let mission_workspace = workspace == "mission" || workspace == "mission-own";
+    args["_guillecode"] = json!({ "session": workspace, "actor": session, "autoRecover": recover && (workspace.starts_with("team:") || mission_workspace) && original_name(name) == "list_pages" });
     if workspace.starts_with("team:") && recover && original_name(name)=="list_pages" {
         super::internal_browser::open_actor(crate::proc::app().ok_or("Flufy no está iniciado")?,workspace,session,None,false)?;
     }
@@ -700,17 +701,24 @@ fn workspace_inner(session: &str, page_id: Option<u64>, quiet: bool) -> Result<V
     if quiet {
         return Ok(json!({ "assigned": false, "missing": false, "windowId": null, "pages": [] }));
     }
+    let mission_workspace = session == "mission" || session == "mission-own";
     let result = call("list_pages", json!({ "_guillecode": {
-        "session": session, "action": if page_id.is_some() { "assign" } else { "inspect" }, "pageId": page_id
+        "session": session,
+        "action": if page_id.is_some() { "assign" } else { "inspect" },
+        "pageId": page_id,
+        "autoRecover": mission_workspace && page_id.is_none()
     }}))?;
     if failed(&result) { return Err(text_of(&result)); }
     serde_json::from_str(&text_of(&result)).map_err(|e| format!("No se pudo leer el espacio de Chrome: {}", e))
 }
 
 pub fn page_text(page_id: u64) -> Result<String, String> {
+    let workspace = crate::proc::app()
+        .map(|app| mission_workspace(&app))
+        .unwrap_or_else(|| "mission".into());
     let result = call_session(
-        "mission",
-        "mission",
+        &workspace,
+        &workspace,
         "evaluate_script",
         json!({
             "pageId": page_id,
