@@ -180,8 +180,10 @@ fn own_profile_path(app: &tauri::AppHandle) -> PathBuf {
     crate::memory::agent_root(app).join("chrome-own")
 }
 
-pub fn mission_workspace(app: &tauri::AppHandle) -> String {
-    if mission_mode(app) == "own" { "mission-own".into() } else { "mission".into() }
+pub fn mission_workspace(_app: &tauri::AppHandle) -> String {
+    // Missions always use the Chrome the user already has open. There is no
+    // separate browser mode or per-conversation assignment to choose.
+    "mission".into()
 }
 
 #[tauri::command]

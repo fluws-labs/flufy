@@ -1206,6 +1206,10 @@ fn build_prompt(mission: &Mission, playbook: Option<&str>, profile: Option<&str>
         if mission.computer.files { "sí" } else { "no" },
         if mission.computer.terminal { "sí" } else { "no" },
     );
+    let computer = format!(
+        "{}- Trabajá en una sola pestaña: navegá con `browser_navigate_page` sobre la página asignada. No abras pestañas ni ventanas nuevas salvo que la tarea lo requiera.\n",
+        computer
+    );
     let triggers = mission
         .triggers
         .iter()
