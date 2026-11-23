@@ -626,7 +626,11 @@ fn call_session_recovery_inner(session: &str, workspace: &str, name: &str, mut a
     if !SCOPED_TOOLS.contains(&original_name(name).as_str()) { return Err("Esta herramienta no está limitada a la ventana Chrome asignada".into()); }
     if !args.is_object() { return Err("Los argumentos del navegador deben ser un objeto".into()); }
     let mission_workspace = workspace == "mission" || workspace == "mission-own";
-    args["_guillecode"] = json!({ "session": workspace, "actor": session, "autoRecover": recover && (workspace.starts_with("team:") || mission_workspace) && original_name(name) == "list_pages" });
+    // A mission must never wait for the user to assign a window: recover it on
+    // any browser tool, not only on list_pages, even if the native session
+    // registry did not mark the run as recoverable.
+    let auto_recover = mission_workspace || (recover && workspace.starts_with("team:") && original_name(name) == "list_pages");
+    args["_guillecode"] = json!({ "session": workspace, "actor": session, "autoRecover": auto_recover });
     if workspace.starts_with("team:") && recover && original_name(name)=="list_pages" {
         super::internal_browser::open_actor(crate::proc::app().ok_or("Flufy no está iniciado")?,workspace,session,None,false)?;
     }
