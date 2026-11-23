@@ -1195,19 +1195,19 @@ fn build_prompt(mission: &Mission, playbook: Option<&str>, profile: Option<&str>
         .unwrap_or(mission.computer.browser.as_str());
     let browser = match browser {
         "own" => "propio (Flufy abre una ventana dedicada automáticamente; no pidas que te asignen una)",
-        "borrowed" => "prestado (Flufy abre una ventana nueva automáticamente en tu Chrome; no pidas que te asignen una)",
+        "borrowed" => "prestado (una pestana nueva agrupada en el Chrome que el usuario ya tiene abierto; no reinicies Chrome ni toques sus pestanas)",
         "internal" => "interno",
-        other if other.trim().is_empty() => "prestado (Flufy abre una ventana nueva automáticamente en tu Chrome; no pidas que te asignen una)",
+        other if other.trim().is_empty() => "prestado (una pestana nueva agrupada en el Chrome que el usuario ya tiene abierto; no reinicies Chrome ni toques sus pestanas)",
         other => other,
     };
     let computer = format!(
-        "\n## Computadora\n- Navegador: {browser}\n- Escritorio: {}\n- Archivos: {}\n- Terminal: {}\n- Si necesitás el navegador, empezá con `browser_list_pages`: Flufy abre o recupera la ventana automáticamente. No cierres por falta de ventana asignada ni pidas que la asignen.\n",
-        if mission.computer.desktop { "sí" } else { "no" },
-        if mission.computer.files { "sí" } else { "no" },
-        if mission.computer.terminal { "sí" } else { "no" },
+        "\n## Computadora\n- Navegador: {browser}\n- Escritorio: {}\n- Archivos: {}\n- Terminal: {}\n- Si necesitas el navegador, empeza con `browser_list_pages`. Si no hay una pestana de la mision, abri una con `browser_navigate_page` sin `pageId`; usa solo esa pestana. No navegues ni cierres pestanas del usuario, no reinicies Chrome y no pidas que asignen una ventana.\n",
+        if mission.computer.desktop { "si" } else { "no" },
+        if mission.computer.files { "si" } else { "no" },
+        if mission.computer.terminal { "si" } else { "no" },
     );
     let computer = format!(
-        "{}- Trabajá en una sola pestaña: navegá con `browser_navigate_page` sobre la página asignada. No abras pestañas ni ventanas nuevas salvo que la tarea lo requiera.\n",
+        "{}- Trabaja en una sola pestana del grupo de la mision; si no existe, creala con `browser_navigate_page` sin `pageId`. No uses pestanas del usuario ni abras ventanas nuevas.\n",
         computer
     );
     let triggers = mission

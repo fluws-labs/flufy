@@ -114,9 +114,11 @@ pub fn usable(app: &tauri::AppHandle) -> bool {
 /// DevTools bridge: Browse cannot attach to WebView2 surfaces. Team sessions
 /// use Browse too when their chat has not selected the internal browser.
 pub fn enabled(app: &tauri::AppHandle, workspace: &str) -> bool {
+    // Missions use the same Browse connection as a normal chat: a tab group
+    // inside the Chrome the user already has open. This keeps their profile and
+    // sessions without restarting Chrome with remote debugging.
     usable(app)
         && !workspace.is_empty()
-        && workspace != "mission"
         && workspace != "mission-own"
         && !super::internal_browser::selected(workspace)
 }
@@ -601,16 +603,22 @@ fn navigation(session: &str, args: &Value) -> Result<Value, String> {
         Some(_) => {
             let tab = page_tab(session, args)?;
             value.insert("tab".into(), tab_value(&tab));
+            call_tool("navigate", Value::Object(value))
         }
         None => {
             let group = with_session(session, |state| state.group.clone());
-            value.insert("group".into(), json!(group));
-            if value.get("url").is_none() {
-                return Err("Falta url para abrir una pestaña nueva.".into());
+            let url = value.get("url").cloned().ok_or("Falta url para abrir una pestana nueva.")?;
+            match call_tool("tabs", json!({ "action": "new", "group": group, "url": url })) {
+                Ok(result) => Ok(result),
+                Err(error) if error.contains("Tabs cannot be edited right now") => {
+                    std::thread::sleep(Duration::from_millis(350));
+                    call_tool("tabs", json!({ "action": "new", "group": group, "url": url }))
+                }
+                Err(error) => Err(error),
             }
         }
     }
-    call_tool("navigate", Value::Object(value))
+
 }
 
 pub fn call_session(session: &str, name: &str, args: Value) -> Value {
@@ -628,7 +636,7 @@ fn dispatch(session: &str, name: &str, args: &Value) -> Result<Value, String> {
         "list_pages" => {
             let pages = list_tabs(session)?;
             if pages.is_empty() {
-                return Ok(result_text("No hay pestañas abiertas para esta conversación. Usá browser_new_page para abrir una; Browse la crea en segundo plano, agrupada con esta conversación."));
+                return Ok(result_text("No hay pestanas abiertas para esta conversacion. Abri una con browser_navigate_page sin pageId; Browse la crea en segundo plano, agrupada con esta conversacion."));
             }
             let lines: Vec<String> = pages.iter().map(|page| format!("{}: {}{}", page.page_id, page.url, if page.lent { " [prestada]" } else { "" })).collect();
             Ok(result_text(lines.join("\n")))
