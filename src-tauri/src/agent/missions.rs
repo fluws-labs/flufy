@@ -1604,7 +1604,22 @@ fn execute_with_model(app: &AppHandle, mission: &Mission, model_override: Option
             return Err("La misión superó el máximo de seguridad de 120 minutos y se detuvo.".into());
         }
     }
-    let messages = client.get(&format!("/session/{}/message", session_id))?;
+    let mut messages = client.get(&format!("/session/{}/message", session_id))?;
+    // The session can report idle just before the final assistant text is
+    // persisted. Give the contract a short grace period instead of storing an
+    // empty summary and pausing the mission.
+    let mut attempts = 0;
+    loop {
+        let (text, error) = assistant_result(&messages);
+        if error.is_some() || parse_contract(&text).is_some() || attempts >= 20 {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(500));
+        attempts += 1;
+        if let Ok(next) = client.get(&format!("/session/{}/message", session_id)) {
+            messages = next;
+        }
+    }
     let (text, error) = assistant_result(&messages);
     if let Some(error) = error {
         return Ok(MissionOutcome {

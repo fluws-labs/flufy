@@ -116,9 +116,9 @@ export class Workspaces {
     const missionScoped = meta.session === 'mission' || meta.session === 'mission-own'
     const survives = () => !!workspace && Array.isArray(workspace.targets) && pages.some(p =>
       (workspace.targets.includes(p.target) && (meta.isolated || p.windowId === workspace.windowId)) ||
-      (missionScoped && !meta.isolated && p.windowId === workspace.windowId))
+      (missionScoped && !meta.isolated && (p.windowId === workspace.windowId || workspace.targets.includes(p.target))))
     const valid = survives()
-    const owned = () => valid ? pages.filter(p => meta.isolated ? !meta.actor || workspace.owners?.[p.target] === meta.actor : p.windowId === workspace.windowId) : []
+    const owned = () => valid ? pages.filter(p => meta.isolated ? !meta.actor || workspace.owners?.[p.target] === meta.actor : (missionScoped ? (p.windowId === workspace.windowId || workspace.targets.includes(p.target)) : p.windowId === workspace.windowId)) : []
     if (valid) {
       workspace.targets = owned().map(p => p.target)
       if (!workspace.targets.includes(selectedTarget())) select(workspace.targets[0])
