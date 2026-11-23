@@ -33,6 +33,14 @@ pub enum MissionSchedule {
     Interval { hours: u32 },
     Daily { time: String },
     Weekly { days: Vec<u32>, time: String },
+    Continuous {
+        #[serde(rename = "cooldownMinutes", default = "default_cooldown_minutes")]
+        cooldown_minutes: u32,
+    },
+}
+
+fn default_cooldown_minutes() -> u32 {
+    5
 }
 
 impl Default for MissionSchedule {
@@ -69,16 +77,39 @@ impl Default for MissionPolicy {
     }
 }
 
+#[derive(Serialize, Deserialize, Clone, Default, PartialEq, Debug)]
+#[serde(rename_all = "camelCase", default)]
+pub struct MissionStep {
+    pub title: String,
+    pub status: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct MissionProgress {
+    pub objective: String,
+    pub plan: Vec<MissionStep>,
+    pub done: Vec<String>,
+    pub next: String,
+    pub blockers: Vec<String>,
+    pub decisions: Vec<String>,
+    pub artifacts: Vec<String>,
+    pub advanced: bool,
+    pub updated_at: i64,
+}
+
 #[derive(Serialize, Deserialize, Clone, Default)]
 #[serde(rename_all = "camelCase", default)]
 pub struct MissionRun {
     pub id: String,
+    pub previous_run_id: Option<String>,
     pub session_id: Option<String>,
     pub started_at: i64,
     pub finished_at: i64,
     pub status: String,
     pub summary: Option<String>,
     pub error: Option<String>,
+    pub progress: Option<MissionProgress>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Default)]
@@ -114,6 +145,11 @@ pub struct MissionRuntime {
     pub tokens_date: Option<String>,
     pub runs_today: u32,
     pub runs_date: Option<String>,
+    pub progress: Option<MissionProgress>,
+    pub paused_by_bot: bool,
+    pub stop_requested: bool,
+    pub no_progress_runs: u32,
+    pub failures: u32,
 }
 
 impl Default for MissionRuntime {
@@ -136,6 +172,11 @@ impl Default for MissionRuntime {
             tokens_date: None,
             runs_today: 0,
             runs_date: None,
+            progress: None,
+            paused_by_bot: false,
+            stop_requested: false,
+            no_progress_runs: 0,
+            failures: 0,
         }
     }
 }
@@ -287,6 +328,7 @@ pub struct MissionOutcome {
     pub items: Vec<Value>,
     pub approval: Option<Value>,
     pub handoff: Option<Value>,
+    pub progress: Option<Value>,
     pub session_id: Option<String>,
     pub error: Option<String>,
 }
@@ -299,6 +341,7 @@ impl MissionOutcome {
             items: Vec::new(),
             approval: None,
             handoff: None,
+            progress: None,
             session_id: None,
             error: Some(error.into()),
         }
@@ -420,6 +463,9 @@ fn check_triggers(app: &AppHandle) {
         if mission.triggers.is_empty() {
             continue;
         }
+        if crate::agent::bots::control_of(app, mission.bot_id.as_deref()) != "playing" {
+            continue;
+        }
         let mut queued = false;
         for trigger in &mission.triggers {
             if !matches!(trigger.kind.as_str(), "file" | "git" | "inbox") {
@@ -476,6 +522,9 @@ fn next_run_at(mission: &Mission, after_ms: i64) -> Option<i64> {
         MissionSchedule::Interval { hours } => Some(after_ms + (*hours).max(1) as i64 * 3_600_000),
         MissionSchedule::Daily { time } => next_at(after, parse_time(time), |_| true),
         MissionSchedule::Weekly { days, time } => next_at(after, parse_time(time), |d| days.contains(&d)),
+        MissionSchedule::Continuous { cooldown_minutes } => {
+            Some(after_ms + (*cooldown_minutes).max(1) as i64 * 60_000)
+        }
     };
     result
 }
@@ -487,9 +536,10 @@ fn is_active(mission: &Mission) -> bool {
     )
 }
 
-fn due_mission(items: &[Mission], now: i64) -> Option<String> {
+fn due_mission(items: &[Mission], now: i64, allowed: impl Fn(&Mission) -> bool) -> Option<String> {
     items
         .iter()
+        .filter(|mission| allowed(mission))
         .filter(|mission| {
             mission.status == "queued"
                 || (mission.status == "armed"
@@ -567,6 +617,11 @@ pub fn validate(mission: &Mission) -> Result<(), String> {
                 return Err("Los días de la misión deben estar entre 0 (lunes) y 6 (domingo).".into());
             }
         }
+        MissionSchedule::Continuous { cooldown_minutes } => {
+            if *cooldown_minutes == 0 || *cooldown_minutes > 24 * 60 {
+                return Err("La espera del modo continuo debe estar entre 1 y 1440 minutos.".into());
+            }
+        }
     }
     if mission.budget.minutes_per_run == 0 || mission.budget.minutes_per_run > 120 {
         return Err("La misión debe durar entre 1 y 120 minutos.".into());
@@ -601,6 +656,41 @@ pub fn validate(mission: &Mission) -> Result<(), String> {
     Ok(())
 }
 
+fn backfill_progress(mission: &mut Mission, now: i64) -> bool {
+    if mission.state.progress.is_some() {
+        return false;
+    }
+    let Some(last) = mission.state.runs.first() else {
+        return false;
+    };
+    let mut blockers = Vec::new();
+    if let Some(error) = last.error.as_deref().filter(|error| !error.trim().is_empty()) {
+        blockers.push(clipped(error, 600));
+    }
+    mission.state.progress = Some(MissionProgress {
+        objective: mission.goal.clone(),
+        plan: Vec::new(),
+        done: Vec::new(),
+        next: if blockers.is_empty() {
+            "Revisar el resultado de la última corrida y definir el próximo paso verificable.".into()
+        } else {
+            "Resolver el bloqueo de la última corrida antes de avanzar.".into()
+        },
+        blockers,
+        decisions: Vec::new(),
+        artifacts: mission
+            .artifacts
+            .iter()
+            .filter_map(|artifact| artifact["url"].as_str())
+            .map(|url| clipped(url, 500))
+            .take(24)
+            .collect(),
+        advanced: false,
+        updated_at: now,
+    });
+    true
+}
+
 fn normalize(mut mission: Mission, now: i64) -> Result<Mission, String> {
     if mission.version == 0 {
         mission.version = 1;
@@ -624,6 +714,7 @@ fn normalize(mut mission: Mission, now: i64) -> Result<Mission, String> {
         let after = mission.state.last_run_at.unwrap_or(mission.created_at);
         mission.state.next_run_at = next_run_at(&mission, after).or_else(|| next_run_at(&mission, now));
     }
+    backfill_progress(&mut mission, now);
     validate(&mission)?;
     Ok(mission)
 }
@@ -664,6 +755,8 @@ fn load(app: &AppHandle) -> Vec<Mission> {
                 status: "interrupted".into(),
                 summary: None,
                 error: Some("La corrida se interrumpió al reiniciar Flufy.".into()),
+                progress: None,
+                ..Default::default()
             });
             mission.state.runs.sort_by_key(|run| std::cmp::Reverse(run.finished_at));
             mission.state.runs.truncate(20);
@@ -673,11 +766,20 @@ fn load(app: &AppHandle) -> Vec<Mission> {
             mission.state.pending_inbox_id = None;
             mission.state.queued_at = Some(now);
             mission.state.next_run_at = Some(now);
+            if crate::agent::bots::control_of(app, mission.bot_id.as_deref()) != "playing" {
+                mission.status = "paused".into();
+                mission.state.paused_by_bot = true;
+                mission.state.next_run_at = None;
+            }
             mission.updated_at = now;
             let _ = persist(app, mission);
         } else if mission.status == "queued" && mission.state.queued_at.is_none() {
             mission.state.queued_at = Some(now);
             mission.state.next_run_at = Some(now);
+            mission.updated_at = now;
+            let _ = persist(app, mission);
+        }
+        if backfill_progress(mission, now) {
             mission.updated_at = now;
             let _ = persist(app, mission);
         }
@@ -731,6 +833,14 @@ pub fn save(app: &AppHandle, mission: Mission) -> Result<Mission, String> {
         mission.id = unique_id(&items, &base);
     }
     let mut mission = normalize(mission, now)?;
+    if crate::agent::bots::control_of(app, mission.bot_id.as_deref()) != "playing"
+        && matches!(mission.status.as_str(), "armed" | "queued")
+    {
+        mission.status = "paused".into();
+        mission.state.paused_by_bot = true;
+        mission.state.next_run_at = None;
+        mission.state.queued_at = None;
+    }
     if !mission.triggers.is_empty() && mission.state.trigger_state.is_none() {
         trigger_baseline(&mut mission, now);
     }
@@ -795,7 +905,10 @@ pub fn parse_contract(text: &str) -> Option<Value> {
     while let Some(start) = text[..cursor].rfind('{') {
         let mut deserializer = serde_json::Deserializer::from_str(&text[start..]);
         if let Ok(value) = Value::deserialize(&mut deserializer) {
-            if value.get("status").is_some() {
+            if matches!(
+                value["status"].as_str(),
+                Some("ok" | "blocked" | "needs-approval" | "needs-hands")
+            ) {
                 return Some(value);
             }
         }
@@ -812,6 +925,7 @@ pub fn outcome_from_text(text: &str, session_id: Option<String>) -> MissionOutco
             items: Vec::new(),
             approval: None,
             handoff: None,
+            progress: None,
             session_id,
             error: Some("La misión terminó sin el bloque JSON del contrato.".into()),
         };
@@ -826,13 +940,206 @@ pub fn outcome_from_text(text: &str, session_id: Option<String>) -> MissionOutco
         items: value["items"].as_array().cloned().unwrap_or_default(),
         approval: value.get("approval").cloned(),
         handoff: value.get("handoff").cloned(),
+        progress: value.get("progress").cloned(),
         session_id,
         error: None,
     }
 }
 
+fn clipped(value: &str, max: usize) -> String {
+    value.trim().chars().take(max).collect()
+}
+
+fn string_list(value: Option<&Value>, max_items: usize, max_chars: usize) -> Vec<String> {
+    value
+        .and_then(|value| value.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str())
+                .map(|item| clipped(item, max_chars))
+                .filter(|item| !item.is_empty())
+                .take(max_items)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn push_unique(list: &mut Vec<String>, value: impl Into<String>) {
+    let value = value.into();
+    let value = clipped(&value, 600);
+    if !value.is_empty() && !list.iter().any(|item| item == &value) {
+        list.push(value);
+    }
+}
+
+fn progress_from_outcome(
+    mission: &Mission,
+    outcome: &MissionOutcome,
+    previous: Option<&MissionProgress>,
+    artifacts: &[String],
+    now: i64,
+) -> MissionProgress {
+    let raw = outcome.progress.as_ref().and_then(|value| value.as_object());
+    let mut progress = if let Some(raw) = raw {
+        let plan = raw
+            .get("plan")
+            .and_then(|value| value.as_array())
+            .map(|steps| {
+                steps
+                    .iter()
+                    .take(24)
+                    .map(|step| {
+                        let status = match step["status"].as_str().unwrap_or("pending").to_lowercase().as_str() {
+                            "doing" | "en curso" | "en progreso" => "doing",
+                            "done" | "hecho" | "completado" | "completo" => "done",
+                            "blocked" | "bloqueado" | "trabado" => "blocked",
+                            _ => "pending",
+                        };
+                        MissionStep {
+                            title: clipped(step["title"].as_str().unwrap_or_default(), 220),
+                            status: status.into(),
+                        }
+                    })
+                    .filter(|step| !step.title.is_empty())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        MissionProgress {
+            objective: clipped(raw.get("objective").and_then(|value| value.as_str()).unwrap_or_default(), 600),
+            plan,
+            done: string_list(raw.get("done"), 24, 500),
+            next: clipped(raw.get("next").and_then(|value| value.as_str()).unwrap_or_default(), 800),
+            blockers: string_list(raw.get("blockers"), 12, 500),
+            decisions: string_list(raw.get("decisions"), 12, 500),
+            artifacts: string_list(raw.get("artifacts"), 24, 500),
+            advanced: raw.get("advanced").and_then(|value| value.as_bool()).unwrap_or(false),
+            updated_at: now,
+        }
+    } else if let Some(previous) = previous {
+        MissionProgress {
+            objective: previous.objective.clone(),
+            plan: previous.plan.clone(),
+            done: previous.done.clone(),
+            next: previous.next.clone(),
+            blockers: Vec::new(),
+            decisions: previous.decisions.clone(),
+            artifacts: previous.artifacts.clone(),
+            advanced: false,
+            updated_at: now,
+        }
+    } else {
+        MissionProgress {
+            objective: mission.goal.clone(),
+            plan: Vec::new(),
+            done: Vec::new(),
+            next: String::new(),
+            blockers: Vec::new(),
+            decisions: Vec::new(),
+            artifacts: Vec::new(),
+            advanced: false,
+            updated_at: now,
+        }
+    };
+    if progress.objective.trim().is_empty() {
+        progress.objective = mission.goal.clone();
+    }
+    if progress.plan.is_empty() {
+        if let Some(previous) = previous {
+            progress.plan = previous.plan.clone();
+        }
+    }
+    if progress.next.trim().is_empty() {
+        progress.next = previous
+            .map(|previous| previous.next.clone())
+            .filter(|next| !next.trim().is_empty())
+            .unwrap_or_else(|| "Revisar el resultado de esta corrida y definir el próximo paso verificable.".into());
+    }
+    if progress.decisions.is_empty() {
+        if let Some(previous) = previous {
+            progress.decisions = previous.decisions.clone();
+        }
+    }
+    for url in artifacts {
+        push_unique(&mut progress.artifacts, url.clone());
+    }
+    match outcome.status {
+        ContractStatus::Blocked => {
+            let detail = outcome
+                .error
+                .clone()
+                .filter(|error| !error.trim().is_empty())
+                .unwrap_or_else(|| outcome.summary.clone());
+            push_unique(&mut progress.blockers, detail);
+        }
+        ContractStatus::NeedsHands => {
+            let detail = outcome
+                .handoff
+                .as_ref()
+                .and_then(|handoff| handoff["detail"].as_str())
+                .unwrap_or("La corrida necesita que el usuario intervenga.");
+            push_unique(&mut progress.blockers, detail);
+        }
+        ContractStatus::NeedsApproval => {
+            let detail = outcome
+                .approval
+                .as_ref()
+                .and_then(|approval| approval["title"].as_str())
+                .unwrap_or("Hay una aprobación pendiente.");
+            push_unique(&mut progress.blockers, format!("Aprobación pendiente: {detail}"));
+        }
+        ContractStatus::Ok => {}
+    }
+    if raw.is_none() {
+        progress.advanced = false;
+    } else if raw.and_then(|value| value.get("advanced").and_then(|value| value.as_bool())).is_none() {
+        progress.advanced = previous
+            .map(|previous| {
+                previous.plan != progress.plan
+                    || previous.done != progress.done
+                    || previous.objective != progress.objective
+                    || (previous.next != progress.next && !progress.next.trim().is_empty())
+            })
+            .unwrap_or_else(|| {
+                outcome.status == ContractStatus::Ok
+                    && (!progress.done.is_empty() || progress.plan.iter().any(|step| step.status == "done"))
+            });
+    }
+    if outcome.status != ContractStatus::Ok {
+        progress.advanced = false;
+    }
+    progress.plan.truncate(24);
+    progress.done.truncate(24);
+    progress.blockers.truncate(12);
+    progress.decisions.truncate(12);
+    progress.artifacts.truncate(24);
+    progress
+}
+
 fn build_prompt(mission: &Mission, playbook: Option<&str>, profile: Option<&str>, bot: Option<&str>) -> String {
     let playbook = playbook.unwrap_or("Sin playbook: seguí el objetivo, usá solo las herramientas indicadas en Computadora y respetá la política; pedí aprobación para acciones irreversibles.");
+    let chain = mission
+        .state
+        .runs
+        .first()
+        .map(|run| {
+            format!(
+                "## Corrida anterior\nId: {}\nEstado: {}\nSesión: {}\nResumen: {}\n",
+                run.id,
+                run.status,
+                run.session_id.as_deref().unwrap_or("sin sesión"),
+                clipped(run.summary.as_deref().unwrap_or("sin resumen"), 1200),
+            )
+        })
+        .unwrap_or_default();
+    let continuity = match &mission.state.progress {
+        Some(progress) => format!(
+            "## Estado del trabajo\nEsta no es la primera corrida. Partí de este estado. No repitas lo que ya está hecho.\n```json\n{}\n```\nContinuá por «next». Si el plan cambió, actualizalo y explicá por qué.\n",
+            serde_json::to_string_pretty(progress).unwrap_or_else(|_| "{}".into())
+        ),
+        None => "## Estado del trabajo\nPrimera corrida: no hay estado previo. Creá un plan breve y devolvé el estado al terminar.\n".into(),
+    };
+    let continuity = format!("{}{}", chain, continuity);
     let approved = mission
         .state
         .approved
@@ -873,9 +1180,9 @@ fn build_prompt(mission: &Mission, playbook: Option<&str>, profile: Option<&str>
         .map(|profile| format!("\n## Identidad de Mi Flufy\n{profile}\n"))
         .unwrap_or_default());
     let playbook = format!("{}{}", playbook, identity);
-    let playbook = format!("{}{}", playbook, triggers);
+    let playbook = format!("{}{}{}", continuity, playbook, triggers);
     format!(
-        "{MISSION_PROMPT}\n\n## Misión\nTítulo: {title}\nObjetivo: {goal}\n\n## Playbook\n{playbook}\n\n## Política\n- Lecturas: {reads}\n- Borradores: {drafts}\n- Acciones que envían/publican/pagan/borran: {commits}\n\n## Contrato de salida\nTerminá con un único bloque ```json\n{{\"status\":\"ok|blocked|needs-approval|needs-hands\",\"summary\":\"texto breve\",\"items\":[{{\"kind\":\"result\",\"title\":\"...\",\"body\":\"...\",\"untrusted\":false}}],\"approval\":{{\"title\":\"...\",\"preview\":\"...\",\"risk\":\"bajo|medio|alto\",\"step\":\"send|publish|pay|delete|other\"}},\"handoff\":{{\"reason\":\"captcha|2fa|permission|login|other\",\"detail\":\"...\",\"url\":\"...\"}}}}\n```\nNo agregues texto después del bloque. Si no hay nada que reportar, status ok con summary vacío y items vacío.",
+        "{MISSION_PROMPT}\n\n## Misión\nTítulo: {title}\nObjetivo: {goal}\n\n## Playbook\n{playbook}\n\n## Política\n- Lecturas: {reads}\n- Borradores: {drafts}\n- Acciones que envían/publican/pagan/borran: {commits}\n\n## Contrato de salida\nTerminá con un único bloque ```json\n{{\"status\":\"ok|blocked|needs-approval|needs-hands\",\"summary\":\"texto breve\",\"items\":[{{\"kind\":\"result\",\"title\":\"...\",\"body\":\"...\",\"untrusted\":false}}],\"approval\":{{\"title\":\"...\",\"preview\":\"...\",\"risk\":\"bajo|medio|alto\",\"step\":\"send|publish|pay|delete|other\"}},\"handoff\":{{\"reason\":\"captcha|2fa|permission|login|other\",\"detail\":\"...\",\"url\":\"...\"}},\"progress\":{{\"objective\":\"...\",\"plan\":[{{\"title\":\"...\",\"status\":\"pending|doing|done|blocked\"}}],\"done\":[\"...\"],\"next\":\"...\",\"blockers\":[\"...\"],\"decisions\":[\"...\"],\"artifacts\":[\"...\"],\"advanced\":true}}}}\n```\nNo agregues texto después del bloque. El bloque `progress` es obligatorio en todos los estados: es la memoria de la próxima corrida. Si no hay nada que reportar, status ok con summary vacío e items vacío, pero igual devolvé el estado actualizado.",
         title = mission.title,
         goal = mission.goal,
         playbook = playbook,
@@ -1132,6 +1439,10 @@ fn execute_with_model(app: &AppHandle, mission: &Mission, model_override: Option
     let mut last_review = now_ms();
     loop {
         std::thread::sleep(Duration::from_secs(POLL_SECS));
+        if crate::agent::bots::control_of(app, mission.bot_id.as_deref()) == "off" {
+            let _ = client.post(&format!("/session/{}/abort", session_id), json!({}));
+            return Err("El bot fue apagado y la corrida se detuvo.".into());
+        }
         let statuses = client.get("/session/status").unwrap_or(Value::Null);
         let busy = statuses[&session_id]["type"]
             .as_str()
@@ -1267,6 +1578,7 @@ fn execute_with_model(app: &AppHandle, mission: &Mission, model_override: Option
             items: Vec::new(),
             approval: None,
             handoff: None,
+            progress: None,
             session_id: Some(session_id),
             error: Some(error),
         });
@@ -1354,6 +1666,9 @@ fn apply(app: &AppHandle, mission: &Mission, outcome: MissionOutcome, project: &
     }
     artifact_urls.sort();
     artifact_urls.dedup();
+    let previous_progress = mission.state.progress.clone();
+    let progress = progress_from_outcome(mission, &outcome, previous_progress.as_ref(), &artifact_urls, now);
+    let previous_run_id = mission.state.runs.first().map(|run| run.id.clone());
     let mut approval_title_out: Option<String> = None;
     if outcome.status == ContractStatus::NeedsApproval {
         let approval = outcome.approval.as_ref();
@@ -1492,6 +1807,7 @@ fn apply(app: &AppHandle, mission: &Mission, outcome: MissionOutcome, project: &
     };
     let run = MissionRun {
         id: format!("{}-{}", mission.id, now),
+        previous_run_id,
         session_id: session.map(|id| id.to_string()),
         started_at: mission.updated_at.max(mission.created_at),
         finished_at: now,
@@ -1502,34 +1818,79 @@ fn apply(app: &AppHandle, mission: &Mission, outcome: MissionOutcome, project: &
             Some(outcome.summary.chars().take(SUMMARY_CHARS).collect())
         },
         error: outcome.error.clone(),
+        progress: Some(progress.clone()),
     };
 
-    let next_status = match outcome.status {
+    let bot_control = crate::agent::bots::control_of(app, mission.bot_id.as_deref());
+    let continuous = matches!(mission.schedule, MissionSchedule::Continuous { .. });
+    let mut no_progress_runs = mission.state.no_progress_runs;
+    let mut failures = mission.state.failures;
+    let mut paused_by_bot = false;
+    let mut next_status = match outcome.status {
         ContractStatus::Ok => "armed",
         ContractStatus::Blocked => "paused",
         ContractStatus::NeedsApproval => "waiting-approval",
         ContractStatus::NeedsHands => "waiting-hands",
     };
-    let next_run = if next_status == "queued" {
+    if outcome.status == ContractStatus::Ok {
+        failures = 0;
+        if progress.advanced {
+            no_progress_runs = 0;
+        } else {
+            no_progress_runs = no_progress_runs.saturating_add(1);
+            if continuous && no_progress_runs >= 3 {
+                next_status = "paused";
+            }
+        }
+        if bot_control != "playing" {
+            next_status = "paused";
+            paused_by_bot = true;
+        }
+    } else if outcome.status == ContractStatus::Blocked {
+        failures = failures.saturating_add(1);
+        if continuous && outcome.error.is_some() && failures < 3 {
+            next_status = "armed";
+        }
+    }
+    let pause_note = if paused_by_bot {
+        Some(if bot_control == "off" {
+            "El bot está apagado; no se programa la próxima corrida.".to_string()
+        } else {
+            "El bot está en pausa; no se programa la próxima corrida.".to_string()
+        })
+    } else if next_status == "paused" && continuous && outcome.status == ContractStatus::Ok {
+        Some("Pausada por falta de progreso en tres corridas seguidas. Revisá el estado y reanudá con una indicación.".to_string())
+    } else {
+        None
+    };
+    let cooldown = match mission.schedule {
+        MissionSchedule::Continuous { cooldown_minutes } => cooldown_minutes.max(1) as i64 * 60_000,
+        _ => 0,
+    };
+    let next_run = if next_status == "armed" {
+        if continuous {
+            Some(now + cooldown)
+        } else {
+            next_run_at(
+                &Mission {
+                    status: next_status.to_string(),
+                    ..mission.clone()
+                },
+                now,
+            )
+        }
+    } else if next_status == "queued" {
         Some(now + (mission.state.attempts.max(1) as i64 * 300_000).min(3_600_000))
     } else {
-        next_run_at(
-            &Mission {
-                status: next_status.to_string(),
-                ..mission.clone()
-            },
-            now,
-        )
+        None
     };
     update(app, &mission.id, |item| {
         item.status = next_status.to_string();
         item.state.last_run_at = Some(now);
         item.state.last_status = Some(format!("{:?}", outcome.status).to_lowercase());
-        item.state.last_error = if outcome.status == ContractStatus::Blocked {
-            Some(log_text.clone())
-        } else {
-            None
-        };
+        item.state.last_error = pause_note
+            .clone()
+            .or_else(|| if outcome.status == ContractStatus::Blocked { Some(log_text.clone()) } else { None });
         item.state.next_run_at = next_run;
         item.state.pending_inbox_id = first_item.clone();
         item.state.runs.push(run.clone());
@@ -1538,6 +1899,11 @@ fn apply(app: &AppHandle, mission: &Mission, outcome: MissionOutcome, project: &
         item.state.approved = None;
         item.state.approval_title = approval_title_out.clone();
         item.state.queued_at = if next_status == "queued" { Some(now) } else { None };
+        item.state.progress = Some(progress.clone());
+        item.state.no_progress_runs = no_progress_runs;
+        item.state.failures = failures;
+        item.state.paused_by_bot = paused_by_bot;
+        item.state.stop_requested = false;
         for url in &artifact_urls {
             if !item.artifacts.iter().any(|artifact| artifact["url"].as_str() == Some(url.as_str())) {
                 item.artifacts.push(json!({ "kind": "doc", "title": mission.title, "url": url, "verified": true }));
@@ -1675,6 +2041,82 @@ pub fn decide(app: &AppHandle, mission_id: &str, decision: &str, title: Option<&
     }
 }
 
+pub fn apply_bot_control(app: &AppHandle, bot_id: &str, control: &str) -> Result<(), String> {
+    if !matches!(control, "playing" | "paused" | "off") {
+        return Err("Control de bot inválido.".into());
+    }
+    let state = app.state::<MissionsState>();
+    let now = now_ms();
+    let mut changed_any = false;
+    {
+        let mut items = state.items.lock().unwrap();
+        for mission in items
+            .iter_mut()
+            .filter(|mission| mission.bot_id.as_deref().unwrap_or("flufy") == bot_id)
+        {
+            let continuous = matches!(mission.schedule, MissionSchedule::Continuous { .. });
+            match control {
+                "playing" => {
+                    if mission.state.paused_by_bot {
+                        mission.state.paused_by_bot = false;
+                        mission.state.stop_requested = false;
+                        mission.state.last_error = None;
+                        if mission.status == "paused" {
+                            mission.status = "armed".into();
+                            mission.state.next_run_at = if continuous {
+                                Some(now)
+                            } else {
+                                next_run_at(mission, now).or(Some(now))
+                            };
+                            mission.updated_at = now;
+                            let _ = persist(app, mission);
+                            changed_any = true;
+                        }
+                    }
+                }
+                "paused" => {
+                    if matches!(mission.status.as_str(), "armed" | "queued") {
+                        mission.status = "paused".into();
+                        mission.state.paused_by_bot = true;
+                        mission.state.next_run_at = None;
+                        mission.state.queued_at = None;
+                        mission.updated_at = now;
+                        let _ = persist(app, mission);
+                        changed_any = true;
+                    } else if mission.status == "running" {
+                        mission.state.paused_by_bot = true;
+                        mission.updated_at = now;
+                        let _ = persist(app, mission);
+                        changed_any = true;
+                    }
+                }
+                "off" => {
+                    if matches!(mission.status.as_str(), "armed" | "queued") {
+                        mission.status = "paused".into();
+                        mission.state.paused_by_bot = true;
+                        mission.state.next_run_at = None;
+                        mission.state.queued_at = None;
+                        mission.updated_at = now;
+                        let _ = persist(app, mission);
+                        changed_any = true;
+                    } else if mission.status == "running" {
+                        mission.state.paused_by_bot = true;
+                        mission.state.stop_requested = true;
+                        mission.updated_at = now;
+                        let _ = persist(app, mission);
+                        changed_any = true;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    if changed_any {
+        changed(app);
+    }
+    Ok(())
+}
+
 pub fn launch(app: &AppHandle, id: &str, _manual: bool) -> Result<(), String> {
     if crate::updates::installing(app) {
         return Err("Flufy se está actualizando; intentá cuando vuelva a abrirse.".into());
@@ -1694,6 +2136,15 @@ pub fn launch(app: &AppHandle, id: &str, _manual: bool) -> Result<(), String> {
             state.running.store(false, Ordering::SeqCst);
             return Err("La misión ya está activa.".into());
         }
+        let control = crate::agent::bots::control_of(app, mission.bot_id.as_deref());
+        if control != "playing" {
+            state.running.store(false, Ordering::SeqCst);
+            return Err(if control == "off" {
+                "El bot está apagado. Prendelo antes de correr esta misión.".into()
+            } else {
+                "El bot está en pausa. Reanudalo antes de correr esta misión.".into()
+            });
+        }
         let today = local_date(now);
         if mission.state.runs_date.as_deref() != Some(today.as_str()) {
             mission.state.runs_date = Some(today);
@@ -1705,6 +2156,9 @@ pub fn launch(app: &AppHandle, id: &str, _manual: bool) -> Result<(), String> {
         mission.state.session_id = None;
         mission.state.pending_inbox_id = None;
         mission.state.queued_at = None;
+        mission.state.next_run_at = None;
+        mission.state.paused_by_bot = false;
+        mission.state.stop_requested = false;
         mission.state.last_status = Some("running".into());
         mission.updated_at = now;
         let snapshot = mission.clone();
@@ -1733,7 +2187,9 @@ pub fn tick(app: &AppHandle) {
     let now = now_ms();
     let due = {
         let items = state.items.lock().unwrap();
-        due_mission(&items, now)
+        due_mission(&items, now, |mission| {
+            crate::agent::bots::control_of(app, mission.bot_id.as_deref()) == "playing"
+        })
     };
     if let Some(id) = due {
         {
@@ -1975,6 +2431,81 @@ mod tests {
     }
 
     #[test]
+    fn continuous_schedule_waits_the_configured_cooldown() {
+        let item = mission("armed", MissionSchedule::Continuous { cooldown_minutes: 7 });
+        assert_eq!(next_run_at(&item, 1_000_000), Some(1_000_000 + 7 * 60_000));
+    }
+
+    #[test]
+    fn continuous_rejects_a_zero_cooldown() {
+        let item = mission("armed", MissionSchedule::Continuous { cooldown_minutes: 0 });
+        assert!(validate(&item).is_err());
+    }
+
+    #[test]
+    fn prompt_includes_the_previous_work_state() {
+        let mut item = mission("armed", MissionSchedule::Continuous { cooldown_minutes: 5 });
+        item.state.progress = Some(MissionProgress {
+            objective: "Publicar la landing".into(),
+            plan: vec![MissionStep { title: "Escribir copy".into(), status: "done".into() }],
+            done: vec!["Escribir copy".into()],
+            next: "Publicar la landing".into(),
+            blockers: Vec::new(),
+            decisions: vec!["Usar la marca actual".into()],
+            artifacts: Vec::new(),
+            advanced: true,
+            updated_at: 1,
+        });
+        let prompt = build_prompt(&item, None, None, None);
+        assert!(prompt.contains("Estado del trabajo"));
+        assert!(prompt.contains("Publicar la landing"));
+        assert!(prompt.contains("No repitas"));
+        assert!(prompt.contains("\"progress\""));
+    }
+
+    #[test]
+    fn a_contract_progress_block_is_saved_and_marks_advance() {
+        let mut item = mission("armed", MissionSchedule::Daily { time: "08:30".into() });
+        item.state.progress = Some(MissionProgress {
+            objective: "Terminar el informe".into(),
+            plan: vec![MissionStep { title: "Leer datos".into(), status: "done".into() }],
+            done: vec!["Leer datos".into()],
+            next: "Escribir conclusiones".into(),
+            ..Default::default()
+        });
+        let outcome = outcome_from_text(
+            "```json\n{\"status\":\"ok\",\"summary\":\"Listo\",\"items\":[],\"progress\":{\"objective\":\"Terminar el informe\",\"plan\":[{\"title\":\"Leer datos\",\"status\":\"done\"},{\"title\":\"Escribir conclusiones\",\"status\":\"doing\"}],\"done\":[\"Leer datos\"],\"next\":\"Escribir conclusiones\",\"advanced\":true}}\n```",
+            Some("ses-1".into()),
+        );
+        let progress = progress_from_outcome(&item, &outcome, item.state.progress.as_ref(), &[], 10);
+        assert_eq!(outcome.status, ContractStatus::Ok);
+        assert!(outcome.progress.is_some());
+        assert!(progress.advanced);
+        assert_eq!(progress.next, "Escribir conclusiones");
+        assert_eq!(progress.plan.len(), 2);
+        assert!(outcome.progress.is_some());
+    }
+
+    #[test]
+    fn fallback_progress_keeps_the_previous_plan_when_the_agent_omits_state() {
+        let mut item = mission("armed", MissionSchedule::Continuous { cooldown_minutes: 5 });
+        let previous = MissionProgress {
+            objective: "Terminar el informe".into(),
+            plan: vec![MissionStep { title: "Leer datos".into(), status: "done".into() }],
+            done: vec!["Leer datos".into()],
+            next: "Escribir conclusiones".into(),
+            ..Default::default()
+        };
+        item.state.progress = Some(previous.clone());
+        let outcome = outcome_from_text("texto sin contrato", Some("ses-1".into()));
+        let progress = progress_from_outcome(&item, &outcome, Some(&previous), &[], 10);
+        assert!(!progress.advanced);
+        assert_eq!(progress.plan, previous.plan);
+        assert_eq!(progress.next, "Escribir conclusiones");
+        assert!(progress.blockers.iter().any(|item| item.contains("bloque JSON")));
+    }
+
+    #[test]
     fn due_respects_status_and_budget() {
         let now = Local.with_ymd_and_hms(2026, 6, 15, 10, 0, 0).single().unwrap().timestamp_millis();
         let mut item = mission("armed", MissionSchedule::Daily { time: "08:30".into() });
@@ -1982,15 +2513,15 @@ mod tests {
         item.budget.runs_per_day = 2;
         item.state.runs_date = Some(local_date(now));
         item.state.runs_today = 1;
-        assert_eq!(due_mission(&[item.clone()], now).as_deref(), Some("briefing"));
+        assert_eq!(due_mission(&[item.clone()], now, |_| true).as_deref(), Some("briefing"));
         item.state.runs_today = 2;
-        assert_eq!(due_mission(&[item.clone()], now).as_deref(), Some("briefing"));
+        assert_eq!(due_mission(&[item.clone()], now, |_| true).as_deref(), Some("briefing"));
         item.state.runs_today = 0;
         item.status = "queued".into();
         item.state.queued_at = Some(now);
-        assert_eq!(due_mission(&[item.clone()], now).as_deref(), Some("briefing"));
+        assert_eq!(due_mission(&[item.clone()], now, |_| true).as_deref(), Some("briefing"));
         item.status = "paused".into();
-        assert!(due_mission(&[item], now).is_none());
+        assert!(due_mission(&[item], now, |_| true).is_none());
     }
 
     #[test]

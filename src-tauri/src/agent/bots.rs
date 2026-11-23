@@ -30,6 +30,7 @@ pub struct Bot {
     pub autonomy: String,
     pub capabilities: BotCapabilities,
     pub enabled: bool,
+    pub control: String,
     pub color: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
@@ -48,6 +49,7 @@ impl Default for Bot {
             autonomy: "alta".into(),
             capabilities: BotCapabilities::defaults(),
             enabled: true,
+            control: "playing".into(),
             color: None,
             created_at: now,
             updated_at: now,
@@ -77,9 +79,40 @@ fn slug(name: &str) -> String {
 }
 
 fn load_one(path: &PathBuf) -> Option<Bot> {
-    let bot: Bot = serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
+    let raw = std::fs::read_to_string(path).ok()?;
+    let had_control = serde_json::from_str::<Value>(&raw)
+        .ok()
+        .and_then(|value| value.get("control").map(|control| control.is_string()))
+        .unwrap_or(false);
+    let mut bot: Bot = serde_json::from_str(&raw).ok()?;
     if bot.id.trim().is_empty() || bot.name.trim().is_empty() { return None; }
+    if !had_control || !["playing", "paused", "off"].contains(&bot.control.as_str()) {
+        bot.control = if bot.enabled { "playing".into() } else { "off".into() };
+    }
+    bot.enabled = bot.control != "off";
     Some(bot)
+}
+
+pub fn control_of(app: &AppHandle, id: Option<&str>) -> String {
+    get(app, id).map(|bot| bot.control).unwrap_or_else(|| "playing".into())
+}
+
+fn valid_control(value: &str) -> bool {
+    matches!(value, "playing" | "paused" | "off")
+}
+
+pub fn set_control(app: &AppHandle, id: &str, control: &str) -> Result<Bot, String> {
+    if !valid_control(control) {
+        return Err("El control del bot debe ser playing, paused u off.".into());
+    }
+    let mut bot = get(app, Some(id)).ok_or("No existe ese bot.")?;
+    bot.control = control.to_string();
+    bot.enabled = control != "off";
+    bot.updated_at = now_ms();
+    std::fs::create_dir_all(bots_dir(app)).map_err(|e| e.to_string())?;
+    crate::memory::atomic_write(&bot_path(app, &bot.id), &serde_json::to_string_pretty(&bot).map_err(|e| e.to_string())?)?;
+    emit_changed(app);
+    Ok(bot)
 }
 
 fn default_bot() -> Bot {
@@ -148,7 +181,13 @@ pub fn save(app: &AppHandle, input: &Value) -> Result<Bot, String> {
     bot.role = input["role"].as_str().unwrap_or("").chars().take(120).collect();
     bot.instructions = input["instructions"].as_str().unwrap_or("").chars().take(6000).collect();
     bot.autonomy = if input["autonomy"].as_str() == Some("manual") { "manual".into() } else { "alta".into() };
-    bot.enabled = input["enabled"].as_bool().unwrap_or(true);
+    let requested_control = input["control"].as_str().filter(|value| valid_control(value));
+    bot.control = requested_control
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            if input["enabled"].as_bool().unwrap_or(true) { "playing".into() } else { "off".into() }
+        });
+    bot.enabled = bot.control != "off";
     bot.color = input["color"].as_str().map(|value| value.chars().take(32).collect());
     if let Some(model) = input.get("model") {
         if model.is_null() {
@@ -180,6 +219,7 @@ pub fn save(app: &AppHandle, input: &Value) -> Result<Bot, String> {
     std::fs::create_dir_all(bots_dir(app)).map_err(|e| e.to_string())?;
     crate::memory::atomic_write(&bot_path(app, &bot.id), &serde_json::to_string_pretty(&bot).map_err(|e| e.to_string())?)?;
     emit_changed(app);
+    let _ = crate::agent::missions::apply_bot_control(app, &bot.id, &bot.control);
     Ok(bot)
 }
 
@@ -196,6 +236,19 @@ pub fn agent_bot_save(app: AppHandle, bot: Value) -> Result<Bot, String> {
 #[tauri::command]
 pub fn agent_bot_get(app: AppHandle, id: String) -> Option<Bot> {
     get(&app, Some(&id))
+}
+
+#[tauri::command]
+pub fn agent_bot_control(app: AppHandle, id: String, action: String) -> Result<Bot, String> {
+    let control = match action.as_str() {
+        "play" | "resume" => "playing",
+        "pause" => "paused",
+        "off" | "stop" => "off",
+        other => return Err(format!("Acción de bot desconocida: {other}")),
+    };
+    let bot = set_control(&app, &id, control)?;
+    crate::agent::missions::apply_bot_control(&app, &id, control)?;
+    Ok(bot)
 }
 
 #[allow(dead_code)]

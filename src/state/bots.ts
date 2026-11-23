@@ -1,5 +1,6 @@
 import { create } from "zustand"
 import { call, errorMessage, isTauri, onEvent } from "../lib/tauri"
+import { loadAgentMissions } from "./agentProfile"
 
 export type BotCapabilities = {
   browser: string
@@ -18,10 +19,13 @@ export type Bot = {
   autonomy: string
   capabilities: BotCapabilities
   enabled: boolean
+  control: string
   color?: string | null
   createdAt: number
   updatedAt: number
 }
+
+export type BotControlAction = "play" | "pause" | "resume" | "off"
 
 type BotsState = {
   bots: Bot[]
@@ -29,8 +33,10 @@ type BotsState = {
   loading: boolean
   error: string | null
   saving: string | null
+  controlling: string | null
   load: () => Promise<void>
   save: (bot: Partial<Bot>) => Promise<Bot | null>
+  control: (id: string, action: BotControlAction) => Promise<Bot | null>
 }
 
 let started = false
@@ -41,6 +47,7 @@ export const useBots = create<BotsState>((set, get) => ({
   loading: false,
   error: null,
   saving: null,
+  controlling: null,
   load: async () => {
     if (!isTauri) return
     set({ loading: true, error: null })
@@ -61,6 +68,19 @@ export const useBots = create<BotsState>((set, get) => ({
       return saved
     } catch (error) {
       set({ saving: null, error: errorMessage(error) })
+      return null
+    }
+  },
+  control: async (id, action) => {
+    if (!isTauri) return null
+    set({ controlling: id, error: null })
+    try {
+      const saved = await call<Bot>("agent_bot_control", { id, action })
+      await Promise.all([get().load(), loadAgentMissions()])
+      set({ controlling: null })
+      return saved
+    } catch (error) {
+      set({ controlling: null, error: errorMessage(error) })
       return null
     }
   },

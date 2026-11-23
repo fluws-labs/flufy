@@ -294,12 +294,14 @@ function draftSchedule(schedule?: AgentMissionSchedule): AgentMissionSchedule {
   if (schedule?.kind === "daily" && schedule.time) return schedule
   if (schedule?.kind === "interval" && schedule.hours > 0) return schedule
   if (schedule?.kind === "weekly" && schedule.time && Array.isArray(schedule.days) && schedule.days.length > 0) return schedule
+  if (schedule?.kind === "continuous" && schedule.cooldownMinutes > 0) return schedule
   return { kind: "daily", time: "08:30" }
 }
 
 function draftScheduleLabel(schedule: AgentMissionSchedule): string {
   if (schedule.kind === "daily") return `Todos los días a las ${schedule.time}`
   if (schedule.kind === "interval") return `Cada ${schedule.hours} horas`
+  if (schedule.kind === "continuous") return `Continuo, ${schedule.cooldownMinutes} minutos entre corridas`
   const days = schedule.days.map((day) => ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"][day] ?? "?").join(", ")
   return `${days} a las ${schedule.time}`
 }

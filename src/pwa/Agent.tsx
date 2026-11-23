@@ -10,8 +10,13 @@ type Mission = {
   status: string
   botId?: string | null
   artifacts?: Array<{ kind?: string; title?: string; url?: string; path?: string }>
-  schedule: { kind: string; time?: string; hours?: number; days?: number[] }
-  state: { nextRunAt?: number | null; lastStatus?: string | null }
+  schedule: { kind: string; time?: string; hours?: number; days?: number[]; cooldownMinutes?: number }
+  state: {
+    nextRunAt?: number | null
+    lastStatus?: string | null
+    progress?: { next?: string; advanced?: boolean; blockers?: string[] } | null
+    pausedByBot?: boolean
+  }
 }
 
 type BotCapabilities = { browser: string; desktop: boolean; files: boolean; terminal: boolean }
@@ -26,6 +31,7 @@ type Bot = {
   autonomy: string
   capabilities: BotCapabilities
   enabled: boolean
+  control: string
 }
 
 type BotDraft = {
@@ -38,6 +44,7 @@ type BotDraft = {
   autonomy: string
   capabilities: BotCapabilities
   enabled: boolean
+  control: string
 }
 
 type Check = { id: string; status: string; detail: string; fix?: string }
@@ -62,6 +69,7 @@ const CHECK: Record<string, string> = { ok: "OK", warn: "Revisar", fail: "Falta"
 function scheduleLabel(schedule: Mission["schedule"]): string {
   if (schedule.kind === "interval") return `Cada ${schedule.hours ?? 2} h`
   if (schedule.kind === "daily") return `Diaria ${schedule.time ?? ""}`
+  if (schedule.kind === "continuous") return `Continuo · ${schedule.cooldownMinutes ?? 5} min`
   return `Semanal ${(schedule.days ?? []).join(",")} ${schedule.time ?? ""}`
 }
 
@@ -90,6 +98,7 @@ function emptyBotDraft(): BotDraft {
     autonomy: "alta",
     capabilities: { browser: "borrowed", desktop: false, files: true, terminal: true },
     enabled: true,
+    control: "playing",
   }
 }
 
@@ -181,7 +190,7 @@ function BotEditor({ draft, models, saving, error, onChange, onClose, onSave }: 
           <BotToggle label="Escritorio" value={capabilities.desktop} onChange={(value) => setCapabilities({ desktop: value })} />
         </div>
       </div>
-      <BotToggle label="Bot activo" value={draft.enabled} onChange={(value) => set({ enabled: value })} />
+      <BotToggle label="Bot activo" value={draft.enabled} onChange={(value) => set({ enabled: value, control: value ? "playing" : "off" })} />
       <p className="muted bot-note">Las instrucciones y capacidades se usan en sus próximas misiones. Las rutinas nativas son del proyecto y no se asignan a bots.</p>
     </Sheet>
   )
@@ -250,6 +259,7 @@ export function AgentScreen({ back, open }: { back: () => void; open: (route: Ro
       autonomy: bot.autonomy || "alta",
       capabilities: { ...bot.capabilities },
       enabled: bot.enabled !== false,
+      control: bot.control ?? (bot.enabled === false ? "off" : "playing"),
     })
   }
 
@@ -258,7 +268,7 @@ export function AgentScreen({ back, open }: { back: () => void; open: (route: Ro
     setSavingBot(true)
     setBotError("")
     try {
-      await hub("POST", "/hub/agent/bots", {
+      await hub("POST", "/agent/bots", {
         bot: {
           id: botDraft.id,
           name: botDraft.name.trim(),
@@ -269,6 +279,7 @@ export function AgentScreen({ back, open }: { back: () => void; open: (route: Ro
           autonomy: botDraft.autonomy,
           capabilities: botDraft.capabilities,
           enabled: botDraft.enabled,
+          control: botDraft.enabled ? (botDraft.control === "paused" ? "paused" : "playing") : "off",
         },
       })
       await load()
@@ -278,6 +289,10 @@ export function AgentScreen({ back, open }: { back: () => void; open: (route: Ro
     } finally {
       setSavingBot(false)
     }
+  }
+
+  const controlBot = (bot: Bot, action: "play" | "pause" | "resume" | "off") => {
+    void post(`/agent/bots/${encodeURIComponent(bot.id)}/control`, `control-${bot.id}`, { action })
   }
 
   const bots = data?.bots ?? []
@@ -315,18 +330,30 @@ export function AgentScreen({ back, open }: { back: () => void; open: (route: Ro
               return (
                 <div className="card agent-card bot-card" key={bot.id}>
                   <div className="bot-card-head">
-                    <span className={`bot-avatar ${bot.enabled ? "on" : "off"}`}><Icon name="hubot" /></span>
+                    <span className={`bot-avatar ${bot.control === "playing" ? "on" : "off"}`}><Icon name="hubot" /></span>
                     <div className="card-text">
                       <strong>{bot.name}</strong>
                       <small>{bot.role || "Sin rol"} · {bot.model?.modelID || "modelo del agente"}{bot.fallbackModel?.modelID ? ` → ${bot.fallbackModel.modelID}` : ""}</small>
                       <div className="bot-meta">
-                        <span className={`bot-pill ${bot.enabled ? "on" : "off"}`}>{bot.enabled ? "Activo" : "Pausado"}</span>
+                        <span className={`bot-pill ${bot.control === "playing" ? "on" : "off"}`}>{bot.control === "playing" ? "En marcha" : bot.control === "paused" ? "En pausa" : "Apagado"}</span>
                         <span className="bot-pill">{bot.autonomy === "manual" ? "Manual" : "Autonomía alta"}</span>
                         <span className="bot-pill">{count} {count === 1 ? "misión" : "misiones"}</span>
                       </div>
                     </div>
                   </div>
                   <div className="agent-actions">
+                    <button type="button" className="icon-btn" title="Play" aria-label="Play" disabled={!!busy || bot.control === "playing"} onClick={() => controlBot(bot, "play")}>
+                      <Icon name="play" />
+                    </button>
+                    <button type="button" className="icon-btn" title="Pause" aria-label="Pause" disabled={!!busy || bot.control !== "playing"} onClick={() => controlBot(bot, "pause")}>
+                      <Icon name="debug-pause" />
+                    </button>
+                    <button type="button" className="icon-btn" title="Resume" aria-label="Resume" disabled={!!busy || bot.control !== "paused"} onClick={() => controlBot(bot, "resume")}>
+                      <Icon name="debug-continue" />
+                    </button>
+                    <button type="button" className="icon-btn" title="Off" aria-label="Off" disabled={!!busy || bot.control === "off"} onClick={() => controlBot(bot, "off")}>
+                      <Icon name="debug-stop" />
+                    </button>
                     <button type="button" className="btn btn-sm primary" onClick={() => editBot(bot)}>
                       <Icon name="edit" /> Editar bot
                     </button>
@@ -348,6 +375,9 @@ export function AgentScreen({ back, open }: { back: () => void; open: (route: Ro
                     {STATUS[mission.status] ?? mission.status} · {scheduleLabel(mission.schedule)} · Próxima: {nextLabel(mission.state.nextRunAt)}
                   </small>
                   <p>{mission.goal}</p>
+                  {mission.state.progress?.next && <small>Próximo paso: {mission.state.progress.next}</small>}
+                  {mission.state.progress?.blockers && mission.state.progress.blockers.length > 0 && <small className="bot-error">Bloqueo: {mission.state.progress.blockers[0]}</small>}
+                  {mission.state.pausedByBot && <small className="bot-error">En pausa por el control del bot.</small>}
                   {mission.state.lastStatus && <small>Último: {mission.state.lastStatus}</small>}
                   {mission.artifacts && mission.artifacts.length > 0 && (
                     <div className="agent-actions">

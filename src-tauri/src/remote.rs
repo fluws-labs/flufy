@@ -444,6 +444,26 @@ fn hub_api(app: &AppHandle, mut req: Request, url: &str, path: &str) {
             Err(error) => respond_json(req, 409, json!({ "error": error })),
         };
     }
+    if method == "POST" && path.starts_with("/hub/agent/bots/") && path.ends_with("/control") {
+        let id = path
+            .trim_start_matches("/hub/agent/bots/")
+            .trim_end_matches("/control")
+            .trim_end_matches('/');
+        let body = read_json(&mut req);
+        let action = body["action"].as_str().unwrap_or_default();
+        let control = match action {
+            "play" | "resume" => "playing",
+            "pause" => "paused",
+            "off" | "stop" => "off",
+            other => return respond_json(req, 400, json!({ "error": format!("Acción de bot desconocida: {other}") })),
+        };
+        return match crate::agent::bots::set_control(app, id, control)
+            .and_then(|bot| crate::agent::missions::apply_bot_control(app, id, control).map(|_| bot))
+        {
+            Ok(saved) => respond_json(req, 200, json!({ "bot": saved })),
+            Err(error) => respond_json(req, 409, json!({ "error": error })),
+        };
+    }
     if method == "POST" && path == "/hub/agent/missions" {
         let body = read_json(&mut req);
         let mission = match serde_json::from_value::<crate::agent::missions::Mission>(body["mission"].clone()) {

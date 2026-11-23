@@ -577,6 +577,7 @@ pub fn run() {
             agent::bots::agent_bots_list,
             agent::bots::agent_bot_get,
             agent::bots::agent_bot_save,
+            agent::bots::agent_bot_control,
             agent::missions::agent_mission_get,
             agent::missions::agent_mission_save,
             agent::missions::agent_mission_delete,

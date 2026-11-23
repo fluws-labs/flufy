@@ -2341,3 +2341,123 @@
   color: var(--fg-faint);
   font-size: 10.5px;
 }
+
+.mi-bot-transport {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-inset);
+}
+.mi-bot-transport .icon-button {
+  width: 26px;
+  height: 26px;
+}
+.mi-bot-transport .icon-button.danger {
+  color: var(--danger);
+}
+.mi-bot-control {
+  padding: 0 7px;
+  color: var(--fg-dim);
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.mi-bot-control.playing { color: var(--ok); }
+.mi-bot-control.paused { color: var(--warn); }
+.mi-bot-control.off { color: var(--fg-faint); }
+
+.mi-current-progress {
+  margin-top: 6px;
+}
+.mi-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.mi-progress-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.mi-progress-flag {
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+}
+.mi-progress-flag.advanced { color: var(--ok); background: rgba(80, 190, 120, 0.12); }
+.mi-progress-flag.stalled { color: var(--warn); background: rgba(230, 180, 70, 0.12); }
+.mi-progress-objective {
+  margin: 0;
+  color: var(--fg-dim);
+  font-size: 11.5px;
+}
+.mi-progress-plan {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.mi-progress-plan li {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  font-size: 11.5px;
+}
+.mi-progress-plan li > span:nth-child(2) {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.mi-progress-plan li.done > span:nth-child(2) {
+  color: var(--fg-dim);
+  text-decoration: line-through;
+}
+.mi-progress-plan li.blocked > span:nth-child(2) {
+  color: var(--warn);
+}
+.mi-progress-plan small {
+  color: var(--fg-faint);
+  font-size: 9.5px;
+}
+.mi-progress-next,
+.mi-progress-list {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-inset);
+}
+.mi-progress-next > span,
+.mi-progress-list > span {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--fg-faint);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.mi-progress-next p,
+.mi-progress-list p {
+  margin: 0;
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+.mi-progress-list.blocked {
+  border-color: rgba(230, 180, 70, 0.35);
+}
+.mi-progress-list.blocked p { color: var(--warn); }
+.mi-progress-list.done p { color: var(--fg-dim); }
+.mi-run-next {
+  margin: 4px 0 0 !important;
+  color: var(--fg-dim);
+  font-size: 10.5px;
+  -webkit-line-clamp: 2;
+}

@@ -3,7 +3,7 @@ use crate::memory;
 use serde_json::{json, Value};
 use tauri::AppHandle;
 
-pub const INSTRUCTIONS: &str = "Mi Flufy: identidad persistente y bandeja del agente. `agent_profile_get` lee el perfil (tono, idioma y en qué trabaja el usuario) y su estado; `agent_profile_set` lo actualiza con el texto completo. `agent_bots_list` lista los bots persistentes; `agent_bot_get` lee uno; `agent_bot_save` crea o edita un bot (nombre, rol, instrucciones, modelo, modelo de fallback, autonomía y capacidades) sin borrar sus misiones. Un bot es una identidad: no crea misiones por su cuenta. Las rutinas nativas (`routine_*`) son del proyecto, no de un bot; no las presentes como misiones del bot. `agent_missions_overview` lista las misiones y su bot dueño; `agent_mission_create` crea una misión programada y la asigna a un bot; `agent_mission_assign` cambia el bot dueño de una misión; `agent_mission_run` la ejecuta. `agent_log_append` deja una entrada durable en el log (decision, done, blocked, learned, blocked-guard). `agent_inbox_list` lista la bandeja; `agent_inbox_add` agrega una propuesta o resultado para que el usuario lo revise; `agent_inbox_ack` marca un ítem como visto. La bandeja no ejecuta nada: solo el usuario abre el chat. No escribas secretos en el perfil ni en el log; las escrituras son locales y atómicas.";
+pub const INSTRUCTIONS: &str = "Mi Flufy: identidad persistente y bandeja del agente. `agent_profile_get` lee el perfil (tono, idioma y en qué trabaja el usuario) y su estado; `agent_profile_set` lo actualiza con el texto completo. `agent_bots_list` lista los bots persistentes; `agent_bot_get` lee uno; `agent_bot_save` crea o edita un bot (nombre, rol, instrucciones, modelo, modelo de fallback, autonomía y capacidades) sin borrar sus misiones. `agent_bot_control` aplica play, pause, resume u off a todas las misiones de un bot: pause deja terminar la corrida actual, off la detiene y evita las siguientes. Un bot es una identidad: no crea misiones por su cuenta. Las rutinas nativas (`routine_*`) son del proyecto, no de un bot; no las presentes como misiones del bot. `agent_missions_overview` lista las misiones y su bot dueño; `agent_mission_create` crea una misión programada y la asigna a un bot; el horario puede ser interval, daily, weekly o continuous con `cooldownMinutes`; `agent_mission_assign` cambia el bot dueño de una misión; `agent_mission_run` la ejecuta. `agent_log_append` deja una entrada durable en el log (decision, done, blocked, learned, blocked-guard). `agent_inbox_list` lista la bandeja; `agent_inbox_add` agrega una propuesta o resultado para que el usuario lo revise; `agent_inbox_ack` marca un ítem como visto. La bandeja no ejecuta nada: solo el usuario abre el chat. No escribas secretos en el perfil ni en el log; las escrituras son locales y atómicas.";
 
 /// Prompt del agente `vigia`: solo lectura; propone como máximo un ítem por corrida con un bloque JSON.
 pub const VIGIA_PROMPT: &str = "Sos el Vigía de Flufy: observás y proponés, nunca actuás. Solo podés leer archivos, buscar en la memoria local y consultar el perfil y la bandeja; el motor rechaza cualquier otra acción. Mirá únicamente lo que el usuario ya autorizó en su perfil (responsabilidades permanentes), el log del agente y la bandeja. No repitas ítems que ya estén en la bandeja ni inventes problemas: si no hay nada relevante, respondé solo «sin novedades». Si encontrás algo útil, terminá tu respuesta con un único bloque ```json {\"title\":\"...\",\"body\":\"...\",\"untrusted\":false} ``` y nada después; `title` y `body` son obligatorios y no vacíos. Poné `untrusted: true` si el contenido viene de una página o documento externo. No modifiques archivos ni ejecutes comandos.";
@@ -59,6 +59,19 @@ pub fn definitions() -> Vec<Value> {
             }
         }),
         json!({
+            "name": "agent_bot_control",
+            "description": "Aplica play, pause, resume u off a todas las misiones de un bot. Pause deja terminar la corrida actual; off la detiene y evita las próximas.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "minLength": 1 },
+                    "action": { "type": "string", "enum": ["play", "pause", "resume", "off"] }
+                },
+                "required": ["id", "action"],
+                "additionalProperties": false
+            }
+        }),
+        json!({
             "name": "agent_missions_overview",
             "description": "Lista las misiones con su id, título, estado, bot dueño, proyecto y próxima corrida. Solo lectura.",
             "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
@@ -78,8 +91,9 @@ pub fn definitions() -> Vec<Value> {
                     "schedule": {
                         "type": "object",
                         "properties": {
-                            "kind": { "type": "string", "enum": ["interval", "daily", "weekly"] },
+                            "kind": { "type": "string", "enum": ["interval", "daily", "weekly", "continuous"] },
                             "hours": { "type": "integer", "minimum": 1 },
+                            "cooldownMinutes": { "type": "integer", "minimum": 1, "maximum": 1440 },
                             "time": { "type": "string", "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$" },
                             "days": { "type": "array", "items": { "type": "integer", "minimum": 0, "maximum": 6 } }
                         },
@@ -168,11 +182,25 @@ fn execute(app: &AppHandle, name: &str, args: &Value) -> Result<Value, String> {
             Ok(crate::agent::bots::get(app, Some(id)).map(|bot| json!({ "bot": bot })).unwrap_or_else(|| json!({ "bot": null })))
         }
         "agent_bot_save" => Ok(json!({ "bot": crate::agent::bots::save(app, args)? })),
+        "agent_bot_control" => {
+            let id = args["id"].as_str().ok_or("Falta el id del bot.")?;
+            let action = args["action"].as_str().ok_or("Falta la acción del bot.")?;
+            let control = match action {
+                "play" | "resume" => "playing",
+                "pause" => "paused",
+                "off" => "off",
+                other => return Err(format!("Acción de bot desconocida: {other}")),
+            };
+            let bot = crate::agent::bots::set_control(app, id, control)?;
+            crate::agent::missions::apply_bot_control(app, id, control)?;
+            Ok(json!({ "bot": bot }))
+        }
         "agent_missions_overview" => {
             let missions = crate::agent::missions::list(app).into_iter().map(|mission| json!({
                 "id": mission.id, "title": mission.title, "status": mission.status,
                 "botId": mission.bot_id, "project": mission.project, "nextRunAt": mission.state.next_run_at,
-                "lastStatus": mission.state.last_status
+                "lastStatus": mission.state.last_status, "schedule": mission.schedule,
+                "pausedByBot": mission.state.paused_by_bot, "nextStep": mission.state.progress.as_ref().map(|progress| progress.next.clone())
             })).collect::<Vec<_>>();
             Ok(json!({ "missions": missions }))
         }
@@ -262,10 +290,10 @@ mod tests {
     #[test]
     fn lists_the_six_agent_tools() {
         let names: Vec<String> = definitions().iter().filter_map(|tool| tool["name"].as_str().map(|s| s.to_string())).collect();
-        for expected in ["agent_profile_get", "agent_profile_set", "agent_bots_list", "agent_bot_get", "agent_bot_save", "agent_missions_overview", "agent_mission_create", "agent_mission_assign", "agent_mission_run", "agent_log_append", "agent_inbox_list", "agent_inbox_add", "agent_inbox_ack"] {
+        for expected in ["agent_profile_get", "agent_profile_set", "agent_bots_list", "agent_bot_get", "agent_bot_save", "agent_bot_control", "agent_missions_overview", "agent_mission_create", "agent_mission_assign", "agent_mission_run", "agent_log_append", "agent_inbox_list", "agent_inbox_add", "agent_inbox_ack"] {
             assert!(names.contains(&expected.to_string()), "Falta la herramienta {expected}");
         }
-        assert_eq!(names.len(), 13);    }
+        assert_eq!(names.len(), 14);    }
 
     #[test]
     fn profile_set_has_a_hard_size_limit() {

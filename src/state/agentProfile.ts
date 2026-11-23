@@ -24,6 +24,24 @@ export type AgentMissionSchedule =
   | { kind: "interval"; hours: number }
   | { kind: "daily"; time: string }
   | { kind: "weekly"; days: number[]; time: string }
+  | { kind: "continuous"; cooldownMinutes: number }
+
+export type AgentMissionStep = {
+  title: string
+  status: string
+}
+
+export type AgentMissionProgress = {
+  objective: string
+  plan: AgentMissionStep[]
+  done: string[]
+  next: string
+  blockers: string[]
+  decisions: string[]
+  artifacts: string[]
+  advanced: boolean
+  updatedAt: number
+}
 
 export type AgentMissionBrief = {
   headline: string
@@ -38,12 +56,14 @@ export type AgentMissionBrief = {
 
 export type AgentMissionRun = {
   id: string
+  previousRunId?: string | null
   sessionId?: string | null
   startedAt: number
   finishedAt: number
   status: string
   summary?: string | null
   error?: string | null
+  progress?: AgentMissionProgress | null
 }
 
 export type AgentMission = {
@@ -77,6 +97,11 @@ export type AgentMission = {
     pendingInboxId?: string | null
     runsToday: number
     runsDate?: string | null
+    progress?: AgentMissionProgress | null
+    pausedByBot?: boolean
+    stopRequested?: boolean
+    noProgressRuns?: number
+    failures?: number
   }
   createdAt: number
   updatedAt: number

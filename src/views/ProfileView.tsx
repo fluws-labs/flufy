@@ -40,6 +40,7 @@ import { notify } from "../state/toasts"
 function scheduleLabel(schedule: AgentMission["schedule"]): string {
   if (schedule.kind === "interval") return `Cada ${schedule.hours} h`
   if (schedule.kind === "daily") return `Diaria ${schedule.time}`
+  if (schedule.kind === "continuous") return `Continuo · ${schedule.cooldownMinutes} min entre corridas`
   const days = schedule.days.map((day) => ["L", "M", "X", "J", "V", "S", "D"][day] ?? "?").join("")
   return `${days} ${schedule.time}`
 }
@@ -375,10 +376,39 @@ function AutomationRow({ mission, selected, onSelect, project }: { mission: Agen
   )
 }
 
+function ProgressView({ progress }: { progress?: AgentMission["state"]["progress"] }) {
+  if (!progress) return <p className="mi-muted">Esta corrida no dejó un estado de trabajo. La próxima usa el resumen como fallback.</p>
+  return (
+    <div className="mi-progress">
+      <div className="mi-progress-head">
+        <strong>Estado del trabajo</strong>
+        <span className={`mi-progress-flag ${progress.advanced ? "advanced" : "stalled"}`}>{progress.advanced ? "Avanzó" : "Sin avance"}</span>
+      </div>
+      {progress.objective && <p className="mi-progress-objective">{progress.objective}</p>}
+      {progress.plan.length > 0 && (
+        <ol className="mi-progress-plan">
+          {progress.plan.map((step, index) => (
+            <li key={`${index}:${step.title}`} className={step.status}>
+              <span className={`mi-dot ${step.status === "done" ? "done" : step.status === "blocked" ? "blocked" : step.status === "doing" ? "running" : "armed"}`} />
+              <span>{step.title}</span>
+              <small>{step.status === "done" ? "Hecho" : step.status === "doing" ? "En curso" : step.status === "blocked" ? "Bloqueado" : "Pendiente"}</small>
+            </li>
+          ))}
+        </ol>
+      )}
+      {progress.next && <div className="mi-progress-next"><span>Próximo paso</span><p>{progress.next}</p></div>}
+      {progress.blockers.length > 0 && <div className="mi-progress-list blocked"><span>Bloqueos</span>{progress.blockers.map((item, index) => <p key={index}>{item}</p>)}</div>}
+      {progress.decisions.length > 0 && <div className="mi-progress-list"><span>Decisiones</span>{progress.decisions.map((item, index) => <p key={index}>{item}</p>)}</div>}
+      {progress.done.length > 0 && <div className="mi-progress-list done"><span>Hecho</span>{progress.done.map((item, index) => <p key={index}>{item}</p>)}</div>}
+    </div>
+  )
+}
+
 function RunReportDialog({ mission, run, onClose, onOpenSession }: { mission: AgentMission; run: AgentMissionRun; onClose: () => void; onOpenSession: (session: string) => void }) {
   const summary = agendaResult(run)
   const raw = (run.summary ?? "").trim()
   const showRaw = !!raw && raw !== summary
+  const parent = run.previousRunId ? mission.state.runs?.find((item) => item.id === run.previousRunId) : null
   return (
     <div className="mi-overlay" onMouseDown={onClose}>
       <div className="mi-dialog mi-run-dialog" role="dialog" aria-modal="true" aria-label={`Resumen de ${mission.title}`} onMouseDown={(event) => event.stopPropagation()}>
@@ -394,6 +424,14 @@ function RunReportDialog({ mission, run, onClose, onOpenSession }: { mission: Ag
           <span className="mi-eyebrow">RESUMEN</span>
           <p>{run.error || summary || "La corrida terminó sin un resumen escrito."}</p>
         </section>
+        <section className="mi-run-report-section">
+          <ProgressView progress={run.progress ?? null} />
+        </section>
+        {parent && (
+          <p className="mi-muted">
+            Sigue a la corrida del {agendaWhen(parent.finishedAt)} ({RUN_STATUS[parent.status] ?? parent.status}).
+          </p>
+        )}
         {showRaw && (
           <details className="mi-run-raw">
             <summary>Ver informe crudo</summary>
@@ -453,8 +491,9 @@ function RunHistory({ mission, onOpenSession }: { mission: AgentMission; onOpenS
             <span className={`mi-dot ${run.status}`} />
             <div>
               <strong>{RUN_STATUS[run.status] ?? run.status}</strong>
-              <small>{durationLabel(run.startedAt, run.finishedAt)} · {shortAgo(run.finishedAt)}</small>
+              <small>{durationLabel(run.startedAt, run.finishedAt)} · {shortAgo(run.finishedAt)}{run.previousRunId ? " · continúa la anterior" : ""}</small>
               {run.error ? <p className="mi-run-error">{run.error}</p> : summary ? <p>{summary}</p> : null}
+              {run.progress?.next && <p className="mi-run-next"><strong>Próximo:</strong> {run.progress.next}</p>}
               <div className="mi-run-actions">
                 <button type="button" className="btn btn-xs" onClick={() => setReport(run)}>Ver resumen</button>
                 {run.sessionId && <button type="button" className="btn btn-xs" onClick={() => onOpenSession(run.sessionId!)}>Reporte completo</button>}
@@ -482,7 +521,9 @@ function MissionDetail({ mission, models }: { mission: AgentMission; models: Pro
   const canBrief = !!session || (mission.state.runs?.length ?? 0) > 0 || inbox.some((item) => item.missionId === mission.id)
   const needsResume = mission.status === "paused" || mission.status === "waiting-hands" || (mission.status !== "waiting-approval" && mission.state.lastStatus === "blocked")
   const bots = useBots((s) => s.bots)
+  const controlBot = useBots((s) => s.control)
   const ownerId = mission.botId ?? "flufy"
+  const ownerControl = bots.find((bot) => bot.id === ownerId)?.control ?? "playing"
   const ownerOptions = [
     ...(bots.some((bot) => bot.id === "flufy") ? [] : [{ value: "flufy", label: "Mi Flufy" }]),
     ...bots.map((bot) => ({ value: bot.id, label: bot.name })),
@@ -510,7 +551,7 @@ function MissionDetail({ mission, models }: { mission: AgentMission; models: Pro
           <p>{mission.goal}</p>
         </div>
         <div className="mi-detail-actions">
-          <button type="button" className="btn btn-sm btn-primary" disabled={busy || mission.status === "running"} onClick={() => void runAgentMission(mission.id)}>
+          <button type="button" className="btn btn-sm btn-primary" title={ownerControl !== "playing" ? "El bot está en pausa o apagado" : undefined} disabled={busy || mission.status === "running" || ownerControl !== "playing"} onClick={() => void runAgentMission(mission.id)}>
             <Icon name={busy ? "loading" : "play"} spin={busy} /> Correr ahora
           </button>
           <button type="button" className="btn btn-sm" disabled={mission.status === "running"} onClick={toggle}>
@@ -607,24 +648,39 @@ function MissionDetail({ mission, models }: { mission: AgentMission; models: Pro
         </div>
       </div>
 
+      {mission.state.progress && (
+        <section className="mi-detail-section mi-current-progress" aria-label="Estado del trabajo">
+          <ProgressView progress={mission.state.progress} />
+        </section>
+      )}
+
       {needsResume && (
         <div className="mi-alert" role="note">
           <Icon name="warning" />
           <div>
-            <strong>{mission.status === "waiting-approval" ? "Espera tu aprobación." : "La misión está pausada."}</strong>
-            <p>{mission.state.lastError || "Revisá el chat, contá qué decidiste y reanudá la misión."}</p>
-            <div className="mi-resume-form">
-              <input
-                className="agent-input"
-                value={resumeNote}
-                placeholder="Tu respuesta o decisión (opcional)"
-                onChange={(event) => setResumeNote(event.target.value)}
-              />
-              <button type="button" className="btn btn-xs btn-primary" disabled={busy} onClick={() => void resumeAgentMission(mission.id, resumeNote).then(() => setResumeNote(""))}>
-                <Icon name={busy ? "loading" : "play"} spin={busy} /> Reanudar
-              </button>
-              <button type="button" className="btn btn-xs" onClick={() => openMissionChat(mission, currentProject)} disabled={!session}>Abrir chat</button>
-            </div>
+            <strong>{mission.status === "waiting-approval" ? "Espera tu aprobación." : mission.state.pausedByBot ? "El bot está en pausa." : "La misión está pausada."}</strong>
+            <p>{mission.state.lastError || (mission.state.pausedByBot ? "Reanudá el bot para que vuelva a arrancar." : "Revisá el chat, contá qué decidiste y reanudá la misión.")}</p>
+            {mission.state.pausedByBot ? (
+              <div className="mi-resume-form">
+                <button type="button" className="btn btn-xs btn-primary" onClick={() => void controlBot(ownerId, "resume")}>
+                  <Icon name="debug-continue" /> Reanudar bot
+                </button>
+                <button type="button" className="btn btn-xs" onClick={() => openMissionChat(mission, currentProject)} disabled={!session}>Abrir chat</button>
+              </div>
+            ) : (
+              <div className="mi-resume-form">
+                <input
+                  className="agent-input"
+                  value={resumeNote}
+                  placeholder="Tu respuesta o decisión (opcional)"
+                  onChange={(event) => setResumeNote(event.target.value)}
+                />
+                <button type="button" className="btn btn-xs btn-primary" disabled={busy} onClick={() => void resumeAgentMission(mission.id, resumeNote).then(() => setResumeNote(""))}>
+                  <Icon name={busy ? "loading" : "play"} spin={busy} /> Reanudar
+                </button>
+                <button type="button" className="btn btn-xs" onClick={() => openMissionChat(mission, currentProject)} disabled={!session}>Abrir chat</button>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -838,6 +894,8 @@ function BotRoutines({ bot, routines, missions, onOpenMission, onConverted }: { 
 function BotDetailPanel({ initial, routines, onSaved, onClose, onSelectMission, onCreateMission }: { initial?: Bot | null; routines: Routine[]; onSaved: (bot: Bot) => void; onClose: () => void; onSelectMission: (mission: AgentMission) => void; onCreateMission: (botId: string) => void }) {
   const models = useAgent((s) => s.models)
   const save = useBots((s) => s.save)
+  const controlBot = useBots((s) => s.control)
+  const controlling = useBots((s) => s.controlling)
   const missions = useAgentProfile((s) => s.missions)
   const botMissions = initial ? missions.filter((mission) => (mission.botId ?? "flufy") === initial.id) : []
   const [name, setName] = useState(initial?.name ?? "")
@@ -851,8 +909,19 @@ function BotDetailPanel({ initial, routines, onSaved, onClose, onSelectMission, 
   const [terminal, setTerminal] = useState(initial?.capabilities?.terminal !== false)
   const [desktop, setDesktop] = useState(initial?.capabilities?.desktop === true)
   const [enabled, setEnabled] = useState(initial?.enabled !== false)
+  const [control, setControl] = useState(initial?.control ?? (initial?.enabled === false ? "off" : "playing"))
   const [busy, setBusy] = useState(false)
   const [tab, setTab] = useState<"agenda" | "misiones" | "rutinas" | "configuracion">(initial ? "agenda" : "configuracion")
+
+  const sendControl = async (action: "play" | "pause" | "resume" | "off") => {
+    if (!initial || controlling) return
+    const saved = await controlBot(initial.id, action)
+    if (saved) {
+      setControl(saved.control)
+      setEnabled(saved.enabled)
+      onSaved(saved)
+    }
+  }
 
   const submit = async () => {
     if (!name.trim() || busy) return
@@ -867,6 +936,7 @@ function BotDetailPanel({ initial, routines, onSaved, onClose, onSelectMission, 
       autonomy,
       capabilities: { browser, files, terminal, desktop },
       enabled,
+      control: enabled ? (control === "paused" ? "paused" : "playing") : "off",
     })
     setBusy(false)
     if (saved) {
@@ -884,6 +954,23 @@ function BotDetailPanel({ initial, routines, onSaved, onClose, onSelectMission, 
           <p>{initial?.role || "Una identidad persistente con sus propias instrucciones, modelo y capacidades."}</p>
         </div>
         <div className="mi-detail-actions">
+          {initial && (
+            <div className="mi-bot-transport" role="group" aria-label="Control del bot">
+              <button type="button" className="icon-button" title="Play" aria-label="Play" disabled={control === "playing" || Boolean(controlling)} onClick={() => void sendControl("play")}>
+                <Icon name="play" />
+              </button>
+              <button type="button" className="icon-button" title="Pause" aria-label="Pause" disabled={control !== "playing" || Boolean(controlling)} onClick={() => void sendControl("pause")}>
+                <Icon name="debug-pause" />
+              </button>
+              <button type="button" className="icon-button" title="Resume" aria-label="Resume" disabled={control !== "paused" || Boolean(controlling)} onClick={() => void sendControl("resume")}>
+                <Icon name="debug-continue" />
+              </button>
+              <button type="button" className="icon-button danger" title="Off" aria-label="Off" disabled={control === "off" || Boolean(controlling)} onClick={() => void sendControl("off")}>
+                <Icon name="debug-stop" />
+              </button>
+              <span className={`mi-bot-control ${control}`}>{control === "playing" ? "En marcha" : control === "paused" ? "En pausa" : "Apagado"}</span>
+            </div>
+          )}
           {initial && <button type="button" className="btn btn-sm btn-primary" onClick={() => onCreateMission(initial.id)}><Icon name="add" /> Nueva misión</button>}
           <button type="button" className="btn btn-sm" onClick={onClose}>Volver</button>
         </div>
@@ -926,7 +1013,7 @@ function BotDetailPanel({ initial, routines, onSaved, onClose, onSelectMission, 
             <Toggle checked={files} label="Archivos" onChange={setFiles} />
             <Toggle checked={terminal} label="Terminal" onChange={setTerminal} />
             <Toggle checked={desktop} label="Escritorio" onChange={setDesktop} />
-            <Toggle checked={enabled} label="Activo" onChange={setEnabled} />
+            <Toggle checked={enabled} label="Activo" onChange={(value) => { setEnabled(value); setControl(value ? "playing" : "off") }} />
           </div>
           <div className="agent-form-actions">
             <button type="button" className="btn btn-sm btn-primary" disabled={!name.trim() || busy} onClick={() => void submit()}>
@@ -990,7 +1077,7 @@ function BotsSection({ selectedId, onSelect, onNew }: { selectedId?: string | nu
           <button key={bot.id} type="button" className={`mi-bot-row${selectedId === bot.id ? " selected" : ""}`} onClick={() => onSelect(bot.id)}>
             <span className="mi-bot-avatar" style={bot.color ? { background: bot.color } : undefined}><Icon name="hubot" /></span>
             <span className="mi-row-main"><strong>{bot.name}</strong><small>{bot.role || "Sin rol"} · {bot.model?.modelID || "modelo del agente"}{bot.fallbackModel?.modelID ? ` → ${bot.fallbackModel.modelID}` : ""}</small></span>
-            <span className={`mi-dot ${bot.enabled ? "armed" : "paused"}`} />
+            <span className={`mi-dot ${bot.control === "playing" ? "armed" : "paused"}`} />
           </button>
         ))}
       </div>
@@ -1115,9 +1202,10 @@ function SettingsPanel({ onClose }: { onClose: () => void }) {
 function NewMissionDialog({ models, botId, botName, onCreate, onClose }: { models: ProviderModel[]; botId: string; botName?: string; onCreate: (mission: AgentMission) => void; onClose: () => void }) {
   const [title, setTitle] = useState("")
   const [goal, setGoal] = useState("")
-  const [scheduleKind, setScheduleKind] = useState<"daily" | "interval">("daily")
+  const [scheduleKind, setScheduleKind] = useState<"daily" | "interval" | "continuous">("daily")
   const [time, setTime] = useState("08:30")
   const [hours, setHours] = useState(3)
+  const [cooldown, setCooldown] = useState(5)
   const [modelChoice, setModelChoice] = useState("")
   const [saving, setSaving] = useState(false)
 
@@ -1129,7 +1217,11 @@ function NewMissionDialog({ models, botId, botName, onCreate, onClose }: { model
       title: title.trim(),
       goal: goal.trim(),
       status: "armed",
-      schedule: scheduleKind === "interval" ? { kind: "interval", hours: every } : { kind: "daily", time },
+      schedule: scheduleKind === "interval"
+        ? { kind: "interval", hours: every }
+        : scheduleKind === "continuous"
+          ? { kind: "continuous", cooldownMinutes: Math.min(1440, Math.max(1, Math.round(cooldown) || 5)) }
+          : { kind: "daily", time },
       policy: { reads: "auto", drafts: "auto", commits: "approval" },
       model: parseModelKey(modelChoice),
       autonomy: "alta",
@@ -1157,15 +1249,22 @@ function NewMissionDialog({ models, botId, botName, onCreate, onClose }: { model
             <span>Frecuencia</span>
             <Select
               value={scheduleKind}
-              options={[{ value: "daily", label: "Todos los días" }, { value: "interval", label: "Cada X horas" }]}
-              onChange={(value) => setScheduleKind(value as "daily" | "interval")}
+              options={[
+                { value: "daily", label: "Todos los días" },
+                { value: "interval", label: "Cada X horas" },
+                { value: "continuous", label: "Continuo: al terminar vuelve a empezar" },
+              ]}
+              onChange={(value) => setScheduleKind(value as "daily" | "interval" | "continuous")}
             />
           </label>
           {scheduleKind === "daily" ? (
             <label className="agent-inline-field"><span>Hora</span><input className="agent-input" type="time" value={time} onChange={(event) => setTime(event.target.value)} /></label>
-          ) : (
+          ) : scheduleKind === "interval" ? (
             <label className="agent-inline-field"><span>Cada</span><input className="agent-input" type="number" min={1} max={720} value={hours} onChange={(event) => setHours(Number(event.target.value) || 1)} /><span>horas</span></label>
+          ) : (
+            <label className="agent-inline-field"><span>Esperar</span><input className="agent-input" type="number" min={1} max={1440} value={cooldown} onChange={(event) => setCooldown(Number(event.target.value) || 1)} /><span>minutos entre corridas</span></label>
           )}
+          {scheduleKind === "continuous" && <p className="mi-muted">Cada corrida recibe el estado de la anterior y continúa desde el próximo paso. Se pausa sola si no avanza tres veces, si queda bloqueada o si pide aprobación.</p>}
           <label className="agent-inline-field"><span>Modelo</span><MissionModelSelect value={modelChoice} models={models} onChange={setModelChoice} /></label>
           <div className="agent-form-actions">
             <button type="button" className="btn btn-sm btn-primary" disabled={!title.trim() || !goal.trim() || saving} onClick={() => void create()}>
