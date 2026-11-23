@@ -546,7 +546,7 @@ pub fn context_for_url(url: Option<&str>) -> Value {
         let session = super::tasks::current(app).map(|t| t.session).unwrap_or_default();
         let workspace = crate::teams::browser_session(app, &session);
         if super::browse::enabled(app, &workspace) {
-            return super::browse::context_for_url(&session, url);
+            return super::browse::context_for_url(&workspace, url);
         }
     }
     if !status().connected { return json!({"url":url, "pageId":null, "hint":"Conexión con Chrome sin verificar; usá list_pages."}); }
@@ -631,9 +631,6 @@ fn call_session_recovery_inner(session: &str, workspace: &str, name: &str, mut a
     // registry did not mark the run as recoverable.
     let auto_recover = mission_workspace || (recover && workspace.starts_with("team:") && original_name(name) == "list_pages");
     args["_guillecode"] = json!({ "session": workspace, "actor": session, "autoRecover": auto_recover });
-    if workspace.starts_with("team:") && recover && original_name(name)=="list_pages" {
-        super::internal_browser::open_actor(crate::proc::app().ok_or("Flufy no está iniciado")?,workspace,session,None,false)?;
-    }
     if super::internal_browser::selected(workspace) {
         let profile = super::internal_browser::profile(workspace)?;
         let app = crate::proc::app().ok_or("GuilleCode no está iniciado")?;
@@ -651,7 +648,9 @@ fn call_session_recovery_inner(session: &str, workspace: &str, name: &str, mut a
     }
     if let Some(app) = crate::proc::app() {
         if super::browse::enabled(app, workspace) {
-            return Ok(super::browse::call_session(session, name, args));
+            // Teams share the chat's tab group even when each member calls from
+            // its own session; the workspace is also the Browse identity.
+            return Ok(super::browse::call_session(workspace, name, args));
         }
     }
     call(name, args)
@@ -761,7 +760,8 @@ pub async fn browser_workspace(app: tauri::AppHandle, session: String, page_id: 
     super::gate(&app)?;
     if !super::config(&app).browser { return Err("El navegador está desactivado".into()); }
     let quiet = quiet.unwrap_or(false);
-    tauri::async_runtime::spawn_blocking(move || workspace(&session, page_id, quiet)).await.map_err(|e| e.to_string())?
+    let owner = crate::teams::browser_session(&app, &session);
+    tauri::async_runtime::spawn_blocking(move || workspace(&owner, page_id, quiet)).await.map_err(|e| e.to_string())?
 }
 
 // Inspecciona siempre el Chrome del usuario, aunque la conversación esté usando
@@ -772,10 +772,11 @@ pub async fn browser_chrome_workspace(app: tauri::AppHandle, session: String) ->
     super::gate(&app)?;
     if !super::config(&app).browser { return Err("El navegador está desactivado".into()); }
     tauri::async_runtime::spawn_blocking(move || {
-        if super::browse::enabled(&app, &session) {
-            return super::browse::workspace(&app, &session, false);
+        let owner = crate::teams::browser_session(&app, &session);
+        if super::browse::enabled(&app, &owner) {
+            return super::browse::workspace(&app, &owner, false);
         }
-        let result = call("list_pages", json!({ "_guillecode": { "session": session, "action": "inspect" } }))?;
+        let result = call("list_pages", json!({ "_guillecode": { "session": owner, "action": "inspect" } }))?;
         if failed(&result) { return Err(text_of(&result)); }
         serde_json::from_str(&text_of(&result)).map_err(|e| format!("No se pudo leer el espacio de Chrome: {}", e))
     }).await.map_err(|e| e.to_string())?
