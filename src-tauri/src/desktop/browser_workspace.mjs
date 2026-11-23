@@ -111,7 +111,12 @@ export class Workspaces {
       while (Object.keys(workspace.actors).length > 128) delete workspace.actors[Object.keys(workspace.actors)[0]]
     }
     // A recycled windowId is not identity on its own: a target must survive.
-    const survives = () => !!workspace && Array.isArray(workspace.targets) && pages.some(p => workspace.targets.includes(p.target) && (meta.isolated || p.windowId === workspace.windowId))
+    // Mission windows are opened by Flufy itself, so the dedicated window is
+    // the identity even if Chrome replaces its initial about:blank target.
+    const missionScoped = meta.session === 'mission' || meta.session === 'mission-own'
+    const survives = () => !!workspace && Array.isArray(workspace.targets) && pages.some(p =>
+      (workspace.targets.includes(p.target) && (meta.isolated || p.windowId === workspace.windowId)) ||
+      (missionScoped && !meta.isolated && p.windowId === workspace.windowId))
     const valid = survives()
     const owned = () => valid ? pages.filter(p => meta.isolated ? !meta.actor || workspace.owners?.[p.target] === meta.actor : p.windowId === workspace.windowId) : []
     if (valid) {
