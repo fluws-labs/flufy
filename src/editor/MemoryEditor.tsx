@@ -9,7 +9,7 @@ import { confirmAction } from "../components/Dialog"
 import { Icon } from "../components/ui"
 
 const KINDS = { decision: "Decisión", convencion: "Convención", gotcha: "Gotcha", failure: "Intento fallido", nota: "Nota" }
-type OpenNote = { id: string; title: string; kind: string; body: string; source: string }
+type OpenNote = { id: string; title: string; kind: string; body: string; source: string; status?: string; stale?: boolean }
 
 function when(value: string): string {
   if (!value) return ""
@@ -84,13 +84,27 @@ export function MemoryEditor() {
       if (result.error || typeof result.content !== "string") throw new Error(result.error ?? "No se pudo abrir esta entrada")
       if (entry.kind === "tasks") {
         const task = JSON.parse(result.content)
-        const full: MemoryTask = { id: entry.id, title: task.title ?? "", updated: task.updatedAt ?? "", directory: task.directory ?? root, progress: task.progress ?? "", lastUser: task.lastUser ?? "", source: task.source ?? "agent" }
+        const full: MemoryTask = {
+          id: entry.id,
+          title: task.title ?? "",
+          updated: task.updatedAt ?? "",
+          directory: task.directory ?? root,
+          progress: task.progress ?? "",
+          lastUser: task.lastUser ?? "",
+          source: task.source ?? "agent",
+          summary: typeof task.summary === "string" ? task.summary : "",
+          next: typeof task.next === "string" ? task.next : "",
+          files: Array.isArray(task.files) ? task.files.filter((file: unknown) => typeof file === "string") : [],
+          plan: Array.isArray(task.plan) ? task.plan.filter((step: { content?: unknown }) => typeof step?.content === "string") : [],
+          compacted: !!task.compacted,
+          compactedAt: typeof task.compactedAt === "string" ? task.compactedAt : "",
+        }
         setOpenTask(full)
         return full
       }
       const meta = useMemory.getState().data.notes.find((note) => note.id === entry.id)
       const body = result.content.replace(/^---[\s\S]*?\n---\r?\n?/, "").trim()
-      setOpenNote({ id: entry.id, title: meta?.title ?? entry.id, kind: meta?.kind ?? "nota", body, source: meta?.source ?? "agent" })
+      setOpenNote({ id: entry.id, title: meta?.title ?? entry.id, kind: meta?.kind ?? "nota", body, source: meta?.source ?? "agent", status: meta?.status, stale: meta?.stale })
     } catch (e) {
       if (version === readVersion.current) notify.error(errorMessage(e))
     }
@@ -147,10 +161,12 @@ export function MemoryEditor() {
   }
 
   const continueTask = (task: MemoryTask) => {
+    const state = task.summary || task.progress
     const prompt = [
       `Continuá con el trabajo «${task.title || task.id}».`,
       task.lastUser ? `\nÚltimo pedido: ${task.lastUser}` : "",
-      task.progress ? `\n\nProgreso previo:\n${task.progress}` : "",
+      state ? `\n\nEstado guardado:\n${state}` : "",
+      task.next ? `\n\nPróximo paso: ${task.next}` : "",
       "\n\nSeguí desde el próximo paso pendiente. Confirmá qué falta antes de cambiar de dirección.",
     ].join("")
     useLayout.getState().toggleAgent(true)
@@ -200,12 +216,31 @@ export function MemoryEditor() {
               </>
             ) : (
               <>
-                <p className="memory-hint">Estado guardado automáticamente al terminar cada turno de esa conversación. Podés corregirlo o eliminarlo si algo quedó mal.</p>
+                <p className="memory-hint">Estado guardado automáticamente al terminar cada turno. Incluye plan, archivos y, si el motor compactó, el resumen del contexto. Podés corregirlo o eliminarlo si algo quedó mal.</p>
                 <small className="memory-when">{openTask.directory}</small>
                 <label className="memory-hint">Último pedido</label>
                 <Text value={openTask.lastUser} empty="Sin pedido registrado." />
-                <label className="memory-hint">Progreso</label>
-                <Text value={openTask.progress} empty="Sin progreso registrado." />
+                <label className="memory-hint">Estado guardado</label>
+                <Text value={openTask.summary || openTask.progress} empty="Sin progreso registrado." />
+                {openTask.plan && openTask.plan.length > 0 && (
+                  <>
+                    <label className="memory-hint">Plan</label>
+                    <Text value={openTask.plan.map((step) => `${step.status === "completed" ? "[x]" : step.status === "in_progress" ? "[>]" : "[ ]"} ${step.content}`).join("\n")} empty="" />
+                  </>
+                )}
+                {openTask.next && (
+                  <>
+                    <label className="memory-hint">Próximo paso</label>
+                    <Text value={openTask.next} empty="" />
+                  </>
+                )}
+                {openTask.files && openTask.files.length > 0 && (
+                  <>
+                    <label className="memory-hint">Archivos</label>
+                    <Text value={openTask.files.join("\n")} empty="" />
+                  </>
+                )}
+                {openTask.compacted && <p className="memory-hint">Contexto compactado{openTask.compactedAt ? ` el ${when(openTask.compactedAt)}` : ""}.</p>}
                 <div className="memory-card-actions">
                   <button type="button" className="btn btn-primary" disabled={busy} onClick={() => continueTask(openTask)}><Icon name="debug-start" /> Continuar en un chat nuevo</button>
                   <button type="button" className="btn" disabled={busy} onClick={() => setTaskEditing(true)}><Icon name="edit" /> Editar</button>
@@ -237,6 +272,8 @@ export function MemoryEditor() {
             <div className="memory-card-head">
               <strong>{openNote.title}</strong>
               <span className="memory-kind">{KINDS[openNote.kind as keyof typeof KINDS] ?? openNote.kind}</span>
+              {openNote.status && openNote.status !== "active" && <span className="memory-kind">Reemplazada</span>}
+              {openNote.stale && <span className="memory-kind">Revisar</span>}
               <Origin source={openNote.source} />
             </div>
             {noteEditing ? (
@@ -279,7 +316,7 @@ export function MemoryEditor() {
             {data.notes.length === 0 && !creatingNote && <p className="memory-empty">No hay notas todavía. El agente las crea solo; vos podés agregar una cuando quieras.</p>}
             {data.notes.map((note) => (
               <div key={note.id} className="memory-card">
-                <div className="memory-card-head"><strong>{note.title}</strong><span className="memory-kind">{KINDS[note.kind as keyof typeof KINDS] ?? note.kind}</span><Origin source={note.source} /><span className="memory-when">{when(note.updated)}</span></div>
+                <div className="memory-card-head"><strong>{note.title}</strong><span className="memory-kind">{KINDS[note.kind as keyof typeof KINDS] ?? note.kind}</span>{note.status && note.status !== "active" && <span className="memory-kind">Reemplazada</span>}{note.stale && <span className="memory-kind">Revisar</span>}<Origin source={note.source} /><span className="memory-when">{when(note.updated)}</span></div>
                 {note.preview && <p className="memory-line">{note.preview}</p>}
                 <div className="memory-card-actions">
                   <button type="button" className="btn" onClick={() => void openEntry({ kind: "notes", id: note.id })}><Icon name="book" /> Leer</button>

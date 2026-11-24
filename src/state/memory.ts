@@ -6,8 +6,23 @@ import { useLayout } from "./layout"
 import { useProject } from "./project"
 import { notify } from "./toasts"
 
-export type MemoryNote = { id: string; title: string; kind: string; updated: string; preview: string; source: string }
-export type MemoryTask = { id: string; title: string; updated: string; directory: string; progress: string; lastUser: string; source: string }
+export type MemoryNote = { id: string; title: string; kind: string; updated: string; preview: string; source: string; status?: string; stale?: boolean }
+export type MemoryTaskStep = { content: string; status: string }
+export type MemoryTask = {
+  id: string
+  title: string
+  updated: string
+  directory: string
+  progress: string
+  lastUser: string
+  source: string
+  summary?: string
+  next?: string
+  files?: string[]
+  plan?: MemoryTaskStep[]
+  compacted?: boolean
+  compactedAt?: string
+}
 export type MemoryOverview = { scope: string; slug: string; preferences: string; overview: string; notes: MemoryNote[]; tasks: MemoryTask[] }
 export type MemorySection = "tasks" | "notes" | "preferences" | "overview"
 export type MemoryEntry = { kind: "notes" | "tasks"; id: string }

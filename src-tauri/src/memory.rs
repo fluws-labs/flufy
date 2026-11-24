@@ -8,10 +8,17 @@ use std::sync::Mutex;
 use tauri::{AppHandle, Manager};
 
 const CONFIG_FILE: &str = "memory-config.json";
+const SCOPES_FILE: &str = "scopes.json";
 const DIGEST_MAX: usize = 7000;
 const BODY_MAX: usize = 200_000;
 const FIELD_MAX: usize = 4_000;
-const CAPTURE_MESSAGES: usize = 60;
+const CHECKPOINT_MESSAGES: usize = 120;
+const CHECKPOINT_FILES: usize = 16;
+const CHECKPOINT_COMMANDS: usize = 8;
+const CHECKPOINT_ARTIFACTS: usize = 8;
+const CHECKPOINT_SUMMARY_MAX: usize = 1600;
+const NOTE_STALE_DAYS: i64 = 180;
+const SCOPES_MAX: usize = 200;
 pub const PROFILE_MAX: usize = 8_000;
 pub const LOG_TEXT_MAX: usize = 4_000;
 pub const LOG_KINDS: &[&str] = &["decision", "done", "blocked", "learned", "blocked-guard"];
@@ -26,7 +33,7 @@ pub fn instructions() -> &'static str {
     INSTRUCTIONS
 }
 
-const INSTRUCTIONS: &str = "Memoria local de Flufy: conocimiento y trabajos compartidos entre chats, ventanas y modelos, guardados solo en esta PC. Usá `memory_search` para encontrar decisiones, convenciones o intentos fallidos antes de asumir; `memory_list` para ver notas y trabajos del proyecto; `memory_read` para leer el detalle; `memory_write` para dejar una decisión, convención o aprendizaje durable (no changelog); `memory_delete` para quitarlo. Si no sabés el `scope`, omitilo: se usa el proyecto de la ventana principal. La memoria se inyecta sola al empezar cada conversación; no hace falta pedirla.";
+const INSTRUCTIONS: &str = "Memoria local de Flufy: conocimiento y trabajos compartidos entre chats, ventanas y modelos, guardados solo en esta PC. Usá `memory_search` para encontrar decisiones, convenciones o intentos fallidos antes de asumir: por defecto busca en el proyecto actual y `scope:\"*\"` busca en todos. `memory_list` lista notas y trabajos; `memory_read` lee el detalle; `memory_write` deja una decisión durable (no changelog) y acepta `supersedes` con los ids de las notas que reemplaza, que dejan de inyectarse. `memory_delete` borra una nota. Si no sabés el `scope`, omitilo: se usa el proyecto de la ventana principal. Cada conversación guarda un checkpoint con objetivo, plan, archivos y resumen; la memoria se inyecta sola al empezar cada turno.";
 
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -69,6 +76,124 @@ pub fn root(app: &AppHandle) -> PathBuf {
 
 pub fn agent_root(app: &AppHandle) -> PathBuf {
     root(app).join("agent")
+}
+
+fn normalize_path(path: &Path) -> String {
+    let text = path.to_string_lossy().replace('\\', "/");
+    // En Windows canonicalize devuelve `//?/C:/...`; el plugin no ve ese prefijo.
+    let text = text.strip_prefix("//?/").or_else(|| text.strip_prefix("//./")).unwrap_or(&text);
+    text.trim_end_matches('/').to_lowercase()
+}
+
+fn sha_hex(value: &str, bytes: usize) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(value.as_bytes());
+    hasher.finalize().iter().take(bytes).map(|byte| format!("{:02x}", byte)).collect()
+}
+
+fn hash8(value: &str) -> String {
+    sha_hex(value, 4)
+}
+
+/// Un worktree comparte la memoria del proyecto principal: su `.git` es un
+/// archivo que apunta a `<principal>/.git/worktrees/<nombre>`.
+fn worktree_main_root(dir: &Path) -> Option<PathBuf> {
+    let dot = dir.join(".git");
+    if !dot.is_file() {
+        return None;
+    }
+    let text = fs::read_to_string(&dot).ok()?;
+    let gitdir = text
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("gitdir:").map(str::trim))?;
+    let gitdir = PathBuf::from(gitdir);
+    let gitdir = if gitdir.is_absolute() { gitdir } else { dir.join(gitdir) };
+    let normalized = gitdir.to_string_lossy().replace('\\', "/");
+    let marker = normalized.to_ascii_lowercase().find("/.git/worktrees/")?;
+    let root = normalized[..marker].trim_end_matches('/');
+    if root.is_empty() {
+        return None;
+    }
+    let root = PathBuf::from(root);
+    Some(fs::canonicalize(&root).unwrap_or(root))
+}
+
+/// Raíz estable para la memoria de un proyecto. Mapea subcarpetas y worktrees
+/// al repositorio principal, en lugar de usar el último segmento de la ruta.
+pub fn project_root(directory: &str) -> PathBuf {
+    if directory.trim().is_empty() {
+        return PathBuf::new();
+    }
+    let dir = fs::canonicalize(directory).unwrap_or_else(|_| PathBuf::from(directory));
+    let mut candidate = dir.as_path();
+    for _ in 0..6 {
+        let dot = candidate.join(".git");
+        if dot.is_dir() {
+            return candidate.to_path_buf();
+        }
+        if dot.is_file() {
+            return worktree_main_root(candidate).unwrap_or_else(|| candidate.to_path_buf());
+        }
+        let Some(parent) = candidate.parent() else { break };
+        candidate = parent;
+    }
+    dir
+}
+
+fn read_scope_root(dir: &Path) -> Option<String> {
+    fs::read_to_string(dir.join("_scope.json"))
+        .ok()
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        .and_then(|value| value["root"].as_str().map(|root| root.to_string()))
+}
+
+fn workspace_name_at(workspaces: &Path, project: &Path) -> String {
+    let base = {
+        let path = project.to_string_lossy();
+        slug(&path)
+    };
+    let needle = normalize_path(project);
+    let direct = workspaces.join(&base);
+    if !direct.exists() {
+        // Reclamar la carpeta desde el inicio evita que otro proyecto con el
+        // mismo nombre la adopte después como si fuera legacy.
+        let _ = write_text(&direct.join("_scope.json"), &json!({ "root": needle, "updated": now() }).to_string());
+        return base;
+    }
+    match read_scope_root(&direct) {
+        Some(existing) if existing == needle => return base,
+        // Carpeta legacy sin marcador: se adopta una vez. Si otro proyecto con
+        // el mismo nombre ya la reclamó, el marcador evita mezclar memorias.
+        None => {
+            let _ = write_text(&direct.join("_scope.json"), &json!({ "root": needle, "updated": now() }).to_string());
+            return base;
+        }
+        _ => {}
+    }
+    let mut hashed = format!("{}-{}", base, hash8(&needle));
+    let mut hashed_dir = workspaces.join(&hashed);
+    if hashed_dir.exists() {
+        match read_scope_root(&hashed_dir) {
+            Some(existing) if existing == needle => return hashed,
+            None => {}
+            Some(_) => {
+                hashed = format!("{}-{}", base, sha_hex(&needle, 8));
+                hashed_dir = workspaces.join(&hashed);
+                if hashed_dir.exists() {
+                    if read_scope_root(&hashed_dir).as_deref() == Some(needle.as_str()) {
+                        return hashed;
+                    }
+                }
+            }
+        }
+    }
+    let _ = write_text(&hashed_dir.join("_scope.json"), &json!({ "root": needle, "updated": now() }).to_string());
+    hashed
+}
+
+fn workspace_name(app: &AppHandle, project: &Path) -> String {
+    workspace_name_at(&root(app).join("workspaces"), project)
 }
 
 pub(crate) fn atomic_write(path: &Path, content: &str) -> Result<(), String> {
@@ -276,11 +401,63 @@ fn slug(value: &str) -> String {
 }
 
 fn default_scope(app: &AppHandle) -> String {
-    ensure_server(app).map(|c| c.worktree).unwrap_or_default()
+    ensure_server(app)
+        .map(|c| project_root(&c.worktree).to_string_lossy().to_string())
+        .unwrap_or_default()
+}
+
+fn scopes_path(app: &AppHandle) -> PathBuf {
+    root(app).join(SCOPES_FILE)
+}
+
+/// Registro raíz de proyecto → carpeta de workspace. El plugin del motor lo usa
+/// para resolver worktrees sin duplicar la detección de `.git` en JavaScript.
+fn remember_scope(app: &AppHandle, project: &Path, workspace: &str) {
+    let path = scopes_path(app);
+    let mut map: BTreeMap<String, Value> = fs::read_to_string(&path)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default();
+    let key = normalize_path(project);
+    let entry = json!({ "workspace": workspace, "updated": now() });
+    if map.get(&key) == Some(&entry) {
+        return;
+    }
+    map.insert(key, entry);
+    while map.len() > SCOPES_MAX {
+        let Some(oldest) = map
+            .iter()
+            .min_by(|a, b| a.1["updated"].as_str().unwrap_or("").cmp(b.1["updated"].as_str().unwrap_or("")))
+            .map(|(key, _)| key.clone())
+        else {
+            break;
+        };
+        map.remove(&oldest);
+    }
+    let _ = write_text(&path, &serde_json::to_string_pretty(&map).unwrap_or_default());
+}
+
+fn workspace_roots(app: &AppHandle) -> Vec<String> {
+    let mut roots: Vec<String> = fs::read_to_string(scopes_path(app))
+        .ok()
+        .and_then(|text| serde_json::from_str::<BTreeMap<String, Value>>(&text).ok())
+        .map(|map| map.keys().cloned().collect())
+        .unwrap_or_default();
+    if let Ok(entries) = fs::read_dir(root(app).join("workspaces")) {
+        for entry in entries.flatten() {
+            if let Some(root) = read_scope_root(&entry.path()) {
+                roots.push(root);
+            }
+        }
+    }
+    roots.sort();
+    roots.dedup();
+    roots
 }
 
 fn workspace_dir(app: &AppHandle, scope: &str) -> PathBuf {
-    root(app).join("workspaces").join(slug(scope))
+    let project = project_root(scope);
+    root(app).join("workspaces").join(workspace_name(app, &project))
 }
 
 fn notes_dir(app: &AppHandle, scope: &str) -> PathBuf {
@@ -292,12 +469,15 @@ fn tasks_dir(app: &AppHandle, scope: &str) -> PathBuf {
 }
 
 fn ensure_workspace(app: &AppHandle, scope: &str) {
-    let dir = workspace_dir(app, scope);
+    let project = project_root(scope);
+    let workspace = workspace_name(app, &project);
+    remember_scope(app, &project, &workspace);
+    let dir = root(app).join("workspaces").join(&workspace);
     let _ = fs::create_dir_all(dir.join("notes"));
     let _ = fs::create_dir_all(dir.join("tasks"));
     let overview = dir.join("_overview.md");
     if !overview.exists() {
-        let name = scope.replace('\\', "/").trim_end_matches('/').rsplit('/').next().unwrap_or("Proyecto").to_string();
+        let name = workspace.clone();
         let _ = fs::write(&overview, format!("# {}\n\n- (qué es este proyecto, arquitectura y convenciones que el agente debe saber)\n", name));
     }
 }
@@ -386,6 +566,8 @@ struct NoteView {
     updated: String,
     preview: String,
     source: String,
+    status: String,
+    stale: bool,
 }
 
 #[derive(Serialize)]
@@ -398,6 +580,14 @@ struct TaskView {
     progress: String,
     last_user: String,
     source: String,
+    summary: String,
+    next: String,
+    compacted: bool,
+}
+
+fn note_is_stale(updated: &str) -> bool {
+    let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(updated) else { return false };
+    parsed.with_timezone(&chrono::Utc) < chrono::Utc::now() - chrono::Duration::days(NOTE_STALE_DAYS)
 }
 
 fn note_views(app: &AppHandle, scope: &str) -> Vec<NoteView> {
@@ -410,16 +600,24 @@ fn note_views(app: &AppHandle, scope: &str) -> Vec<NoteView> {
         }
         let content = read_text(&path);
         let meta = frontmatter(&content);
+        let status = meta.get("status").cloned().unwrap_or_else(|| "active".to_string());
+        let updated = meta.get("updated").cloned().unwrap_or_default();
         out.push(NoteView {
             id: path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default(),
             title: meta.get("title").cloned().unwrap_or_else(|| first_line(&content)),
             kind: meta.get("type").cloned().unwrap_or_else(|| "nota".to_string()),
-            updated: meta.get("updated").cloned().unwrap_or_default(),
             preview: first_line(&body_of(&content)),
             source: meta.get("source").cloned().unwrap_or_else(|| "agent".to_string()),
+            stale: status == "active" && note_is_stale(&updated),
+            status,
+            updated,
         });
     }
-    out.sort_by(|a, b| b.updated.cmp(&a.updated));
+    out.sort_by(|a, b| {
+        let a_inactive = a.status != "active";
+        let b_inactive = b.status != "active";
+        a_inactive.cmp(&b_inactive).then_with(|| b.updated.cmp(&a.updated))
+    });
     out
 }
 
@@ -433,12 +631,16 @@ fn task_views(app: &AppHandle, scope: &str) -> Vec<TaskView> {
         }
         let Ok(text) = fs::read_to_string(&path) else { continue };
         let Ok(value) = serde_json::from_str::<Value>(&text) else { continue };
+        let progress: String = value["progress"].as_str().unwrap_or_default().chars().take(300).collect();
         out.push(TaskView {
             id: value["id"].as_str().unwrap_or_default().to_string(),
             title: value["title"].as_str().unwrap_or_default().to_string(),
             updated: value["updatedAt"].as_str().unwrap_or_default().to_string(),
             directory: value["directory"].as_str().unwrap_or_default().to_string(),
-            progress: value["progress"].as_str().unwrap_or_default().chars().take(300).collect(),
+            summary: value["summary"].as_str().map(|summary| summary.chars().take(300).collect()).unwrap_or_else(|| progress.clone()),
+            next: value["next"].as_str().unwrap_or_default().to_string(),
+            compacted: value["compacted"].as_bool().unwrap_or(false),
+            progress,
             last_user: value["lastUser"].as_str().unwrap_or_default().to_string(),
             source: value["source"].as_str().unwrap_or("agent").to_string(),
         });
@@ -450,7 +652,7 @@ fn task_views(app: &AppHandle, scope: &str) -> Vec<TaskView> {
 fn render_digest(app: &AppHandle, scope: &str) {
     let prefs = read_text(&root(app).join("global").join("_preferences.md"));
     let overview = read_text(&workspace_dir(app, scope).join("_overview.md"));
-    let notes = note_views(app, scope);
+    let notes: Vec<NoteView> = note_views(app, scope).into_iter().filter(|note| note.status == "active").collect();
     let tasks = task_views(app, scope);
     let prefs_body = body_of(&prefs);
     let overview_body = body_of(&overview);
@@ -489,11 +691,12 @@ fn render_digest(app: &AppHandle, scope: &str) {
     if !notes.is_empty() {
         lines.push("## Notas y decisiones".into());
         for note in notes.iter().take(12) {
-            lines.push(format!("- **{}** ({}) — {}", note.title, note.kind, note.preview));
+            let stale = if note.stale { " [revisar]" } else { "" };
+            lines.push(format!("- **{}** ({}) - {}{}", note.title, note.kind, note.preview, stale));
         }
         lines.push(String::new());
     }
-    lines.push("Usá `memory_search`, `memory_list` y `memory_read` para el detalle; `memory_write` para dejar una decisión durable.".into());
+    lines.push("Usá `memory_search`, `memory_list` y `memory_read` para el detalle; `memory_write` para dejar una decisión durable y `supersedes` para retirar la que reemplaza.".into());
 
     let digest = truncate_chars(&lines.join("\n"), DIGEST_MAX);
     write_text(&path, &digest);
@@ -507,11 +710,19 @@ fn truncate_chars(value: &str, max: usize) -> String {
 }
 
 fn extract_text(parts: &Value) -> String {
+    extract_text_with(parts, false)
+}
+
+fn extract_text_all(parts: &Value) -> String {
+    extract_text_with(parts, true)
+}
+
+fn extract_text_with(parts: &Value, include_synthetic: bool) -> String {
     parts
         .as_array()
         .map(|list| {
             list.iter()
-                .filter(|p| p["type"] == "text" && p["synthetic"] != true)
+                .filter(|p| p["type"] == "text" && (include_synthetic || p["synthetic"] != true))
                 .filter_map(|p| p["text"].as_str())
                 .collect::<Vec<_>>()
                 .join("\n")
@@ -521,6 +732,188 @@ fn extract_text(parts: &Value) -> String {
         .chars()
         .take(FIELD_MAX)
         .collect()
+}
+
+fn add_unique(list: &mut Vec<String>, value: &str, max: usize) {
+    let value = value.trim();
+    if value.is_empty() || list.len() >= max || list.iter().any(|item| item == value) {
+        return;
+    }
+    list.push(value.chars().take(400).collect());
+}
+
+fn first_line_of(text: &str) -> String {
+    text.lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("")
+        .chars()
+        .take(240)
+        .collect()
+}
+
+fn input_path(input: &Value) -> Option<String> {
+    ["filePath", "path", "file", "filename"]
+        .iter()
+        .find_map(|key| input[*key].as_str().filter(|value| !value.trim().is_empty()).map(|value| value.trim().to_string()))
+}
+
+fn patch_paths(text: &str) -> Vec<String> {
+    text.lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            ["*** Update File:", "*** Add File:", "*** Move to:", "*** Delete File:"]
+                .iter()
+                .find_map(|prefix| line.strip_prefix(prefix).map(|rest| rest.trim().to_string()))
+                .filter(|path| !path.is_empty())
+        })
+        .collect()
+}
+
+fn url_list(text: &str) -> Vec<String> {
+    let Ok(regex) = regex::Regex::new(r"https?://[^\s)<>\]]+") else { return Vec::new() };
+    regex
+        .find_iter(text)
+        .map(|found| found.as_str().trim_end_matches([',', '.', ';', ':']).to_string())
+        .collect()
+}
+
+/// Checkpoint determinista de una conversación: no hace otra llamada al modelo.
+/// Si el motor compactó el historial, conserva ese resumen como contexto durable.
+pub fn checkpoint_from_messages(title: &str, messages: &Value, todos: &Value) -> Value {
+    let mut first_user = String::new();
+    let mut last_user = String::new();
+    let mut last_assistant = String::new();
+    let mut compaction_summary = String::new();
+    let mut compacted_at: Option<String> = None;
+    let mut turns = 0u64;
+    let mut files: Vec<String> = Vec::new();
+    let mut commands: Vec<Value> = Vec::new();
+    let mut artifacts: Vec<String> = Vec::new();
+
+    for message in messages.as_array().into_iter().flatten() {
+        let role = message["info"]["role"].as_str().unwrap_or("");
+        let summary = message["info"]["summary"].as_bool().unwrap_or(false);
+        let text = if summary { extract_text_all(&message["parts"]) } else { extract_text(&message["parts"]) };
+        if role == "user" && !text.is_empty() {
+            turns += 1;
+            if first_user.is_empty() {
+                first_user = text.clone();
+            }
+            last_user = text;
+        } else if role == "assistant" && !text.is_empty() {
+            for url in url_list(&text) {
+                add_unique(&mut artifacts, &url, CHECKPOINT_ARTIFACTS);
+            }
+            if summary {
+                compaction_summary = text;
+                compacted_at = message["info"]["time"]["completed"].as_i64().and_then(|ms| {
+                    chrono::DateTime::<chrono::Utc>::from_timestamp_millis(ms)
+                        .map(|date| date.format("%Y-%m-%dT%H:%M:%SZ").to_string())
+                });
+            } else {
+                last_assistant = text;
+            }
+        }
+        for part in message["parts"].as_array().into_iter().flatten() {
+            if part["type"] == "file" {
+                if let Some(name) = part["filename"].as_str() {
+                    add_unique(&mut files, name, CHECKPOINT_FILES);
+                }
+            }
+            if part["type"] != "tool" {
+                continue;
+            }
+            let tool = part["tool"].as_str().unwrap_or("");
+            let input = &part["state"]["input"];
+            if matches!(tool, "edit" | "write" | "apply_patch" | "patch") {
+                if let Some(path) = input_path(input) {
+                    add_unique(&mut files, &path, CHECKPOINT_FILES);
+                }
+                if tool == "apply_patch" {
+                    if let Some(patch) = input["patchText"].as_str() {
+                        for path in patch_paths(patch) {
+                            add_unique(&mut files, &path, CHECKPOINT_FILES);
+                        }
+                    }
+                }
+            }
+            if matches!(tool, "bash" | "terminal_run") {
+                let command = input["command"].as_str().unwrap_or("").trim();
+                if !command.is_empty() {
+                    commands.push(json!({
+                        "command": command.chars().take(240).collect::<String>(),
+                        "ok": part["state"]["status"].as_str() != Some("error"),
+                    }));
+                    if commands.len() > CHECKPOINT_COMMANDS {
+                        commands.remove(0);
+                    }
+                }
+            }
+        }
+    }
+
+    let mut plan: Vec<Value> = Vec::new();
+    let mut done: Vec<String> = Vec::new();
+    for todo in todos.as_array().into_iter().flatten() {
+        let content = todo["content"].as_str().unwrap_or("").trim();
+        if content.is_empty() {
+            continue;
+        }
+        let status = todo["status"].as_str().unwrap_or("pending");
+        plan.push(json!({ "content": content, "status": status }));
+        if status == "completed" {
+            done.push(content.to_string());
+        }
+    }
+    let next = plan
+        .iter()
+        .find(|step| step["status"] == "in_progress")
+        .or_else(|| plan.iter().find(|step| step["status"] == "pending"))
+        .and_then(|step| step["content"].as_str())
+        .unwrap_or("")
+        .to_string();
+
+    let objective = first_line_of(&last_user);
+    let mut summary = String::new();
+    if !objective.is_empty() {
+        summary.push_str(&format!("Objetivo: {}\n", objective));
+    }
+    if !done.is_empty() {
+        summary.push_str(&format!("Hecho: {}\n", truncate_chars(&done.join("; "), 500)));
+    } else if !last_assistant.is_empty() {
+        summary.push_str(&format!("Hecho: {}\n", truncate_chars(&first_line_of(&last_assistant), 400)));
+    }
+    if !next.is_empty() {
+        summary.push_str(&format!("Próximo: {}\n", next));
+    }
+    if !files.is_empty() {
+        summary.push_str(&format!("Archivos: {}\n", files.join(", ")));
+    }
+    if !compaction_summary.is_empty() {
+        summary.push_str(&format!("\nContexto compactado:\n{}", truncate_chars(&compaction_summary, 900)));
+    }
+    let summary = truncate_chars(summary.trim(), CHECKPOINT_SUMMARY_MAX);
+
+    json!({
+        "schema": 2,
+        "title": title,
+        "objective": objective,
+        "openedWith": truncate_chars(&first_user, 600),
+        "lastUser": truncate_chars(&last_user, FIELD_MAX),
+        "lastAssistant": truncate_chars(&last_assistant, FIELD_MAX),
+        "progress": summary,
+        "summary": summary,
+        "next": next,
+        "plan": plan,
+        "done": done,
+        "files": files,
+        "commands": commands,
+        "artifacts": artifacts,
+        "turns": turns,
+        "compacted": !compaction_summary.is_empty(),
+        "compactedAt": compacted_at,
+    })
 }
 
 pub fn capture(app: &AppHandle, session: &str) {
@@ -534,43 +927,45 @@ pub fn capture(app: &AppHandle, session: &str) {
     if info["parentID"].is_string() {
         return;
     }
-    let scope = info["directory"].as_str().filter(|s| !s.is_empty()).unwrap_or(&directory).to_string();
-    if scope.is_empty() {
+    let session_dir = info["directory"]
+        .as_str()
+        .filter(|value| !value.is_empty())
+        .unwrap_or(&directory)
+        .to_string();
+    if session_dir.is_empty() {
         return;
     }
     let title = info["title"].as_str().unwrap_or("").to_string();
-    if title.starts_with("guillecode·") {
+    if title.starts_with("guillecode\u{00b7}") {
         return;
     }
-    let Ok(messages) = client.get(&format!("/session/{}/message?limit={}", session, CAPTURE_MESSAGES)) else { return };
-    let Some(list) = messages.as_array() else { return };
-    let mut last_user = String::new();
-    let mut last_assistant = String::new();
-    for message in list {
-        let role = message["info"]["role"].as_str().unwrap_or("");
-        let text = extract_text(&message["parts"]);
-        if text.is_empty() {
-            continue;
-        }
-        if role == "user" {
-            last_user = text;
-        } else if role == "assistant" {
-            last_assistant = text;
-        }
-    }
-    if last_user.is_empty() && last_assistant.is_empty() {
+    let project = project_root(&session_dir);
+    if project.as_os_str().is_empty() {
         return;
     }
+    let workspace = workspace_name(app, &project);
+    remember_scope(app, &project, &workspace);
+    let scope = project.to_string_lossy().to_string();
+    let messages = client
+        .get(&format!("/session/{}/message?limit={}", session, CHECKPOINT_MESSAGES))
+        .unwrap_or(Value::Null);
+    if !messages.is_array() {
+        return;
+    }
+    let todos = client.get(&format!("/session/{}/todo", session)).unwrap_or(Value::Null);
+    let mut checkpoint = checkpoint_from_messages(&title, &messages, &todos);
+    if checkpoint["lastUser"].as_str().unwrap_or("").is_empty()
+        && checkpoint["lastAssistant"].as_str().unwrap_or("").is_empty()
+    {
+        return;
+    }
+    checkpoint["id"] = json!(session);
+    checkpoint["directory"] = json!(session_dir);
+    checkpoint["project"] = json!(scope.clone());
+    checkpoint["projectName"] = json!(slug(&scope));
+    checkpoint["updatedAt"] = json!(now());
+    checkpoint["source"] = json!("agent");
     ensure_workspace(app, &scope);
-    let checkpoint = json!({
-        "id": session,
-        "title": title,
-        "directory": scope,
-        "updatedAt": now(),
-        "lastUser": last_user,
-        "progress": last_assistant,
-        "source": "agent",
-    });
     write_text(
         &tasks_dir(app, &scope).join(format!("{}.json", slug(session))),
         &serde_json::to_string_pretty(&checkpoint).unwrap_or_default(),
@@ -600,40 +995,63 @@ fn relative(app: &AppHandle, path: &Path) -> String {
     path.strip_prefix(root(app)).map(|p| p.to_string_lossy().replace('\\', "/")).unwrap_or_else(|_| path.to_string_lossy().to_string())
 }
 
-fn search(app: &AppHandle, query: &str) -> Value {
-    let tokens: Vec<String> = query.to_lowercase().split_whitespace().map(|t| t.to_string()).filter(|t| t.len() >= 2).collect();
+fn search(app: &AppHandle, query: &str, scope: &str) -> Value {
+    let tokens: Vec<String> = query
+        .to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|token| token.len() >= 2)
+        .map(|token| token.to_string())
+        .collect();
+    if tokens.is_empty() {
+        return json!({ "results": [] });
+    }
     let mut files = Vec::new();
-    walk_md(&root(app), 400, &mut files);
-    let mut scored: Vec<(usize, String, String, String)> = Vec::new();
+    if scope.trim().is_empty() || scope.trim() == "*" {
+        walk_md(&root(app), 400, &mut files);
+    } else {
+        walk_md(&workspace_dir(app, scope), 200, &mut files);
+        walk_md(&root(app).join("global"), 40, &mut files);
+    }
+    let mut scored: Vec<(usize, String, String, String, bool)> = Vec::new();
     for path in files {
         let content = read_text(&path);
+        let meta = frontmatter(&content);
+        let status = meta.get("status").cloned().unwrap_or_else(|| "active".to_string());
+        if status != "active" {
+            continue;
+        }
+        let title = meta.get("title").cloned().unwrap_or_else(|| first_line(&content));
         let lower = content.to_lowercase();
+        let lower_title = title.to_lowercase();
         let mut score = 0usize;
         for token in &tokens {
             score += lower.matches(token.as_str()).count();
+            score += lower_title.matches(token.as_str()).count() * 4;
         }
         if score == 0 {
             continue;
         }
-        let meta = frontmatter(&content);
-        let title = meta.get("title").cloned().unwrap_or_else(|| first_line(&content));
         let snippet: String = content
             .lines()
-            .find(|l| tokens.iter().any(|t| l.to_lowercase().contains(t)))
+            .find(|line| tokens.iter().any(|token| line.to_lowercase().contains(token)))
             .unwrap_or("")
             .trim()
             .chars()
             .take(200)
             .collect();
-        scored.push((score, relative(app, &path), title, snippet));
+        let updated = meta.get("updated").cloned().unwrap_or_default();
+        let stale = note_is_stale(&updated);
+        scored.push((score, relative(app, &path), title, snippet, stale));
     }
     scored.sort_by(|a, b| b.0.cmp(&a.0));
     let results: Vec<Value> = scored
         .into_iter()
         .take(20)
-        .map(|(score, path, title, snippet)| json!({ "path": path, "title": title, "snippet": snippet, "score": score }))
+        .map(|(score, path, title, snippet, stale)| {
+            json!({ "path": path, "title": title, "snippet": snippet, "score": score, "stale": stale })
+        })
         .collect();
-    json!({ "results": results })
+    json!({ "results": results, "scope": scope })
 }
 
 fn read_entry(app: &AppHandle, id: &str) -> Value {
@@ -718,15 +1136,65 @@ fn write_memory_file(path: &Path, content: &str) -> Result<(), String> {
     fs::write(path, content).map_err(|e| e.to_string())
 }
 
+fn normalize_title(value: &str) -> String {
+    value.trim().to_lowercase().split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 fn note_file(dir: &Path, title: &str, id: Option<&str>) -> Result<PathBuf, String> {
     match id {
         Some(id) => existing_memory_file(dir, id, "md"),
         None => {
             let id = note_slug(title);
             let path = dir.join(format!("{}.md", id));
-            if path.exists() { existing_memory_file(dir, &id, "md") } else { Ok(path) }
+            if !path.exists() {
+                return Ok(path);
+            }
+            let existing = frontmatter(&read_text(&path));
+            let same_title = existing
+                .get("title")
+                .map(|current| normalize_title(current) == normalize_title(title))
+                .unwrap_or(false);
+            if same_title {
+                return existing_memory_file(dir, &id, "md");
+            }
+            // Dos títulos distintos que colapsan al mismo slug no deben pisarse.
+            Ok(dir.join(format!("{}-{}.md", id, hash8(&normalize_title(title)))))
         }
     }
+}
+
+fn rewrite_frontmatter(content: &str, updates: &[(&str, String)]) -> String {
+    let Some(rest) = content.strip_prefix("---") else { return content.to_string() };
+    let Some(end) = rest.find("\n---") else { return content.to_string() };
+    let header = rest[..end].trim_matches('\n');
+    let body = &rest[end + 4..];
+    let keys: Vec<&str> = updates.iter().map(|(key, _)| *key).collect();
+    let mut lines: Vec<String> = header
+        .lines()
+        .filter(|line| {
+            line.split_once(':')
+                .map(|(key, _)| !keys.contains(&key.trim().to_lowercase().as_str()))
+                .unwrap_or(true)
+        })
+        .map(|line| line.to_string())
+        .collect();
+    for (key, value) in updates {
+        lines.push(format!("{}: {}", key, value.replace(['\n', '\r'], " ")));
+    }
+    format!("---\n{}\n---{}", lines.join("\n"), body)
+}
+
+fn supersede_note(path: &Path, new_id: &str) -> Result<(), String> {
+    let content = fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let next = rewrite_frontmatter(
+        &content,
+        &[
+            ("status", "superseded".to_string()),
+            ("superseded_by", new_id.to_string()),
+            ("updated", now()),
+        ],
+    );
+    atomic_write(path, &next)
 }
 
 fn task_file(app: &AppHandle, scope: &str, id: &str) -> Result<(PathBuf, Value), String> {
@@ -743,8 +1211,15 @@ pub fn tool_list() -> Vec<Value> {
     vec![
         json!({
             "name": "search",
-            "description": "Busca en la memoria local de Flufy (notas, decisiones, convenciones, intentos fallidos y trabajos).",
-            "inputSchema": { "type": "object", "properties": { "query": { "type": "string" } }, "required": ["query"] }
+            "description": "Busca en la memoria local de Flufy. Por defecto busca en el proyecto actual; usá scope:\"*\" para buscar en todos los proyectos.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string" },
+                    "scope": { "type": "string", "description": "Carpeta del proyecto; '*' para todos" }
+                },
+                "required": ["query"]
+            }
         }),
         json!({
             "name": "list",
@@ -765,7 +1240,12 @@ pub fn tool_list() -> Vec<Value> {
                     "title": { "type": "string" },
                     "body": { "type": "string" },
                     "kind": { "type": "string", "enum": ["decision", "convencion", "gotcha", "failure", "nota"] },
-                    "scope": { "type": "string" }
+                    "scope": { "type": "string" },
+                    "supersedes": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Ids de notas que esta nota reemplaza; dejan de inyectarse"
+                    }
                 },
                 "required": ["title", "body"]
             }
@@ -786,7 +1266,8 @@ pub fn call_tool(app: &AppHandle, name: &str, args: &Value) -> Value {
             if query.trim().is_empty() {
                 return json!({ "content": [{ "type": "text", "text": "Falta el parámetro query." }], "isError": true });
             }
-            text(search(app, query))
+            let scope = args["scope"].as_str().map(|s| s.to_string()).filter(|s| !s.is_empty()).unwrap_or_else(|| default_scope(app));
+            text(search(app, query, &scope))
         }
         "list" => {
             let scope = args["scope"].as_str().map(|s| s.to_string()).filter(|s| !s.is_empty()).unwrap_or_else(|| default_scope(app));
@@ -794,8 +1275,8 @@ pub fn call_tool(app: &AppHandle, name: &str, args: &Value) -> Value {
             let tasks = task_views(app, &scope);
             text(json!({
                 "scope": scope,
-                "notes": notes.iter().map(|n| json!({ "id": n.id, "title": n.title, "kind": n.kind, "updated": n.updated, "preview": n.preview })).collect::<Vec<_>>(),
-                "tasks": tasks.iter().map(|t| json!({ "id": t.id, "title": t.title, "updated": t.updated })).collect::<Vec<_>>(),
+                "notes": notes.iter().map(|n| json!({ "id": n.id, "title": n.title, "kind": n.kind, "updated": n.updated, "preview": n.preview, "status": n.status, "stale": n.stale })).collect::<Vec<_>>(),
+                "tasks": tasks.iter().map(|t| json!({ "id": t.id, "title": t.title, "updated": t.updated, "next": t.next, "compacted": t.compacted })).collect::<Vec<_>>(),
             }))
         }
         "read" => text(read_entry(app, args["id"].as_str().unwrap_or(""))),
@@ -806,21 +1287,33 @@ pub fn call_tool(app: &AppHandle, name: &str, args: &Value) -> Value {
             }
             let title: String = title.replace(['\n', '\r'], " ");
             let scope = args["scope"].as_str().map(|s| s.to_string()).filter(|s| !s.is_empty()).unwrap_or_else(|| default_scope(app));
-            let kind = args["kind"].as_str().unwrap_or("nota");
+            let kind = args["kind"].as_str().unwrap_or("nota").replace(['\n', '\r'], " ");
             let body = args["body"].as_str().unwrap_or("");
-            let id = note_slug(&title);
-            let content = format!("---\ntitle: {}\ntype: {}\nupdated: {}\nsource: agent\n---\n\n{}\n", title, kind, now(), truncate_chars(body, BODY_MAX));
             ensure_workspace(app, &scope);
-            write_text(&notes_dir(app, &scope).join(format!("{}.md", id)), &content);
+            let path = match note_file(&notes_dir(app, &scope), &title, None) {
+                Ok(path) => path,
+                Err(error) => return json!({ "content": [{ "type": "text", "text": error }], "isError": true }),
+            };
+            let id = path.file_stem().unwrap_or_default().to_string_lossy().to_string();
+            let content = format!("---\ntitle: {}\ntype: {}\nupdated: {}\nsource: agent\nstatus: active\n---\n\n{}\n", title, kind, now(), truncate_chars(body, BODY_MAX));
+            write_text(&path, &content);
+            let mut superseded: Vec<String> = Vec::new();
+            for old in args["supersedes"].as_array().into_iter().flatten().filter_map(|value| value.as_str()) {
+                if let Ok(old_path) = existing_memory_file(&notes_dir(app, &scope), old.trim(), "md") {
+                    if supersede_note(&old_path, &id).is_ok() {
+                        superseded.push(old.trim().to_string());
+                    }
+                }
+            }
             render_digest(app, &scope);
-            text(json!({ "ok": true, "id": id, "scope": scope }))
+            text(json!({ "ok": true, "id": id, "scope": scope, "superseded": superseded }))
         }
         "delete" => {
             let id = args["id"].as_str().unwrap_or("");
             match resolve_note(app, id) {
                 Some(path) if path.exists() => {
                     let _ = fs::remove_file(&path);
-                    for scope in scopes(app) {
+                    for scope in workspace_roots(app) {
                         render_digest(app, &scope);
                     }
                     text(json!({ "ok": true }))
@@ -857,16 +1350,19 @@ pub fn memory_status(app: AppHandle) -> Value {
 
 pub fn overview(app: &AppHandle, scope: &str) -> Value {
     let scope = if scope.trim().is_empty() { default_scope(app) } else { scope.to_string() };
+    let project = project_root(&scope);
+    let workspace = workspace_name(app, &project);
+    remember_scope(app, &project, &workspace);
     let notes = note_views(app, &scope);
     let tasks = task_views(app, &scope);
     let prefs = read_text(&root(app).join("global").join("_preferences.md"));
     json!({
         "scope": scope,
-        "slug": slug(&scope),
+        "slug": workspace,
         "preferences": body_of(&prefs),
         "overview": body_of(&read_text(&workspace_dir(app, &scope).join("_overview.md"))),
-        "notes": notes.iter().map(|n| json!({ "id": n.id, "title": n.title, "kind": n.kind, "updated": n.updated, "preview": n.preview, "source": n.source })).collect::<Vec<_>>(),
-        "tasks": tasks.iter().map(|t| json!({ "id": t.id, "title": t.title, "updated": t.updated, "directory": t.directory, "progress": t.progress, "lastUser": t.last_user, "source": t.source })).collect::<Vec<_>>(),
+        "notes": notes.iter().map(|n| json!({ "id": n.id, "title": n.title, "kind": n.kind, "updated": n.updated, "preview": n.preview, "source": n.source, "status": n.status, "stale": n.stale })).collect::<Vec<_>>(),
+        "tasks": tasks.iter().map(|t| json!({ "id": t.id, "title": t.title, "updated": t.updated, "directory": t.directory, "progress": t.progress, "summary": t.summary, "next": t.next, "compacted": t.compacted, "lastUser": t.last_user, "source": t.source })).collect::<Vec<_>>(),
     })
 }
 
@@ -893,7 +1389,7 @@ pub fn memory_write_note(app: AppHandle, scope: String, title: String, body: Str
     let path = note_file(&dir, &title, id.as_deref())?;
     let id = path.file_stem().unwrap_or_default().to_string_lossy().to_string();
     ensure_workspace(&app, &scope);
-    let content = format!("---\ntitle: {}\ntype: {}\nupdated: {}\nsource: user\n---\n\n{}\n", title.trim(), kind, now(), body.chars().take(BODY_MAX).collect::<String>());
+    let content = format!("---\ntitle: {}\ntype: {}\nupdated: {}\nsource: user\nstatus: active\n---\n\n{}\n", title.trim(), kind, now(), body.chars().take(BODY_MAX).collect::<String>());
     write_memory_file(&path, &content)?;
     render_digest(&app, &scope);
     Ok(json!({ "ok": true, "id": id }))
@@ -903,7 +1399,7 @@ pub fn memory_write_note(app: AppHandle, scope: String, title: String, body: Str
 pub fn memory_write_overview(app: AppHandle, scope: String, body: String) -> Result<Value, String> {
     let scope = if scope.trim().is_empty() { default_scope(&app) } else { scope };
     ensure_workspace(&app, &scope);
-    let content = if body.trim().is_empty() { String::new() } else { format!("# {}\n\n{}\n", slug(&scope), body) };
+    let content = if body.trim().is_empty() { String::new() } else { format!("# {}\n\n{}\n", workspace_name(&app, &project_root(&scope)), body) };
     write_memory_file(&workspace_dir(&app, &scope).join("_overview.md"), &content)?;
     render_digest(&app, &scope);
     Ok(json!({ "ok": true }))
@@ -913,7 +1409,7 @@ pub fn memory_write_overview(app: AppHandle, scope: String, body: String) -> Res
 pub fn memory_write_preferences(app: AppHandle, body: String) -> Result<Value, String> {
     let content = if body.trim().is_empty() { String::new() } else { format!("# Preferencias personales\n\n{}\n", body) };
     write_memory_file(&root(&app).join("global").join("_preferences.md"), &content)?;
-    for scope in scopes(&app) {
+    for scope in workspace_roots(&app) {
         render_digest(&app, &scope);
     }
     Ok(json!({ "ok": true }))
@@ -929,7 +1425,7 @@ pub fn memory_delete_note(app: AppHandle, id: String) -> Result<Value, String> {
     match resolve_note(&app, &id) {
         Some(path) if path.exists() => {
             fs::remove_file(&path).map_err(|e| e.to_string())?;
-            for scope in scopes(&app) {
+            for scope in workspace_roots(&app) {
                 render_digest(&app, &scope);
             }
             Ok(json!({ "ok": true }))
@@ -942,9 +1438,16 @@ pub fn memory_delete_note(app: AppHandle, id: String) -> Result<Value, String> {
 pub fn memory_write_task(app: AppHandle, scope: String, id: String, title: String, last_user: String, progress: String) -> Result<Value, String> {
     let scope = if scope.trim().is_empty() { default_scope(&app) } else { scope };
     let (path, mut value) = task_file(&app, &scope, &id)?;
+    let changed = value["progress"].as_str() != Some(progress.as_str());
     value["title"] = json!(truncate_chars(&title, FIELD_MAX));
     value["lastUser"] = json!(truncate_chars(&last_user, BODY_MAX));
     value["progress"] = json!(truncate_chars(&progress, BODY_MAX));
+    if changed {
+        // La edición del usuario reemplaza el estado y el resumen compactado.
+        value["summary"] = json!(truncate_chars(&progress, BODY_MAX));
+        value["compacted"] = json!(false);
+        value["compactedAt"] = Value::Null;
+    }
     value["updatedAt"] = json!(now());
     value["source"] = json!("user");
     write_memory_file(&path, &serde_json::to_string_pretty(&value).map_err(|e| e.to_string())?)?;
@@ -962,8 +1465,9 @@ pub fn memory_delete_task(app: AppHandle, scope: String, id: String) -> Result<V
 }
 
 #[tauri::command]
-pub fn memory_search_cmd(app: AppHandle, query: String) -> Value {
-    search(&app, &query)
+pub fn memory_search_cmd(app: AppHandle, query: String, scope: Option<String>) -> Value {
+    let scope = scope.filter(|value| !value.trim().is_empty()).unwrap_or_else(|| default_scope(&app));
+    search(&app, &query, &scope)
 }
 
 #[tauri::command]
@@ -1072,5 +1576,116 @@ mod tests {
         assert!(!kept.iter().any(|line| line.contains("viejo")));
         assert!(kept.iter().any(|line| line.contains("nuevo")));
         assert!(kept.iter().any(|line| line.contains("linea rota")));
+    }
+
+    #[test]
+    fn project_root_maps_worktrees_and_subfolders_to_the_main_repo() {
+        let base = std::env::temp_dir().join(format!("gc-scope-{}", uuid::Uuid::new_v4()));
+        let repo = base.join("repo");
+        fs::create_dir_all(repo.join(".git")).unwrap();
+        let sub = repo.join("app").join("src");
+        fs::create_dir_all(&sub).unwrap();
+        assert_eq!(project_root(sub.to_str().unwrap()), fs::canonicalize(&repo).unwrap());
+
+        let worktree = base.join("worktree");
+        fs::create_dir_all(&worktree).unwrap();
+        let gitdir = repo.join(".git").join("worktrees").join("wt");
+        fs::create_dir_all(&gitdir).unwrap();
+        fs::write(worktree.join(".git"), format!("gitdir: {}\n", gitdir.to_string_lossy())).unwrap();
+        assert_eq!(project_root(worktree.to_str().unwrap()), fs::canonicalize(&repo).unwrap());
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn normalize_path_drops_the_windows_verbatim_prefix() {
+        assert_eq!(normalize_path(Path::new(r"\\?\C:\Demo\Repo")), "c:/demo/repo");
+        assert_eq!(normalize_path(Path::new("/home/demo/Repo/")), "/home/demo/repo");
+    }
+
+    #[test]
+    fn workspace_name_isolates_projects_that_share_a_folder_name() {
+        let base = std::env::temp_dir().join(format!("gc-workspace-{}", uuid::Uuid::new_v4()));
+        let workspaces = base.join("workspaces");
+        let first = base.join("cliente-a").join("ui");
+        let second = base.join("cliente-b").join("ui");
+        fs::create_dir_all(&first).unwrap();
+        fs::create_dir_all(&second).unwrap();
+        assert_eq!(workspace_name_at(&workspaces, &first), "ui");
+        fs::create_dir_all(workspaces.join("ui")).unwrap();
+        fs::write(
+            workspaces.join("ui").join("_scope.json"),
+            json!({ "root": normalize_path(&first) }).to_string(),
+        )
+        .unwrap();
+        assert_eq!(workspace_name_at(&workspaces, &first), "ui");
+        let other = workspace_name_at(&workspaces, &second);
+        assert_ne!(other, "ui");
+        assert!(other.starts_with("ui-"));
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn distinct_titles_never_overwrite_each_other() {
+        let base = std::env::temp_dir().join(format!("gc-note-dedup-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&base).unwrap();
+        fs::write(
+            base.join("decisi-n-base-de-datos.md"),
+            "---\ntitle: Decisión base de datos\n---\n\nPostgreSQL",
+        )
+        .unwrap();
+        let path = note_file(&base, "Decisión: base de datos!", None).unwrap();
+        assert_ne!(path, base.join("decisi-n-base-de-datos.md"));
+        assert!(path.file_stem().unwrap().to_string_lossy().starts_with("decisi-n-base-de-datos-"));
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn supersede_marks_the_old_note_and_keeps_its_body() {
+        let base = std::env::temp_dir().join(format!("gc-note-supersede-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&base).unwrap();
+        let path = base.join("vieja.md");
+        fs::write(&path, "---\ntitle: Vieja\ntype: decision\nupdated: 2026-01-01\n---\n\nCuerpo original\n").unwrap();
+        supersede_note(&path, "nueva").unwrap();
+        let content = read_text(&path);
+        let meta = frontmatter(&content);
+        assert_eq!(meta.get("status").unwrap(), "superseded");
+        assert_eq!(meta.get("superseded_by").unwrap(), "nueva");
+        assert!(body_of(&content).contains("Cuerpo original"));
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn checkpoint_extracts_objective_plan_files_commands_and_compaction() {
+        let messages = json!([
+            {
+                "info": { "role": "user" },
+                "parts": [{ "type": "text", "text": "Implementá el login" }]
+            },
+            {
+                "info": { "role": "assistant" },
+                "parts": [
+                    { "type": "text", "text": "Listo, probé el login y falta desplegar." },
+                    { "type": "tool", "tool": "edit", "state": { "status": "completed", "input": { "filePath": "src/login.ts" } } },
+                    { "type": "tool", "tool": "bash", "state": { "status": "completed", "input": { "command": "npm test" } } }
+                ]
+            },
+            {
+                "info": { "role": "assistant", "summary": true, "time": { "completed": 1700000000000i64 } },
+                "parts": [{ "type": "text", "text": "Resumen compactado: se implementó el login." }]
+            }
+        ]);
+        let todos = json!([
+            { "content": "Implementar login", "status": "completed" },
+            { "content": "Desplegar", "status": "pending" }
+        ]);
+        let checkpoint = checkpoint_from_messages("Login", &messages, &todos);
+        assert_eq!(checkpoint["objective"], "Implementá el login");
+        assert_eq!(checkpoint["next"], "Desplegar");
+        assert_eq!(checkpoint["files"][0], "src/login.ts");
+        assert_eq!(checkpoint["commands"][0]["command"], "npm test");
+        assert_eq!(checkpoint["turns"], 1);
+        assert!(checkpoint["compacted"].as_bool().unwrap());
+        assert!(checkpoint["summary"].as_str().unwrap().contains("Contexto compactado"));
+        assert!(checkpoint["summary"].as_str().unwrap().contains("se implementó el login"));
     }
 }
