@@ -6,8 +6,10 @@
 //! keeps the existing numeric `pageId` contract of the Chrome DevTools bridge
 //! and maps it to the tab ids Browse returns.
 //!
-//! Only conversations that do not use the internal WebView2 browser (teams)
-//! reach this module; `browser.rs` keeps the Chrome DevTools path for those.
+//! Conversations reach this module whenever they have not selected the internal
+//! WebView2 browser, including team sessions. `browser.rs` keeps the Chrome
+//! DevTools path for conversations that use the internal browser or do not have
+//! Browse installed.
 
 use crate::proc::hide_console;
 use serde::Serialize;
@@ -102,17 +104,23 @@ pub fn available(app: &tauri::AppHandle) -> bool {
     binary(Some(app)).is_some()
 }
 
-/// Conversations that use the internal WebView2 browser, or teams, keep the
-/// Chrome DevTools bridge: Browse cannot attach to WebView2 surfaces.
-pub fn enabled(app: &tauri::AppHandle, workspace: &str) -> bool {
+/// Browse can be used at all in this installation: enabled and installed.
+pub fn usable(app: &tauri::AppHandle) -> bool {
     let config = super::config(app);
-    config.browser
-        && config.browse
+    config.browser && config.browse && available(app)
+}
+
+/// Conversations that use the internal WebView2 browser keep the Chrome
+/// DevTools bridge: Browse cannot attach to WebView2 surfaces. Team sessions
+/// use Browse too when their chat has not selected the internal browser.
+pub fn enabled(app: &tauri::AppHandle, workspace: &str) -> bool {
+    // Missions use the same Browse connection as a normal chat: a tab group
+    // inside the Chrome the user already has open. This keeps their profile and
+    // sessions without restarting Chrome with remote debugging.
+    usable(app)
         && !workspace.is_empty()
-        && !workspace.starts_with("team:")
         && workspace != "mission-own"
         && !super::internal_browser::selected(workspace)
-        && available(app)
 }
 
 fn stop_process() {
@@ -595,16 +603,22 @@ fn navigation(session: &str, args: &Value) -> Result<Value, String> {
         Some(_) => {
             let tab = page_tab(session, args)?;
             value.insert("tab".into(), tab_value(&tab));
+            call_tool("navigate", Value::Object(value))
         }
         None => {
             let group = with_session(session, |state| state.group.clone());
-            value.insert("group".into(), json!(group));
-            if value.get("url").is_none() {
-                return Err("Falta url para abrir una pestaña nueva.".into());
+            let url = value.get("url").cloned().ok_or("Falta url para abrir una pestana nueva.")?;
+            match call_tool("tabs", json!({ "action": "new", "group": group, "url": url })) {
+                Ok(result) => Ok(result),
+                Err(error) if error.contains("Tabs cannot be edited right now") => {
+                    std::thread::sleep(Duration::from_millis(350));
+                    call_tool("tabs", json!({ "action": "new", "group": group, "url": url }))
+                }
+                Err(error) => Err(error),
             }
         }
     }
-    call_tool("navigate", Value::Object(value))
+
 }
 
 pub fn call_session(session: &str, name: &str, args: Value) -> Value {
@@ -622,7 +636,7 @@ fn dispatch(session: &str, name: &str, args: &Value) -> Result<Value, String> {
         "list_pages" => {
             let pages = list_tabs(session)?;
             if pages.is_empty() {
-                return Ok(result_text("No hay pestañas abiertas para esta conversación. Usá browser_new_page para abrir una; Browse la crea en segundo plano, agrupada con esta conversación."));
+                return Ok(result_text("No hay pestanas abiertas para esta conversacion. Abri una con browser_navigate_page sin pageId; Browse la crea en segundo plano, agrupada con esta conversacion."));
             }
             let lines: Vec<String> = pages.iter().map(|page| format!("{}: {}{}", page.page_id, page.url, if page.lent { " [prestada]" } else { "" })).collect();
             Ok(result_text(lines.join("\n")))

@@ -188,7 +188,8 @@ fn guard_check() -> AbsenceCheck {
 }
 
 fn browser_check(app: &AppHandle) -> AbsenceCheck {
-    match crate::desktop::browser::workspace("mission", None, false) {
+    let workspace = crate::desktop::browser::mission_workspace(app);
+    match crate::desktop::browser::workspace(&workspace, None, false) {
         Ok(value) if value["assigned"].as_bool().unwrap_or(false) => check(
             "browser",
             "ok",

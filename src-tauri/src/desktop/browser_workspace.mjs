@@ -73,7 +73,7 @@ export class Workspaces {
       w.windowId = 0; w.targets = pages.map(p => p.target)
       if (!w.targets.includes(w.selected)) w.selected = w.targets[0]
     }
-    if (!meta.isolated && !meta.action && meta.autoRecover && meta.session.startsWith('team:')) {
+    if (!meta.isolated && meta.action !== 'assign' && meta.autoRecover && (meta.session.startsWith('team:') || meta.session === 'mission' || meta.session === 'mission-own')) {
       await this.createTab(meta.session, async () => {
         pages = await this.inventory(context, meta.isolated)
         const prior = this.sessions[meta.session]
@@ -86,7 +86,7 @@ export class Workspaces {
         finally { await client.detach() }
         pages = await this.inventory(context, meta.isolated)
         const created = pages.find(p => p.target === targetId)
-        if (!created || pages.some(p => p.target !== targetId && p.windowId === created.windowId)) throw new Error('No pude confirmar una ventana nueva exclusiva del equipo. No se tomó control de otra ventana.')
+        if (!created || pages.some(p => p.target !== targetId && p.windowId === created.windowId)) throw new Error('No pude confirmar una ventana nueva exclusiva. No se tomó control de otra ventana.')
         this.sessions[meta.session] = { windowId: created.windowId, targets: [targetId], selected: targetId, recovered: true }
         await this.save()
       })
@@ -111,9 +111,14 @@ export class Workspaces {
       while (Object.keys(workspace.actors).length > 128) delete workspace.actors[Object.keys(workspace.actors)[0]]
     }
     // A recycled windowId is not identity on its own: a target must survive.
-    const survives = () => !!workspace && Array.isArray(workspace.targets) && pages.some(p => workspace.targets.includes(p.target) && (meta.isolated || p.windowId === workspace.windowId))
+    // Mission windows are opened by Flufy itself, so the dedicated window is
+    // the identity even if Chrome replaces its initial about:blank target.
+    const missionScoped = meta.session === 'mission' || meta.session === 'mission-own'
+    const survives = () => !!workspace && Array.isArray(workspace.targets) && pages.some(p =>
+      (workspace.targets.includes(p.target) && (meta.isolated || p.windowId === workspace.windowId)) ||
+      (missionScoped && !meta.isolated && (p.windowId === workspace.windowId || workspace.targets.includes(p.target))))
     const valid = survives()
-    const owned = () => valid ? pages.filter(p => meta.isolated ? !meta.actor || workspace.owners?.[p.target] === meta.actor : p.windowId === workspace.windowId) : []
+    const owned = () => valid ? pages.filter(p => meta.isolated ? !meta.actor || workspace.owners?.[p.target] === meta.actor : (missionScoped ? (p.windowId === workspace.windowId || workspace.targets.includes(p.target)) : p.windowId === workspace.windowId)) : []
     if (valid) {
       workspace.targets = owned().map(p => p.target)
       if (!workspace.targets.includes(selectedTarget())) select(workspace.targets[0])

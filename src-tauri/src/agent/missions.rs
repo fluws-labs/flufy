@@ -779,6 +779,13 @@ fn load(app: &AppHandle) -> Vec<Mission> {
             mission.updated_at = now;
             let _ = persist(app, mission);
         }
+        let stale_brief = mission.state.brief.is_some()
+            && mission.state.last_status.as_deref() != Some("ok");
+        if stale_brief {
+            mission.state.brief = None;
+            mission.updated_at = now;
+            let _ = persist(app, mission);
+        }
         if backfill_progress(mission, now) {
             mission.updated_at = now;
             let _ = persist(app, mission);
@@ -898,6 +905,37 @@ fn text_of(message: &Value) -> String {
                 .join("\n")
         })
         .unwrap_or_default()
+}
+
+fn assistant_result(messages: &Value) -> (String, Option<String>) {
+    let list = messages.as_array();
+    let mut fallback_text: Option<String> = None;
+    let mut contract_text: Option<String> = None;
+    let mut error: Option<String> = None;
+    for message in list.into_iter().flatten().rev().filter(|message| message["info"]["role"] == "assistant") {
+        if error.is_none() {
+            let value = &message["info"]["error"];
+            error = value["data"]["message"].as_str().or(value["name"].as_str()).map(String::from);
+        }
+        let text = text_of(message);
+        if text.trim().is_empty() {
+            continue;
+        }
+        if fallback_text.is_none() {
+            fallback_text = Some(text.clone());
+        }
+        if parse_contract(&text).is_some() {
+            contract_text = Some(text);
+            break;
+        }
+    }
+    let text = contract_text
+        .or(fallback_text)
+        .unwrap_or_default()
+        .chars()
+        .take(SUMMARY_CHARS)
+        .collect();
+    (text, error)
 }
 
 pub fn parse_contract(text: &str) -> Option<Value> {
@@ -1116,7 +1154,7 @@ fn progress_from_outcome(
     progress
 }
 
-fn build_prompt(mission: &Mission, playbook: Option<&str>, profile: Option<&str>, bot: Option<&str>) -> String {
+fn build_prompt(mission: &Mission, playbook: Option<&str>, profile: Option<&str>, bot: Option<&str>, browser_mode: Option<&str>) -> String {
     let playbook = playbook.unwrap_or("Sin playbook: seguí el objetivo, usá solo las herramientas indicadas en Computadora y respetá la política; pedí aprobación para acciones irreversibles.");
     let chain = mission
         .state
@@ -1152,12 +1190,25 @@ fn build_prompt(mission: &Mission, playbook: Option<&str>, profile: Option<&str>
         })
         .unwrap_or_default();
     let playbook = format!("{}\n\n{}", playbook, approved);
+    let browser = browser_mode
+        .filter(|mode| !mode.trim().is_empty())
+        .unwrap_or(mission.computer.browser.as_str());
+    let browser = match browser {
+        "own" => "propio (Flufy abre una ventana dedicada automáticamente; no pidas que te asignen una)",
+        "borrowed" => "prestado (una pestana nueva agrupada en el Chrome que el usuario ya tiene abierto; no reinicies Chrome ni toques sus pestanas)",
+        "internal" => "interno",
+        other if other.trim().is_empty() => "prestado (una pestana nueva agrupada en el Chrome que el usuario ya tiene abierto; no reinicies Chrome ni toques sus pestanas)",
+        other => other,
+    };
     let computer = format!(
-        "\n## Computadora\n- Navegador: {}\n- Escritorio: {}\n- Archivos: {}\n- Terminal: {}\n",
-        if mission.computer.browser.is_empty() { "prestado" } else { &mission.computer.browser },
-        if mission.computer.desktop { "sí" } else { "no" },
-        if mission.computer.files { "sí" } else { "no" },
-        if mission.computer.terminal { "sí" } else { "no" },
+        "\n## Computadora\n- Navegador: {browser}\n- Escritorio: {}\n- Archivos: {}\n- Terminal: {}\n- Si necesitas el navegador, empeza con `browser_list_pages`. Si no hay una pestana de la mision, abri una con `browser_navigate_page` sin `pageId`; usa solo esa pestana. No navegues ni cierres pestanas del usuario, no reinicies Chrome y no pidas que asignen una ventana.\n",
+        if mission.computer.desktop { "si" } else { "no" },
+        if mission.computer.files { "si" } else { "no" },
+        if mission.computer.terminal { "si" } else { "no" },
+    );
+    let computer = format!(
+        "{}- Trabaja en una sola pestana del grupo de la mision; si no existe, creala con `browser_navigate_page` sin `pageId`. No uses pestanas del usuario ni abras ventanas nuevas.\n",
+        computer
     );
     let triggers = mission
         .triggers
@@ -1402,11 +1453,13 @@ fn execute_with_model(app: &AppHandle, mission: &Mission, model_override: Option
         .filter(|name| !name.trim().is_empty())
         .and_then(|name| crate::agent::playbooks::read(app, name).ok());
     let bot_prompt = crate::agent::bots::bot_prompt(app, mission.bot_id.as_deref());
+    let browser_mode = crate::desktop::browser::mission_mode(app);
     let prompt = build_prompt(
         mission,
         playbook.as_deref(),
         crate::memory::profile_get(app)["profile"].as_str(),
         Some(bot_prompt.as_str()),
+        Some(browser_mode.as_str()),
     );
     let title = format!("Misión · {} · {}", mission.title, Local::now().format("%d/%m %H:%M"));
     let session = client.post("/session", json!({ "title": title }))?;
@@ -1562,15 +1615,23 @@ fn execute_with_model(app: &AppHandle, mission: &Mission, model_override: Option
             return Err("La misión superó el máximo de seguridad de 120 minutos y se detuvo.".into());
         }
     }
-    let messages = client.get(&format!("/session/{}/message", session_id))?;
-    let last = messages
-        .as_array()
-        .and_then(|list| list.iter().rev().find(|message| message["info"]["role"] == "assistant"));
-    let text: String = last.map(text_of).unwrap_or_default().chars().take(SUMMARY_CHARS).collect();
-    let error = last.and_then(|message| {
-        let value = &message["info"]["error"];
-        value["data"]["message"].as_str().or(value["name"].as_str()).map(String::from)
-    });
+    let mut messages = client.get(&format!("/session/{}/message", session_id))?;
+    // The session can report idle just before the final assistant text is
+    // persisted. Give the contract a short grace period instead of storing an
+    // empty summary and pausing the mission.
+    let mut attempts = 0;
+    loop {
+        let (text, error) = assistant_result(&messages);
+        if error.is_some() || parse_contract(&text).is_some() || attempts >= 20 {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(500));
+        attempts += 1;
+        if let Ok(next) = client.get(&format!("/session/{}/message", session_id)) {
+            messages = next;
+        }
+    }
+    let (text, error) = assistant_result(&messages);
     if let Some(error) = error {
         return Ok(MissionOutcome {
             status: ContractStatus::Blocked,
@@ -1898,6 +1959,11 @@ fn apply(app: &AppHandle, mission: &Mission, outcome: MissionOutcome, project: &
         item.state.runs.truncate(20);
         item.state.approved = None;
         item.state.approval_title = approval_title_out.clone();
+        if outcome.status != ContractStatus::Ok {
+            // A previous successful brief must not look like the result of a
+            // newer blocked run.
+            item.state.brief = None;
+        }
         item.state.queued_at = if next_status == "queued" { Some(now) } else { None };
         item.state.progress = Some(progress.clone());
         item.state.no_progress_runs = no_progress_runs;
@@ -2456,7 +2522,7 @@ mod tests {
             advanced: true,
             updated_at: 1,
         });
-        let prompt = build_prompt(&item, None, None, None);
+        let prompt = build_prompt(&item, None, None, None, None);
         assert!(prompt.contains("Estado del trabajo"));
         assert!(prompt.contains("Publicar la landing"));
         assert!(prompt.contains("No repitas"));
@@ -2533,6 +2599,19 @@ mod tests {
     }
 
     #[test]
+    fn a_contract_before_an_empty_final_message_is_still_read() {
+        let messages = json!([
+            { "info": { "role": "assistant" }, "parts": [{ "type": "text", "text": "texto previo" }] },
+            { "info": { "role": "assistant" }, "parts": [{ "type": "text", "text": "```json\n{\"status\":\"blocked\",\"summary\":\"sin ventana de Chrome\",\"items\":[]}\n```" }] },
+            { "info": { "role": "assistant" }, "parts": [] }
+        ]);
+        let (text, error) = assistant_result(&messages);
+        assert!(text.contains("sin ventana de Chrome"));
+        assert!(error.is_none());
+        assert!(parse_contract(&text).is_some());
+    }
+
+    #[test]
     fn contract_falls_back_to_a_plain_json_object() {
         let text = "resumen\n{\"status\":\"blocked\",\"summary\":\"falta login\",\"items\":[]}";
         let outcome = outcome_from_text(text, Some("ses-1".into()));
@@ -2563,7 +2642,7 @@ mod tests {
     #[test]
     fn prompt_includes_goal_policy_and_contract() {
         let item = mission("armed", MissionSchedule::Daily { time: "08:30".into() });
-        let prompt = build_prompt(&item, Some("Leer Gmail"), None, None);
+        let prompt = build_prompt(&item, Some("Leer Gmail"), None, None, None);
         assert!(prompt.contains("Briefing"));
         assert!(prompt.contains("Leer Gmail"));
         assert!(prompt.contains("needs-approval"));

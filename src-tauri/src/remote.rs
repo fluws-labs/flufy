@@ -413,7 +413,8 @@ fn hub_api(app: &AppHandle, mut req: Request, url: &str, path: &str) {
         };
     }
     if method == "GET" && path == "/hub/agent/browser" {
-        return match crate::desktop::browser::workspace("mission", None, false) {
+        let workspace = crate::desktop::browser::mission_workspace(app);
+        return match crate::desktop::browser::workspace(&workspace, None, false) {
             Ok(value) => respond_json(req, 200, value),
             Err(error) => respond_json(req, 409, json!({ "error": error })),
         };
@@ -432,7 +433,8 @@ fn hub_api(app: &AppHandle, mut req: Request, url: &str, path: &str) {
         let Some(page_id) = body["pageId"].as_u64() else {
             return respond_json(req, 400, json!({ "error": "Falta pageId" }));
         };
-        return match crate::desktop::browser::workspace("mission", Some(page_id), false) {
+        let workspace = crate::desktop::browser::mission_workspace(app);
+        return match crate::desktop::browser::workspace(&workspace, Some(page_id), false) {
             Ok(value) => respond_json(req, 200, value),
             Err(error) => respond_json(req, 409, json!({ "error": error })),
         };

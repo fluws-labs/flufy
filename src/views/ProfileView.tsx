@@ -1094,37 +1094,18 @@ function SettingsPanel({ onClose }: { onClose: () => void }) {
   const savedAt = useAgentProfile((s) => s.savedAt)
   const [draft, setDraft] = useState(profile)
   const [synced, setSynced] = useState(profile)
-  const [browserMode, setBrowserMode] = useState<"borrowed" | "own">("borrowed")
   const [browserCheck, setBrowserCheck] = useState("")
   const [checkingBrowser, setCheckingBrowser] = useState(false)
-
-  useEffect(() => {
-    void call<{ mode?: string }>("agent_browser_mode_get")
-      .then((data) => { if (data?.mode === "own" || data?.mode === "borrowed") setBrowserMode(data.mode) })
-      .catch(() => undefined)
-  }, [])
-
-  const changeBrowserMode = async (mode: "borrowed" | "own") => {
-    setBrowserMode(mode)
-    setBrowserCheck("")
-    try {
-      const data = await call<{ mode?: string }>("agent_browser_mode_set", { mode })
-      if (data?.mode === "own" || data?.mode === "borrowed") setBrowserMode(data.mode)
-      notify.info("Chrome de misiones", mode === "own" ? "Se usará un perfil dedicado. Iniciá sesión una vez cuando se abra." : "Se usará tu Chrome actual con una pestaña asignada.")
-    } catch (cause) {
-      notify.error("No se pudo cambiar el Chrome de misiones", cause instanceof Error ? cause.message : String(cause))
-    }
-  }
 
   const checkBrowser = async () => {
     setCheckingBrowser(true)
     setBrowserCheck("")
     try {
-      const data = await call<{ mode?: string; workspace?: string; workspaceState?: { pages?: unknown[] } }>("agent_browser_preflight")
+      const data = await call<{ workspace?: string; workspaceState?: { pages?: unknown[] } }>("agent_browser_preflight")
       const count = Array.isArray(data?.workspaceState?.pages) ? data.workspaceState.pages.length : 0
-      setBrowserCheck(`Chrome listo (${data?.mode === "own" ? "perfil propio" : "prestado"}) · ${count} pestaña${count === 1 ? "" : "s"}.`)
+      setBrowserCheck(`Chrome disponible: ${count} pestana${count === 1 ? "" : "s"} para la mision.`)
     } catch (cause) {
-      setBrowserCheck(`No pude preparar Chrome: ${cause instanceof Error ? cause.message : String(cause)}`)
+      setBrowserCheck(`No pude probar Chrome: ${cause instanceof Error ? cause.message : String(cause)}`)
     } finally {
       setCheckingBrowser(false)
     }
@@ -1167,20 +1148,8 @@ function SettingsPanel({ onClose }: { onClose: () => void }) {
         </section>
         <section className="agent-section" aria-label="Chrome de misiones">
           <header className="agent-section-head">
-            <div><strong><Icon name="browser" /> Chrome de misiones</strong><small>El perfil propio no mezcla tus pestañas personales y conserva el login entre corridas.</small></div>
+            <div><strong><Icon name="browser" /> Chrome de misiones</strong><small>La mision usa una pestana nueva agrupada en el Chrome que ya tenes abierto. No reinicia Chrome ni toca tus pestanas.</small></div>
           </header>
-          <label className="agent-field">
-            <span>Modo</span>
-            <Select
-              ariaLabel="Chrome de misiones"
-              value={browserMode}
-              options={[
-                { value: "borrowed", label: "Prestado: una pestaña de tu Chrome" },
-                { value: "own", label: "Propio: perfil dedicado (recomendado para autonomía)" },
-              ]}
-              onChange={(value) => void changeBrowserMode(value as "borrowed" | "own")}
-            />
-          </label>
           <div className="agent-form-actions">
             <button type="button" className="btn btn-sm" disabled={checkingBrowser} onClick={() => void checkBrowser()}>
               <Icon name={checkingBrowser ? "loading" : "browser"} spin={checkingBrowser} /> Probar Chrome

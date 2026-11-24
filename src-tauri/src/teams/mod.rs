@@ -256,6 +256,9 @@ pub(crate) fn browser_session(app: &AppHandle, session: &str) -> String {
         .unwrap_or_else(|| session.to_string())
 }
 pub(crate) fn browser_can_recover(app: &AppHandle, session: &str) -> bool {
+    if crate::agent::missions::is_mission_session(session) {
+        return true;
+    }
     app.try_state::<TeamsState>().and_then(|state| state.store.lock().ok().map(|s|
         s.chats.iter().any(|c| c.messages.iter().any(|m| m.session_id.as_deref()==Some(session)) || c.runs.iter().flat_map(|r| &r.tasks).flat_map(|t| &t.attempts).any(|a| a.session_id.as_deref()==Some(session))))).unwrap_or(false)
 }

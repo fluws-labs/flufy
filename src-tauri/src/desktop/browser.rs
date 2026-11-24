@@ -180,8 +180,10 @@ fn own_profile_path(app: &tauri::AppHandle) -> PathBuf {
     crate::memory::agent_root(app).join("chrome-own")
 }
 
-pub fn mission_workspace(app: &tauri::AppHandle) -> String {
-    if mission_mode(app) == "own" { "mission-own".into() } else { "mission".into() }
+pub fn mission_workspace(_app: &tauri::AppHandle) -> String {
+    // Missions always use the Chrome the user already has open. There is no
+    // separate browser mode or per-conversation assignment to choose.
+    "mission".into()
 }
 
 #[tauri::command]
@@ -546,7 +548,7 @@ pub fn context_for_url(url: Option<&str>) -> Value {
         let session = super::tasks::current(app).map(|t| t.session).unwrap_or_default();
         let workspace = crate::teams::browser_session(app, &session);
         if super::browse::enabled(app, &workspace) {
-            return super::browse::context_for_url(&session, url);
+            return super::browse::context_for_url(&workspace, url);
         }
     }
     if !status().connected { return json!({"url":url, "pageId":null, "hint":"Conexión con Chrome sin verificar; usá list_pages."}); }
@@ -625,10 +627,12 @@ fn call_session_recovery_inner(session: &str, workspace: &str, name: &str, mut a
     if session.is_empty() { return Err("Falta la conversación del navegador".into()); }
     if !SCOPED_TOOLS.contains(&original_name(name).as_str()) { return Err("Esta herramienta no está limitada a la ventana Chrome asignada".into()); }
     if !args.is_object() { return Err("Los argumentos del navegador deben ser un objeto".into()); }
-    args["_guillecode"] = json!({ "session": workspace, "actor": session, "autoRecover": recover && workspace.starts_with("team:") && original_name(name) == "list_pages" });
-    if workspace.starts_with("team:") && recover && original_name(name)=="list_pages" {
-        super::internal_browser::open_actor(crate::proc::app().ok_or("Flufy no está iniciado")?,workspace,session,None,false)?;
-    }
+    let mission_workspace = workspace == "mission" || workspace == "mission-own";
+    // A mission must never wait for the user to assign a window: recover it on
+    // any browser tool, not only on list_pages, even if the native session
+    // registry did not mark the run as recoverable.
+    let auto_recover = mission_workspace || (recover && workspace.starts_with("team:") && original_name(name) == "list_pages");
+    args["_guillecode"] = json!({ "session": workspace, "actor": session, "autoRecover": auto_recover });
     if super::internal_browser::selected(workspace) {
         let profile = super::internal_browser::profile(workspace)?;
         let app = crate::proc::app().ok_or("GuilleCode no está iniciado")?;
@@ -646,7 +650,9 @@ fn call_session_recovery_inner(session: &str, workspace: &str, name: &str, mut a
     }
     if let Some(app) = crate::proc::app() {
         if super::browse::enabled(app, workspace) {
-            return Ok(super::browse::call_session(session, name, args));
+            // Teams share the chat's tab group even when each member calls from
+            // its own session; the workspace is also the Browse identity.
+            return Ok(super::browse::call_session(workspace, name, args));
         }
     }
     call(name, args)
@@ -700,17 +706,24 @@ fn workspace_inner(session: &str, page_id: Option<u64>, quiet: bool) -> Result<V
     if quiet {
         return Ok(json!({ "assigned": false, "missing": false, "windowId": null, "pages": [] }));
     }
+    let mission_workspace = session == "mission" || session == "mission-own";
     let result = call("list_pages", json!({ "_guillecode": {
-        "session": session, "action": if page_id.is_some() { "assign" } else { "inspect" }, "pageId": page_id
+        "session": session,
+        "action": if page_id.is_some() { "assign" } else { "inspect" },
+        "pageId": page_id,
+        "autoRecover": mission_workspace && page_id.is_none()
     }}))?;
     if failed(&result) { return Err(text_of(&result)); }
     serde_json::from_str(&text_of(&result)).map_err(|e| format!("No se pudo leer el espacio de Chrome: {}", e))
 }
 
 pub fn page_text(page_id: u64) -> Result<String, String> {
+    let workspace = crate::proc::app()
+        .map(|app| mission_workspace(&app))
+        .unwrap_or_else(|| "mission".into());
     let result = call_session(
-        "mission",
-        "mission",
+        &workspace,
+        &workspace,
         "evaluate_script",
         json!({
             "pageId": page_id,
@@ -749,7 +762,8 @@ pub async fn browser_workspace(app: tauri::AppHandle, session: String, page_id: 
     super::gate(&app)?;
     if !super::config(&app).browser { return Err("El navegador está desactivado".into()); }
     let quiet = quiet.unwrap_or(false);
-    tauri::async_runtime::spawn_blocking(move || workspace(&session, page_id, quiet)).await.map_err(|e| e.to_string())?
+    let owner = crate::teams::browser_session(&app, &session);
+    tauri::async_runtime::spawn_blocking(move || workspace(&owner, page_id, quiet)).await.map_err(|e| e.to_string())?
 }
 
 // Inspecciona siempre el Chrome del usuario, aunque la conversación esté usando
@@ -760,10 +774,11 @@ pub async fn browser_chrome_workspace(app: tauri::AppHandle, session: String) ->
     super::gate(&app)?;
     if !super::config(&app).browser { return Err("El navegador está desactivado".into()); }
     tauri::async_runtime::spawn_blocking(move || {
-        if super::browse::enabled(&app, &session) {
-            return super::browse::workspace(&app, &session, false);
+        let owner = crate::teams::browser_session(&app, &session);
+        if super::browse::enabled(&app, &owner) {
+            return super::browse::workspace(&app, &owner, false);
         }
-        let result = call("list_pages", json!({ "_guillecode": { "session": session, "action": "inspect" } }))?;
+        let result = call("list_pages", json!({ "_guillecode": { "session": owner, "action": "inspect" } }))?;
         if failed(&result) { return Err(text_of(&result)); }
         serde_json::from_str(&text_of(&result)).map_err(|e| format!("No se pudo leer el espacio de Chrome: {}", e))
     }).await.map_err(|e| e.to_string())?
