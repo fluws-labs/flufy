@@ -1,12 +1,18 @@
 // Memoria local de Flufy: inyecta el contexto recordado antes de cada llamada
 // al modelo y bloquea las herramientas de memoria cuando el toggle está apagado.
 // Se ejecuta dentro del motor de opencode y solo lee la carpeta local.
-import { existsSync, readdirSync, readFileSync } from "node:fs"
-import { join } from "node:path"
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs"
+import { dirname, isAbsolute, join } from "node:path"
 
-const PROFILE_MAX = 2000
+const PROFILE_MAX = 4000
 const AGENT_LOG_LINES = 20
 const INBOX_TITLES = 3
+// Presupuesto total del contexto recordado. Cada capa tiene su tope y, si el
+// total se agota, se recortan las capas de menor prioridad antes que el perfil
+// o el proyecto.
+const BUDGET = 12000
+const CAPS = { checkpoint: 900, profile: 4400, digest: 6000, log: 1600, inbox: 320 }
+const CHILD_POINTER = "Perfil del agente (Mi Flufy) disponible en la memoria local: agent/profile.md. Leelo solo si necesitás su tono o sus reglas."
 
 function slug(value) {
   const base = String(value || "")
@@ -19,6 +25,47 @@ function slug(value) {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
   return cleaned || "workspace"
+}
+
+function normPath(value) {
+  return String(value || "")
+    .replace(/\\/g, "/")
+    .replace(/^\/\/\?\/?/, "")
+    .replace(/\/+$/, "")
+    .toLowerCase()
+}
+
+// Misma regla que project_root en memory.rs: subcarpetas y worktrees comparten
+// la memoria del repositorio principal. Windows no distingue mayúsculas.
+function projectRoot(directory) {
+  const original = normPath(directory)
+  if (!original) return ""
+  let current = original
+  for (let depth = 0; depth < 6; depth++) {
+    const dot = join(current, ".git")
+    if (existsSync(dot)) {
+      try {
+        if (statSync(dot).isFile()) {
+          const text = readFileSync(dot, "utf8")
+          const line = text.split(/\r?\n/).find((entry) => entry.trim().toLowerCase().startsWith("gitdir:"))
+          if (line) {
+            let gitdir = line.slice(line.indexOf(":") + 1).trim()
+            if (!isAbsolute(gitdir)) gitdir = join(current, gitdir)
+            const normalized = gitdir.replace(/\\/g, "/")
+            const marker = /\/\.git\/worktrees\//i.exec(normalized)
+            if (marker && marker.index > 0) return normalized.slice(0, marker.index)
+          }
+        }
+      } catch {
+        // Si no se puede leer, el proyecto es la carpeta que contiene .git.
+      }
+      return current
+    }
+    const parent = dirname(current)
+    if (!parent || parent === current) break
+    current = parent
+  }
+  return original
 }
 
 function oneLine(value, max) {
@@ -54,9 +101,25 @@ export const FlufyMemory = async ({ client, directory }, options) => {
     }
   }
 
-  const digestFor = (dir) => {
+  const scopes = () => {
     try {
-      const path = join(root, "workspaces", slug(dir), "_digest.md")
+      const map = JSON.parse(readFileSync(join(root, "scopes.json"), "utf8"))
+      return map && typeof map === "object" ? map : {}
+    } catch {
+      return {}
+    }
+  }
+
+  const workspaceFor = (dir, registry) => {
+    const project = projectRoot(dir)
+    if (!project) return slug(dir)
+    const entry = registry[project]
+    return entry?.workspace || slug(project)
+  }
+
+  const digestFor = (dir, registry) => {
+    try {
+      const path = join(root, "workspaces", workspaceFor(dir, registry), "_digest.md")
       return existsSync(path) ? readFileSync(path, "utf8").trim() : ""
     } catch {
       return ""
@@ -69,6 +132,17 @@ export const FlufyMemory = async ({ client, directory }, options) => {
       return existsSync(path) ? readFileSync(path, "utf8").trim() : ""
     } catch {
       return ""
+    }
+  }
+
+  const checkpointFor = (sessionID, dir, registry) => {
+    if (!sessionID) return null
+    try {
+      const path = join(root, "workspaces", workspaceFor(dir, registry), "tasks", `${slug(sessionID)}.json`)
+      if (!existsSync(path)) return null
+      return JSON.parse(readFileSync(path, "utf8"))
+    } catch {
+      return null
     }
   }
 
@@ -92,7 +166,7 @@ export const FlufyMemory = async ({ client, directory }, options) => {
         text.length > PROFILE_MAX
           ? `\n\n(perfil recortado: ${PROFILE_MAX} de ${text.length} caracteres; el completo está en agent/profile.md)`
           : ""
-      return `## Mi Flufy\n\n${body}${notice}`
+      return `## Mi Flufy\n\n${body}${notice}\n\nEl perfil define identidad y tono; las reglas específicas del proyecto en la memoria del proyecto prevalecen cuando sean más concretas.`
     } catch {
       return ""
     }
@@ -141,11 +215,13 @@ export const FlufyMemory = async ({ client, directory }, options) => {
     }
   }
 
-  const agentBlock = (info) => {
-    if (info?.parentID) {
-      return "Perfil del agente (Mi Flufy) disponible en la memoria local: agent/profile.md. Leelo solo si necesitás su tono o sus reglas."
-    }
-    return [profileBlock(), logBlock(), inboxBlock()].filter(Boolean).join("\n\n")
+  const checkpointBlock = (sessionID, dir, registry) => {
+    const checkpoint = checkpointFor(sessionID, dir, registry)
+    if (!checkpoint) return ""
+    const state = checkpoint.summary || checkpoint.progress
+    if (!state) return ""
+    const compacted = checkpoint.compacted ? "\nContexto compactado: el resumen del historial está incluido arriba." : ""
+    return `## Checkpoint de esta conversación\n\nEs el estado guardado al terminar el turno anterior; contrastalo con el historial.\n${String(state).slice(0, CAPS.checkpoint)}${compacted}`
   }
 
   return {
@@ -153,10 +229,31 @@ export const FlufyMemory = async ({ client, directory }, options) => {
       if (!input?.sessionID || !enabled(input.sessionID)) return
       const info = await sessionInfo(input.sessionID)
       const dir = info.directory || directory || ""
-      const text = digestFor(dir) || preferences()
-      if (text) output.system.push(text)
-      const agent = agentBlock(info)
-      if (agent) output.system.push(agent)
+      const registry = scopes()
+      const blocks = []
+      let used = 0
+      const push = (text, cap) => {
+        if (!text) return
+        const room = BUDGET - used
+        if (room <= 100) return
+        const body = String(text).slice(0, Math.max(0, Math.min(cap, room)))
+        if (!body.trim()) return
+        blocks.push(body)
+        used += body.length
+      }
+
+      if (info?.parentID) {
+        push(digestFor(dir, registry) || preferences(), CAPS.digest)
+        push(CHILD_POINTER, 300)
+      } else {
+        push(checkpointBlock(input.sessionID, dir, registry), CAPS.checkpoint)
+        push(profileBlock(), CAPS.profile)
+        push(digestFor(dir, registry) || preferences(), CAPS.digest)
+        push(logBlock(), CAPS.log)
+        push(inboxBlock(), CAPS.inbox)
+      }
+
+      for (const block of blocks) output.system.push(block)
     },
     "tool.execute.before": async (input) => {
       if (!input?.sessionID) return

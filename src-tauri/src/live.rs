@@ -19,6 +19,7 @@ const FORWARDED: &[&str] = &[
     "session.deleted",
     "session.status",
     "session.idle",
+    "session.compacted",
     "session.error",
     "permission.asked",
     "permission.replied",
@@ -231,6 +232,15 @@ fn track(app: &AppHandle, kind: &str, props: &Value, directory: &str) {
         "session.idle" => {
             if let Some(id) = props["sessionID"].as_str() {
                 finish(app, id, directory);
+            }
+        }
+        "session.compacted" => {
+            // El motor ya resumió el historial: guardamos ese resumen como
+            // contexto durable para continuar en otra conversación.
+            if let Some(id) = props["sessionID"].as_str() {
+                let capture_app = app.clone();
+                let capture_session = id.to_string();
+                std::thread::spawn(move || crate::memory::capture(&capture_app, &capture_session));
             }
         }
         "session.error" => {
