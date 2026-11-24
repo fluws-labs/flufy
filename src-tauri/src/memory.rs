@@ -78,6 +78,17 @@ pub fn agent_root(app: &AppHandle) -> PathBuf {
     root(app).join("agent")
 }
 
+fn strip_verbatim(path: PathBuf) -> PathBuf {
+    let text = path.to_string_lossy();
+    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{}", rest));
+    }
+    if let Some(rest) = text.strip_prefix(r"\\?\") {
+        return PathBuf::from(rest);
+    }
+    path
+}
+
 fn normalize_path(path: &Path) -> String {
     let text = path.to_string_lossy().replace('\\', "/");
     // En Windows canonicalize devuelve `//?/C:/...`; el plugin no ve ese prefijo.
@@ -116,7 +127,7 @@ fn worktree_main_root(dir: &Path) -> Option<PathBuf> {
         return None;
     }
     let root = PathBuf::from(root);
-    Some(fs::canonicalize(&root).unwrap_or(root))
+    Some(strip_verbatim(fs::canonicalize(&root).unwrap_or(root)))
 }
 
 /// Raíz estable para la memoria de un proyecto. Mapea subcarpetas y worktrees
@@ -125,15 +136,15 @@ pub fn project_root(directory: &str) -> PathBuf {
     if directory.trim().is_empty() {
         return PathBuf::new();
     }
-    let dir = fs::canonicalize(directory).unwrap_or_else(|_| PathBuf::from(directory));
+    let dir = strip_verbatim(fs::canonicalize(directory).unwrap_or_else(|_| PathBuf::from(directory)));
     let mut candidate = dir.as_path();
     for _ in 0..6 {
         let dot = candidate.join(".git");
         if dot.is_dir() {
-            return candidate.to_path_buf();
+            return strip_verbatim(candidate.to_path_buf());
         }
         if dot.is_file() {
-            return worktree_main_root(candidate).unwrap_or_else(|| candidate.to_path_buf());
+            return worktree_main_root(candidate).unwrap_or_else(|| strip_verbatim(candidate.to_path_buf()));
         }
         let Some(parent) = candidate.parent() else { break };
         candidate = parent;
@@ -1585,14 +1596,14 @@ mod tests {
         fs::create_dir_all(repo.join(".git")).unwrap();
         let sub = repo.join("app").join("src");
         fs::create_dir_all(&sub).unwrap();
-        assert_eq!(project_root(sub.to_str().unwrap()), fs::canonicalize(&repo).unwrap());
+        assert_eq!(project_root(sub.to_str().unwrap()), strip_verbatim(fs::canonicalize(&repo).unwrap()));
 
         let worktree = base.join("worktree");
         fs::create_dir_all(&worktree).unwrap();
         let gitdir = repo.join(".git").join("worktrees").join("wt");
         fs::create_dir_all(&gitdir).unwrap();
         fs::write(worktree.join(".git"), format!("gitdir: {}\n", gitdir.to_string_lossy())).unwrap();
-        assert_eq!(project_root(worktree.to_str().unwrap()), fs::canonicalize(&repo).unwrap());
+        assert_eq!(project_root(worktree.to_str().unwrap()), strip_verbatim(fs::canonicalize(&repo).unwrap()));
         fs::remove_dir_all(base).unwrap();
     }
 
