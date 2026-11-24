@@ -56,6 +56,10 @@ struct Inner {
     connected: bool,
     connecting: bool,
     generation: u64,
+    // Internal WebView2 profiles expose an ephemeral CDP port. Remember which
+    // port this bridge attached to so a new surface can never reuse the old
+    // (dead) one.
+    target_port: Option<u16>,
 }
 
 struct Bridge {
@@ -67,7 +71,7 @@ struct Bridge {
 
 thread_local! { static ROUTE: std::cell::RefCell<Option<(Arc<Bridge>, PathBuf)>> = const { std::cell::RefCell::new(None) }; }
 fn new_bridge() -> Arc<Bridge> { Arc::new(Bridge {
-    inner: Mutex::new(Inner { child: None, tree: None, stdin: None, tools: Vec::new(), state: "off", error: None, connected: false, connecting: false, generation: 0 }),
+    inner: Mutex::new(Inner { child: None, tree: None, stdin: None, tools: Vec::new(), state: "off", error: None, connected: false, connecting: false, generation: 0, target_port: None }),
     pending: Arc::new(Mutex::new(HashMap::new())), next: Mutex::new(0), starting: Mutex::new(()),
 }) }
 fn internal_bridges() -> &'static Mutex<HashMap<PathBuf, Arc<Bridge>>> {
@@ -121,6 +125,37 @@ pub fn stop() {
     // Retain the small tool schema so listing tools while control is off does
     // not restart Node. Calls lazily reconnect after the desktop gate allows it.
     b.pending.lock().unwrap().clear();
+}
+
+/// The app-owned target this bridge was launched for, if any. Only internal
+/// WebView2 profiles get a fixed user-data dir; the own profile is launched by
+/// chrome-devtools-mcp itself and real Chrome is discovered by autoConnect.
+fn route_target() -> Option<(PathBuf, Option<u16>)> {
+    ROUTE.with(|r| {
+        let route = r.borrow();
+        let (_, profile) = route.as_ref()?;
+        if is_own_profile(profile) { return None; }
+        let dir = profile.join("profile").join("EBWebView");
+        let port = super::internal_browser::live_port(&dir);
+        Some((dir, port))
+    })
+}
+
+/// Starts a new bridge when the internal surface moved to a different CDP port.
+/// Reusing the previous (dead) port would keep failing forever.
+pub(super) fn sync_target(port: u16) {
+    let current = bridge();
+    let restart = {
+        let inner = current.inner.lock().unwrap();
+        inner.child.is_some() && inner.target_port != Some(port)
+    };
+    if restart { stop_process_only(); }
+}
+
+pub(super) fn stop_profile(profile: &Path) {
+    if !internal_bridges().lock().unwrap().contains_key(profile) { return; }
+    with_profile(profile.to_path_buf(), stop_process_only);
+    internal_bridges().lock().unwrap().remove(profile);
 }
 
 fn send_line(message: &Value) -> Result<(), String> {
@@ -356,6 +391,7 @@ fn launch() -> Result<(), String> {
         inner.error = None;
         inner.generation
     };
+    let target = route_target();
     let mut cmd = bridge_command()?;
     cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
     hide_console(&mut cmd);
@@ -376,6 +412,7 @@ fn launch() -> Result<(), String> {
         inner.child = Some(child);
         inner.tree = Some(tree);
         inner.stdin = Some(stdin);
+        inner.target_port = target.as_ref().and_then(|(_, port)| *port);
     }
     let pending = b.pending.clone();
     let reader_bridge = b.clone();
@@ -438,13 +475,18 @@ fn launch() -> Result<(), String> {
     Ok(())
 }
 
+fn ready(b: &Bridge) -> bool {
+    let inner = b.inner.lock().unwrap();
+    inner.state == "ready" && inner.child.is_some()
+}
+
 fn ensure() -> Result<(), String> {
     let b = bridge();
-    if b.inner.lock().unwrap().state == "ready" {
+    if ready(&b) {
         return Ok(());
     }
     let _guard = b.starting.lock().unwrap();
-    if b.inner.lock().unwrap().state == "ready" {
+    if ready(&b) {
         return Ok(());
     }
     stop();
@@ -452,13 +494,13 @@ fn ensure() -> Result<(), String> {
         Ok(()) => Ok(()),
         Err(e) => {
             let detail = {
-                let mut inner = b.inner.lock().unwrap();
-                inner.state = "error";
-                let detail = inner.error.clone().filter(|d| !d.is_empty()).map(|d| format!("{} ({})", e, d)).unwrap_or(e);
-                inner.error = Some(detail.clone());
-                detail
+                let inner = b.inner.lock().unwrap();
+                inner.error.clone().filter(|d| !d.is_empty()).map(|d| format!("{} ({})", e, d)).unwrap_or(e)
             };
             stop_process_only();
+            let mut inner = b.inner.lock().unwrap();
+            inner.state = "error";
+            inner.error = Some(detail.clone());
             Err(detail)
         }
     }
@@ -467,11 +509,19 @@ fn ensure() -> Result<(), String> {
 fn stop_process_only() {
     let current_bridge = bridge();
     let mut inner = current_bridge.inner.lock().unwrap();
+    inner.generation += 1;
     inner.stdin = None;
     let tree = inner.tree.take();
     if let Some(mut child) = inner.child.take() {
         kill_tree(&mut child, tree);
     }
+    // A killed bridge is not ready. Leaving "ready" here made every following
+    // call talk to a closed stdin until the app restarted.
+    inner.state = "off";
+    inner.connected = false;
+    inner.connecting = false;
+    inner.target_port = None;
+    current_bridge.pending.lock().unwrap().clear();
 }
 
 fn decorate(tools: Vec<Value>) -> Vec<Value> {
@@ -581,6 +631,7 @@ pub fn call(name: &str, arguments: Value) -> Result<Value, String> {
     };
     // No repetir automáticamente una acción: un timeout puede ocurrir después del clic.
     let result = request("tools/call", json!({ "name": tool, "arguments": arguments }), CALL_TIMEOUT);
+    let mut reset = false;
     {
         let current_bridge = bridge();
         let mut inner = current_bridge.inner.lock().unwrap();
@@ -591,15 +642,20 @@ pub fn call(name: &str, arguments: Value) -> Result<Value, String> {
                 Ok(r) if !inner.connected || connection_failure(&text_of(r)) => {
                     inner.connected = false;
                     inner.error = Some(cut_at(&text_of(r), 1500).to_string());
+                    reset = connection_failure(&text_of(r));
                 }
                 Err(e) => {
                     inner.connected = false;
                     inner.error = Some(e.clone());
+                    reset = connection_failure(e);
                 }
                 _ => {}
             }
         }
     }
+    // A dead endpoint (closed Chrome, stale DevToolsActivePort) must be rebuilt
+    // on the next call instead of retrying on the same dead process forever.
+    if reset { stop_process_only(); }
     result.map(compact)
 }
 
@@ -636,16 +692,28 @@ fn call_session_recovery_inner(session: &str, workspace: &str, name: &str, mut a
     if super::internal_browser::selected(workspace) {
         let profile = super::internal_browser::profile(workspace)?;
         let app = crate::proc::app().ok_or("GuilleCode no está iniciado")?;
-        if original_name(name) == "list_pages" && recover {
-            super::internal_browser::open_actor(app, workspace, session, None, false)?;
-        }
         if original_name(name) == "new_page" {
             super::internal_browser::open_actor(app, workspace, session, args["url"].as_str(), true)?;
+            sync_target(super::internal_browser::ensure_port(workspace)?);
             claim_internal(workspace, session)?;
             return with_profile(profile, || call("list_pages", json!({"_guillecode":{"session":workspace,"actor":session,"isolated":true}})));
         }
+        // The `enabled` preference survives restarts; the WebView2 surface and
+        // its ephemeral CDP port do not. Reconcile before every call so a stale
+        // port never turns into a permanent ECONNREFUSED.
+        sync_target(super::internal_browser::ensure_live(app, workspace, session)?);
         claim_internal(workspace, session)?;
         args["_guillecode"]["isolated"] = json!(true);
+        let first = with_profile(profile.clone(), || call(name, args.clone()));
+        let retry = match &first {
+            Err(e) => connection_failure(e) || e.contains("el puente del navegador no está corriendo"),
+            Ok(r) => failed(r) && connection_failure(&text_of(r)),
+        };
+        if !retry { return first; }
+        // A connection-level failure means the call never reached a page, so one
+        // clean reconciliation and retry cannot duplicate a click or a write.
+        sync_target(super::internal_browser::ensure_live(app, workspace, session)?);
+        claim_internal(workspace, session)?;
         return with_profile(profile, || call(name, args));
     }
     if let Some(app) = crate::proc::app() {
@@ -660,6 +728,9 @@ fn call_session_recovery_inner(session: &str, workspace: &str, name: &str, mut a
 
 pub(super) fn claim_internal(workspace: &str, actor: &str) -> Result<(),String> {
     let profile=super::internal_browser::profile(workspace)?;
+    // The caller may have just recreated the surface (new ephemeral port). Point
+    // this profile's bridge at it before asking it to claim pages.
+    sync_target(super::internal_browser::ensure_port(workspace)?);
     let app=crate::proc::app().ok_or("Flufy no está iniciado")?;
     for page in super::internal_browser::pending(workspace,actor) {
         with_profile(profile.clone(), || {
@@ -687,6 +758,19 @@ pub fn workspace(session: &str, page_id: Option<u64>, quiet: bool) -> Result<Val
 
 fn workspace_inner(session: &str, page_id: Option<u64>, quiet: bool) -> Result<Value, String> {
     if super::internal_browser::selected(session) {
+        let app = crate::proc::app().ok_or("Flufy no está iniciado")?;
+        if quiet {
+            let port = super::internal_browser::user_data_dir(session).ok().and_then(|dir| super::internal_browser::live_port(&dir));
+            match port {
+                Some(port) if super::internal_browser::alive(app, session) => sync_target(port),
+                _ => return Ok(json!({ "internal": true, "assigned": false, "missing": false, "windowId": null, "pages": [] })),
+            }
+        } else {
+            // Mounting a chat must not open a surface, but an explicit probe
+            // should restore the selected internal browser instead of failing
+            // on the stale port left by the previous process.
+            sync_target(super::internal_browser::ensure_live(app, session, session)?);
+        }
         return with_profile(super::internal_browser::profile(session)?, || {
             let result = call("list_pages", json!({"_guillecode":{"session":session,"action":"inspect","isolated":true}}))?;
             if failed(&result) { return Err(text_of(&result)); }

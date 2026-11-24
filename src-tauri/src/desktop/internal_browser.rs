@@ -2,8 +2,10 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::net::{SocketAddr, TcpStream};
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 use tauri::{webview::WebviewBuilder, Manager, WebviewUrl};
 
 #[derive(Clone, Serialize)]
@@ -58,6 +60,95 @@ pub(super) fn profile(session: &str) -> Result<PathBuf, String> {
         .app_local_data_dir()
         .map(|p| p.join("internal-browser").join(folder))
         .map_err(|e| e.to_string())
+}
+
+pub(super) fn user_data_dir(session: &str) -> Result<PathBuf, String> {
+    Ok(profile(session)?.join("profile").join("EBWebView"))
+}
+
+/// The CDP endpoint an app-owned WebView2 profile advertises. WebView2 writes an
+/// ephemeral port here, so after the app or the surface restarts the file is
+/// stale: it must never be trusted without a live listener behind it.
+pub(super) fn live_port(dir: &Path) -> Option<u16> {
+    let text = std::fs::read_to_string(dir.join("DevToolsActivePort")).ok()?;
+    let port = text.lines().next()?.trim().parse::<u16>().ok()?;
+    if port == 0 {
+        return None;
+    }
+    let target = SocketAddr::from(([127, 0, 0, 1], port));
+    TcpStream::connect_timeout(&target, Duration::from_millis(300)).ok().map(|_| port)
+}
+
+fn live_page(app: &tauri::AppHandle, session: &str, actor: &str) -> bool {
+    registry().lock().unwrap().pages.iter().any(|page| {
+        page.session == session && page.actor == actor && app.get_webview(&page.label).is_some()
+    })
+}
+
+pub(super) fn alive(app: &tauri::AppHandle, session: &str) -> bool {
+    user_data_dir(session).ok().is_some_and(|dir| live_port(&dir).is_some())
+        && registry().lock().unwrap().pages.iter().any(|page| {
+            page.session == session && app.get_webview(&page.label).is_some()
+        })
+}
+
+fn wait_port(dir: &Path, timeout: Duration) -> Result<u16, String> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Some(port) = live_port(dir) {
+            return Ok(port);
+        }
+        if Instant::now() >= deadline {
+            return Err("El navegador interno no expuso una conexión viva. Cerrá y volvé a abrir el navegador de este chat.".into());
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// Drops the dead surfaces of a profile whose CDP endpoint disappeared (the
+/// WebView2 browser process crashed or was killed). Keeping those handles would
+/// make `open_actor` reuse a surface that can never expose a live port again.
+fn close_pages(app: &tauri::AppHandle, session: &str) {
+    let labels: Vec<String> = {
+        let mut state = registry().lock().unwrap();
+        let mut labels = Vec::new();
+        state.pages.retain(|page| {
+            if page.session == session {
+                labels.push(page.label.clone());
+                false
+            } else {
+                true
+            }
+        });
+        labels
+    };
+    for label in labels {
+        if let Some(view) = app.get_webview(&label) {
+            let _ = view.close();
+        }
+    }
+}
+
+/// The `enabled` preference survives restarts, but the WebView2 surface and its
+/// ephemeral CDP port do not. Recreate the surface and wait for the new port
+/// instead of failing forever against the stale port left on disk.
+pub(super) fn ensure_live(app: &tauri::AppHandle, session: &str, actor: &str) -> Result<u16, String> {
+    let dir = user_data_dir(session)?;
+    if live_page(app, session, actor) {
+        if let Some(port) = live_port(&dir) {
+            return Ok(port);
+        }
+    }
+    if live_port(&dir).is_none() {
+        let _ = std::fs::remove_file(dir.join("DevToolsActivePort"));
+        close_pages(app, session);
+    }
+    open_actor(app, session, actor, None, false)?;
+    wait_port(&dir, Duration::from_secs(15))
+}
+
+pub(super) fn ensure_port(session: &str) -> Result<u16, String> {
+    wait_port(&user_data_dir(session)?, Duration::from_secs(15))
 }
 
 pub(super) fn selected(session: &str) -> bool {
@@ -394,6 +485,7 @@ pub fn browser_internal_off(app: tauri::AppHandle, session: String) -> Result<()
     let session = crate::teams::browser_session(&app, &session);
     let dir = profile(&session)?;
     let _ = std::fs::remove_file(dir.join("enabled"));
+    super::browser::stop_profile(&dir);
     let labels: Vec<String> = registry()
         .lock()
         .unwrap()
@@ -451,6 +543,26 @@ mod tests {
             assert!(safe_url(url).is_err());
         }
         assert!(safe_url("http://127.0.0.1:4317/").is_ok());
+    }
+    #[test]
+    fn a_stale_devtools_port_file_is_not_trusted() {
+        let dir = std::env::temp_dir().join(format!(
+            "flufy-port-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(live_port(&dir), None, "a missing DevToolsActivePort has no endpoint");
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::fs::write(
+            dir.join("DevToolsActivePort"),
+            format!("{}\n/devtools/browser/test", port),
+        )
+        .unwrap();
+        assert_eq!(live_port(&dir), Some(port), "a live listener is accepted");
+        drop(listener);
+        assert_eq!(live_port(&dir), None, "the file alone is not a live target");
+        let _ = std::fs::remove_dir_all(&dir);
     }
     #[cfg(feature = "desktop-e2e")]
     #[test]
