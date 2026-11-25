@@ -1562,7 +1562,7 @@ body.pip-dragging {
   accent-color: var(--accent);
 }
 
-/* Mi Flufy: misiones, ausencia y bandeja en el PWA */
+/* Flufy Bots: misiones, ausencia y bandeja en el PWA */
 .agent-screen {
   overflow-x: clip;
 }

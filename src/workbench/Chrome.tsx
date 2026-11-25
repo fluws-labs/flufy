@@ -70,7 +70,7 @@ const VIEWS: Array<{ id: ViewId; icon: string; title: string; keys: string }> = 
   { id: "search", icon: "search", title: "Buscar", keys: "Ctrl+Shift+F" },
   { id: "scm", icon: "source-control", title: "Control de código", keys: "Ctrl+Shift+G" },
   { id: "agents", icon: "comment-discussion", title: "Sesiones del agente", keys: "Ctrl+Shift+A" },
-  { id: "profile", icon: "account", title: "Mi Flufy", keys: "" },
+  { id: "profile", icon: "account", title: "Flufy Bots", keys: "" },
   { id: "teams", icon: "checklist", title: "Equipos IA", keys: "" },
   { id: "prs", icon: "git-pull-request", title: "Pull requests", keys: "" },
   { id: "routines", icon: "calendar", title: "Rutinas", keys: "" },

@@ -1218,6 +1218,38 @@
   flex-wrap: wrap;
   gap: 4px;
 }
+.mi-attention-options {
+  margin: 0;
+  padding-left: 16px;
+  font-size: 10.5px;
+  line-height: 1.45;
+  color: var(--fg-dim);
+}
+.mi-attention-recommendation {
+  display: block !important;
+  -webkit-line-clamp: unset !important;
+  color: var(--fg) !important;
+}
+.mi-contract-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.mi-contract-grid > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.mi-contract-grid span {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-faint);
+}
+.mi-contract-grid strong {
+  font-size: 11.5px;
+  line-height: 1.4;
+}
 .mi-results {
   border-top: 1px solid var(--border);
   padding-top: 10px;

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { FlufyMemory } from "../src-tauri/src/memory_plugin.js"
 
-const PERFIL = "# Mi Flufy\n\nSos el agente personal de Guille. Respondé en español."
+const PERFIL = "# Flufy Bots\n\nSos el agente personal de Guille. Respondé en español."
 
 function tempRoot() {
   return mkdtempSync(join(tmpdir(), "flufy-agent-profile-"))
@@ -63,7 +63,7 @@ test("la sesión raíz recibe perfil, últimas 20 entradas del log y resumen de 
     writeFileSync(config, JSON.stringify({ sessions: {} }), "utf8")
 
     const text = await inject(root, config, "ses-raiz", { directory: "C:/proyecto" })
-    assert.ok(text.includes("## Mi Flufy"))
+    assert.ok(text.includes("## Flufy Bots"))
     assert.ok(text.includes("Sos el agente personal de Guille"))
     assert.ok(text.includes("## Log del agente"))
     assert.ok(text.includes("[done] C:/proyecto: entrada-25"))
@@ -85,7 +85,7 @@ test("un perfil más largo que el tope inyecta 4000 caracteres y avisa el recort
     writeFileSync(config, JSON.stringify({ sessions: {} }), "utf8")
 
     const text = await inject(root, config, "ses-raiz", { directory: "C:/proyecto" })
-    assert.ok(text.includes("## Mi Flufy"))
+    assert.ok(text.includes("## Flufy Bots"))
     assert.equal(text.match(/A/g)?.length, 4000)
     assert.ok(!/A{4001}/.test(text))
     assert.ok(
@@ -220,7 +220,7 @@ test("el contexto recordado tiene un presupuesto acotado aunque el perfil y el d
 
     const text = await inject(root, config, "ses-raiz", { directory: "C:/proyecto" })
     assert.ok(text.length <= 12200)
-    assert.ok(text.includes("## Mi Flufy"))
+    assert.ok(text.includes("## Flufy Bots"))
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

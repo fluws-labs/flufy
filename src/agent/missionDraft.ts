@@ -1,4 +1,4 @@
-export const MISSION_DRAFT_PROMPT = `Quiero convertir esta conversación en una misión de Mi Flufy.
+export const MISSION_DRAFT_PROMPT = `Quiero convertir esta conversación en una misión de Flufy Bots.
 
 Analizá lo que hablamos y proponé una misión recurrente. Si falta el horario o el objetivo, preguntame antes de proponerla.
 

@@ -12,7 +12,7 @@ const INBOX_TITLES = 3
 // o el proyecto.
 const BUDGET = 12000
 const CAPS = { checkpoint: 900, profile: 4400, digest: 6000, log: 1600, inbox: 320 }
-const CHILD_POINTER = "Perfil del agente (Mi Flufy) disponible en la memoria local: agent/profile.md. Leelo solo si necesitás su tono o sus reglas."
+const CHILD_POINTER = "Perfil del agente (Flufy Bots) disponible en la memoria local: agent/profile.md. Leelo solo si necesitás su tono o sus reglas."
 
 function slug(value) {
   const base = String(value || "")
@@ -166,7 +166,7 @@ export const FlufyMemory = async ({ client, directory }, options) => {
         text.length > PROFILE_MAX
           ? `\n\n(perfil recortado: ${PROFILE_MAX} de ${text.length} caracteres; el completo está en agent/profile.md)`
           : ""
-      return `## Mi Flufy\n\n${body}${notice}\n\nEl perfil define identidad y tono; las reglas específicas del proyecto en la memoria del proyecto prevalecen cuando sean más concretas.`
+      return `## Flufy Bots\n\n${body}${notice}\n\nEl perfil define identidad y tono; las reglas específicas del proyecto en la memoria del proyecto prevalecen cuando sean más concretas.`
     } catch {
       return ""
     }

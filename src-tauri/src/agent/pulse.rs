@@ -54,7 +54,7 @@ trait SessionRunner {
 }
 
 /// Arranca el hilo del pulso. El Vigía está apagado por defecto y no toca nada
-/// hasta que el usuario lo enciende desde Mi Flufy.
+/// hasta que el usuario lo enciende desde Flufy Bots.
 pub fn start(app: &AppHandle) {
     let app = app.clone();
     std::thread::spawn(move || loop {

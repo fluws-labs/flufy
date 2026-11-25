@@ -200,7 +200,7 @@ fn browser_check(app: &AppHandle) -> AbsenceCheck {
             "browser",
             "fail",
             "No hay una ventana de Chrome asignada para misiones.",
-            Some("En Mi Flufy, elegí una pestaña de Chrome para misiones antes de irte."),
+            Some("En Flufy Bots, elegí una pestaña de Chrome para misiones antes de irte."),
         ),
         Err(error) => check(
             "browser",

@@ -363,7 +363,7 @@ function MissionDraftCard({ data, raw, before, after, session }: { data: Mission
     }
     setCreated(true)
     await loadAgentMissions()
-    notify.success("Misión creada", "Mi Flufy se va a encargar de esto. La conversación queda solo como referencia.")
+    notify.success("Misión creada", "Flufy Bots se va a encargar de esto. La conversación queda solo como referencia.")
   }
   return (
     <div className="mission-draft">
@@ -371,7 +371,7 @@ function MissionDraftCard({ data, raw, before, after, session }: { data: Mission
       <div className="mission-draft-head">
         <Icon name="hubot" />
         <div>
-          <strong>Misión propuesta para Mi Flufy</strong>
+          <strong>Misión propuesta para Flufy Bots</strong>
           <small>{project || "Sin proyecto"} · borrador, todavía no corre</small>
         </div>
       </div>
@@ -388,8 +388,8 @@ function MissionDraftCard({ data, raw, before, after, session }: { data: Mission
       {created ? (
         <div className="mission-draft-done">
           <Icon name="pass-filled" />
-          <span>Misión creada. Ya está en Mi Flufy.</span>
-          <button type="button" className="btn btn-xs btn-primary" onClick={() => useLayout.getState().showView("profile", false)}>Ver en Mi Flufy</button>
+          <span>Misión creada. Ya está en Flufy Bots.</span>
+          <button type="button" className="btn btn-xs btn-primary" onClick={() => useLayout.getState().showView("profile", false)}>Ver en Flufy Bots</button>
         </div>
       ) : (
         <div className="mission-draft-actions">
