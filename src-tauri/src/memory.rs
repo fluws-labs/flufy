@@ -25,7 +25,7 @@ pub const LOG_KINDS: &[&str] = &["decision", "done", "blocked", "learned", "bloc
 const LOG_RETENTION_DAYS: i64 = 365;
 static LOG_LOCK: Mutex<()> = Mutex::new(());
 
-const AGENT_PROFILE_DEFAULT: &str = "# Mi Flufy\n\nSos el agente personal del usuario en esta PC. Editá este perfil para definir el tono, el idioma y en qué trabaja.\n\n## Guía\n\n- \n";
+const AGENT_PROFILE_DEFAULT: &str = "# Flufy Bots\n\nSos el agente personal del usuario en esta PC. Editá este perfil para definir el tono, el idioma y en qué trabaja.\n\n## Guía\n\n- \n";
 
 const AGENT_STATE_DEFAULT: &str = "{\n  \"version\": 1,\n  \"firstRun\": true,\n  \"pulse\": {\n    \"enabled\": false,\n    \"quietHours\": { \"from\": \"22:00\", \"to\": \"08:00\" },\n    \"maxPerDay\": 4\n  }\n}\n";
 
@@ -255,7 +255,13 @@ pub(crate) fn save_agent_state(app: &AppHandle, state: &Value) -> Result<(), Str
 }
 
 fn profile_text(app: &AppHandle) -> String {
-    read_text(&agent_root(app).join("profile.md"))
+    let path = agent_root(app).join("profile.md");
+    let mut text = read_text(&path);
+    if text.trim_start().starts_with("# Mi Flufy") {
+        text = text.replacen("# Mi Flufy", "# Flufy Bots", 1);
+        let _ = atomic_write(&path, &text);
+    }
+    text
 }
 
 pub fn first_run(app: &AppHandle) -> bool {

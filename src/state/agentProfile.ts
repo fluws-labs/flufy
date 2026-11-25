@@ -18,6 +18,13 @@ export type AgentInboxItem = {
   expiresAt?: number
   preview?: string
   risk?: string
+  cause?: string
+  options?: string[]
+  recommendation?: string
+  defaultAction?: string
+  scope?: string
+  runId?: string
+  dedupeKey?: string
 }
 
 export type AgentMissionSchedule =
@@ -64,6 +71,24 @@ export type AgentMissionRun = {
   summary?: string | null
   error?: string | null
   progress?: AgentMissionProgress | null
+  phase?: string | null
+  outcome?: string | null
+  blockedReason?: string | null
+  durationMs?: number
+  tokens?: number
+}
+
+export type AgentMissionGrants = {
+  read: string
+  writeRepo: string
+  merge: string
+  deploy: string
+  prodWrite: string
+  send: string
+  spend: string
+  sendPerWeek: number
+  spendLimit: number
+  updatedAt?: number
 }
 
 export type AgentMission = {
@@ -83,13 +108,24 @@ export type AgentMission = {
   originRoutineId?: string | null
   artifacts?: Array<{ kind?: string; title?: string; url?: string; path?: string; verified?: boolean }>
   schedule: AgentMissionSchedule
-  budget: { minutesPerRun: number; runsPerDay: number; tokensPerDay: number }
+  budget: { minutesPerRun: number; runsPerDay: number; tokensPerDay: number; costPerDayCents?: number }
   policy: { reads: string; drafts: string; commits: string }
+  grants?: AgentMissionGrants
+  metric?: string
+  target?: string
+  activeBet?: string
+  windowEnd?: number | null
+  windowOnly?: boolean
+  template?: string | null
   state: {
     nextRunAt?: number | null
     lastRunAt?: number | null
     lastStatus?: string | null
     lastError?: string | null
+    phase?: string | null
+    blockedReason?: string | null
+    tokensToday?: number
+    windowEndFired?: boolean
     brief?: AgentMissionBrief | null
     runs?: AgentMissionRun[]
     attempts: number
@@ -140,6 +176,13 @@ type RawInboxItem = {
   expiresAt?: string | number | null
   preview?: string | null
   risk?: string | null
+  cause?: string | null
+  options?: string[] | null
+  recommendation?: string | null
+  defaultAction?: string | null
+  scope?: string | null
+  runId?: string | null
+  dedupeKey?: string | null
 }
 
 function epoch(value: string | number | null | undefined): number {
@@ -176,6 +219,13 @@ function toInboxItem(raw: RawInboxItem): AgentInboxItem {
     expiresAt: raw.expiresAt == null ? undefined : epoch(raw.expiresAt),
     preview: raw.preview ?? undefined,
     risk: raw.risk ?? undefined,
+    cause: raw.cause ?? undefined,
+    options: Array.isArray(raw.options) ? raw.options : undefined,
+    recommendation: raw.recommendation ?? undefined,
+    defaultAction: raw.defaultAction ?? undefined,
+    scope: raw.scope ?? undefined,
+    runId: raw.runId ?? undefined,
+    dedupeKey: raw.dedupeKey ?? undefined,
   }
 }
 
@@ -441,7 +491,7 @@ export async function stopAgentAbsence(): Promise<void> {
 
 // Arranca el refresco de la bandeja: cada 15 s y cuando el agente publica un
 // cambio. El contador de la barra lateral vive fuera de la vista, por eso se
-// inicia con el workbench y no solo al abrir Mi Flufy.
+// inicia con el workbench y no solo al abrir Flufy Bots.
 export function startAgentProfile(): void {
   if (started || !isTauri) return
   started = true

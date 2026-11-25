@@ -306,14 +306,14 @@ export function AgentScreen({ back, open }: { back: () => void; open: (route: Ro
         <button type="button" className="icon-btn" aria-label="Volver" onClick={back}>
           <Icon name="arrow-left" />
         </button>
-        <h1>Mi Flufy</h1>
+        <h1>Flufy Bots</h1>
         <span className="spacer" />
         <button type="button" className="btn btn-sm" onClick={() => void load()} disabled={!!busy}>
           Actualizar
         </button>
       </header>
       {error && <div className="alert" role="alert">{error}</div>}
-      {!data && !error && <div className="loading">Cargando Mi Flufy…</div>}
+      {!data && !error && <div className="loading">Cargando Flufy Bots…</div>}
       {data && (
         <>
           <div className="agent-section-head">

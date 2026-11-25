@@ -303,7 +303,7 @@ export function SessionPane({ sessionId, variant, onPreviewOpen, emptyState, pre
             {missionHint && !missionHintDismissed && session && !session.title.startsWith("Misión") && (
               <div className="mission-suggest">
                 <Icon name="rocket" />
-                <span>¿Querés que Mi Flufy se encargue de esto todos los días?</span>
+                <span>¿Querés que Flufy Bots se encargue de esto todos los días?</span>
                 <button type="button" className="btn btn-xs btn-primary" onClick={() => { setMissionHintDismissed(true); void startMissionDraft(sessionId, root) }}>Convertir en misión</button>
                 <button type="button" className="btn btn-xs" onClick={() => setMissionHintDismissed(true)}>Ahora no</button>
               </div>
@@ -350,7 +350,7 @@ export function AgentPanel({ previewOpen = false, onPreviewOpen = () => {}, onPr
           {!teamChatId && (activeId ? (
             <IconButton
               icon="rocket"
-              title="Convertir esta conversación en una misión de Mi Flufy"
+              title="Convertir esta conversación en una misión de Flufy Bots"
               onClick={() => void startMissionDraft(activeId, root)}
             />
           ) : null)}

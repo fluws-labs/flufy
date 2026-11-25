@@ -107,6 +107,25 @@ const RUN_STATUS: Record<string, string> = {
 
 const CHECK_STATUS: Record<string, string> = { ok: "OK", warn: "Revisar", fail: "Falta" }
 
+const DEFAULT_ACTION_LABEL: Record<string, string> = {
+  approve: "aprobar",
+  reject: "rechazar",
+  resume: "continuar",
+  park: "estacionar",
+}
+
+const PHASE_LABEL: Record<string, string> = {
+  shipped: "Publicó",
+  evidence: "Midi\u00f3",
+  skipped: "Sin se\u00f1al",
+  decided: "Decidi\u00f3",
+  waiting: "Espera",
+  blocked: "Bloqueada",
+  queued: "En cola",
+  running: "Corriendo",
+  done: "Lista",
+}
+
 type MissionFilter = "all" | "active" | "scheduled" | "paused" | "done"
 
 function modelKey(model?: { providerID: string; modelID: string } | null): string {
@@ -257,8 +276,8 @@ function startNewChat() {
   const root = useProject.getState().project ?? useProject.getState().root
   useLayout.getState().showView("agents", false)
   useLayout.getState().toggleAgent(true)
-  const hidden = "Estoy en Mi Flufy y no entiendo qué está pasando con mis misiones. Revisá el estado, la bandeja y las misiones; explicame qué tengo corriendo, qué está trabado y qué me conviene hacer. No ejecutes cambios todavía."
-  void sendPrompt("¿Qué está pasando con mis misiones?", root, null, null, undefined, hidden).catch((cause) => notify.error("No pude abrir el chat de Mi Flufy", cause instanceof Error ? cause.message : String(cause)))
+  const hidden = "Estoy en Flufy Bots y no entiendo qué está pasando con mis misiones. Revisá el estado, la bandeja y las misiones; explicame qué tengo corriendo, qué está trabado y qué me conviene hacer. No ejecutes cambios todavía."
+  void sendPrompt("¿Qué está pasando con mis misiones?", root, null, null, undefined, hidden).catch((cause) => notify.error("No pude abrir el chat de Flufy Bots", cause instanceof Error ? cause.message : String(cause)))
 }
 
 function NowSection({ missions, selectedId, onSelect }: { missions: AgentMission[]; selectedId?: string | null; onSelect: (mission: AgentMission) => void }) {
@@ -303,13 +322,25 @@ function AttentionSection({ items, onOpen }: { items: AgentInboxItem[]; onOpen: 
       {items.map((item) => (
         <article key={item.id} className="mi-attention">
           <div className="mi-attention-head">
-            <span className="mi-attention-kind">{item.kind === "approval" ? "Aprobación" : item.kind === "handoff" ? "Manos" : "Aviso"}</span>
+            <span className="mi-attention-kind">{item.kind === "approval" ? "Aprobación" : item.kind === "decision" ? "Decisión" : item.kind === "handoff" ? "Manos" : "Aviso"}</span>
             <span className="mi-muted">{shortAgo(item.at)}</span>
           </div>
           <strong>{item.title}</strong>
+          {item.cause ? <small className="mi-muted">Causa: {item.cause}</small> : null}
           {item.preview || item.body ? <p>{item.preview || item.body}</p> : null}
+          {item.options && item.options.length > 0 && (
+            <ul className="mi-attention-options">
+              {item.options.map((option) => <li key={option}>{option}</li>)}
+            </ul>
+          )}
+          {item.recommendation ? <p className="mi-attention-recommendation"><strong>Recomendación:</strong> {item.recommendation}</p> : null}
+          {item.expiresAt ? (
+            <small className="mi-muted">
+              Vence {new Date(item.expiresAt).toLocaleString("es-AR")} · por defecto {DEFAULT_ACTION_LABEL[item.defaultAction ?? "park"] ?? "estacionar"}
+            </small>
+          ) : null}
           <div className="mi-attention-actions">
-            {item.kind === "approval" && (
+            {(item.kind === "approval" || item.kind === "decision") && (
               <>
                 <button type="button" className="btn btn-xs btn-primary" disabled={dismissing === item.id} onClick={() => void decideAgentInboxItem(item, "approved")}>Aprobar</button>
                 <button type="button" className="btn btn-xs" disabled={dismissing === item.id} onClick={() => void decideAgentInboxItem(item, "rejected")}>Rechazar</button>
@@ -366,10 +397,13 @@ function AutomationRow({ mission, selected, onSelect, project }: { mission: Agen
           {!sameProject ? " · otro proyecto" : ""}
         </span>
         <span className="mi-row-meta">
-          {mission.status === "paused"
-            ? mission.state.lastError ? `Pausada: ${mission.state.lastError}` : "Pausada · activá para que corra"
-            : mission.status === "armed" ? `Próxima: ${nextLabel(mission.state.nextRunAt)}` : lastRun ? `Última: ${RUN_STATUS[lastRun.status] ?? lastRun.status} ${shortAgo(lastRun.finishedAt)}` : "Sin corridas todavía"}
+          {mission.state.blockedReason
+            ? `Bloqueada: ${mission.state.blockedReason}`
+            : mission.status === "paused"
+              ? mission.state.lastError ? `Pausada: ${mission.state.lastError}` : "Pausada · activá para que corra"
+              : mission.status === "armed" ? `Próxima: ${nextLabel(mission.state.nextRunAt)}` : lastRun ? `${lastRun.phase ? `${PHASE_LABEL[lastRun.phase] ?? lastRun.phase} · ` : ""}${RUN_STATUS[lastRun.status] ?? lastRun.status} ${shortAgo(lastRun.finishedAt)}` : "Sin corridas todavía"}
         </span>
+        {mission.metric ? <span className="mi-row-meta">Contrato: {mission.metric}{mission.target ? ` → ${mission.target}` : ""}</span> : null}
       </span>
       <span className="mi-row-model">{modelKey(mission.model) ? mission.model?.modelID : "modelo predeterminado"}</span>
     </button>
@@ -525,7 +559,7 @@ function MissionDetail({ mission, models }: { mission: AgentMission; models: Pro
   const ownerId = mission.botId ?? "flufy"
   const ownerControl = bots.find((bot) => bot.id === ownerId)?.control ?? "playing"
   const ownerOptions = [
-    ...(bots.some((bot) => bot.id === "flufy") ? [] : [{ value: "flufy", label: "Mi Flufy" }]),
+    ...(bots.some((bot) => bot.id === "flufy") ? [] : [{ value: "flufy", label: "Flufy Bots" }]),
     ...bots.map((bot) => ({ value: bot.id, label: bot.name })),
   ]
 
@@ -603,7 +637,7 @@ function MissionDetail({ mission, models }: { mission: AgentMission; models: Pro
       ) : (
         <div className="mi-brief-empty">
           <Icon name="lightbulb" />
-          <p>El informe crudo puede ser largo. Pedile a Mi Flufy un resumen breve con hallazgos y decisiones.</p>
+          <p>El informe crudo puede ser largo. Pedile a Flufy Bots un resumen breve con hallazgos y decisiones.</p>
           <button type="button" className="btn btn-sm btn-primary" disabled={busy} onClick={() => void generateAgentMissionBrief(mission.id)}>
             <Icon name={busy ? "loading" : "lightbulb"} spin={busy} /> Generar resumen breve
           </button>
@@ -647,6 +681,21 @@ function MissionDetail({ mission, models }: { mission: AgentMission; models: Pro
           <small>Vacío: usa el mismo modelo de la misión</small>
         </div>
       </div>
+
+      {(mission.metric || mission.target || mission.activeBet || mission.windowEnd) && (
+        <section className="mi-detail-section mi-contract" aria-label="Contrato de la misión">
+          <header className="mi-detail-section-head"><strong>Contrato</strong><span>{mission.windowOnly ? "Solo al cerrar ventana" : "Ventana"}</span></header>
+          <div className="mi-contract-grid">
+            <div><span>Métrica norte</span><strong>{mission.metric || "Sin definir"}</strong></div>
+            <div><span>Umbral</span><strong>{mission.target || "Sin definir"}</strong></div>
+            <div><span>Apuesta activa</span><strong>{mission.activeBet || "Sin definir"}</strong></div>
+            <div><span>Ventana</span><strong>{mission.windowEnd ? new Date(mission.windowEnd).toLocaleString("es-AR") : "Sin ventana"}</strong></div>
+            <div><span>Fase</span><strong>{PHASE_LABEL[mission.state.phase ?? ""] ?? mission.state.phase ?? "—"}</strong></div>
+            <div><span>Tokens hoy</span><strong>{mission.state.tokensToday ?? 0}</strong></div>
+          </div>
+          {mission.state.blockedReason ? <p className="mi-run-error">Causa del bloqueo: {mission.state.blockedReason}</p> : null}
+        </section>
+      )}
 
       {mission.state.progress && (
         <section className="mi-detail-section mi-current-progress" aria-label="Estado del trabajo">
@@ -1031,11 +1080,11 @@ function startBotAdminChat() {
   const root = useProject.getState().project ?? useProject.getState().root
   useLayout.getState().showView("agents", false)
   useLayout.getState().toggleAgent(true)
-  const hidden = "Sos el administrador de los bots de Mi Flufy. Podés usar agent_bots_list, agent_bot_get, agent_bot_save, agent_missions_overview, agent_mission_create, agent_mission_assign y agent_mission_run, además de routine_list y routine_create. Primero listá bots, misiones y rutinas. Preguntame qué quiero cambiar; no desactives, borres ni ejecutes nada sin confirmación explícita. Para crear un bot pedime nombre, rol, instrucciones, modelo y capacidades. Para crear una misión usá agent_mission_create con título, objetivo, botId y horario; no afirmes que la creaste si la herramienta no devolvió la misión. Para asignar una misión existente, confirmá el id de la misión y el bot. Una rutina nativa es del proyecto y no es una misión del bot: no uses el id del bot como agent de una rutina ni la presentes como automatización del bot. Si el usuario quiere que un bot haga algo recurrente, creá una misión del bot; si quiere una rutina de proyecto, usá routine_create y decí que se administra en Mis rutinas."
+  const hidden = "Sos el administrador de los bots de Flufy Bots. Podés usar agent_bots_list, agent_bot_get, agent_bot_save, agent_missions_overview, agent_mission_create, agent_mission_assign y agent_mission_run, además de routine_list y routine_create. Primero listá bots, misiones y rutinas. Preguntame qué quiero cambiar; no desactives, borres ni ejecutes nada sin confirmación explícita. Para crear un bot pedime nombre, rol, instrucciones, modelo y capacidades. Para crear una misión usá agent_mission_create con título, objetivo, botId y horario; no afirmes que la creaste si la herramienta no devolvió la misión. Para asignar una misión existente, confirmá el id de la misión y el bot. Una rutina nativa es del proyecto y no es una misión del bot: no uses el id del bot como agent de una rutina ni la presentes como automatización del bot. Si el usuario quiere que un bot haga algo recurrente, creá una misión del bot; si quiere una rutina de proyecto, usá routine_create y decí que se administra en Mis rutinas."
   const open = async () => {
     await loadSessions().catch(() => false)
     const existing = useAgent.getState().allSessions
-      .filter((session) => sessionRuntime(session.id).botAdmin === true || /^(Administrador de bots|Administración de bots|Gestión de bots y misiones|Bots y misiones de Mi Flufy)/.test(session.title))
+      .filter((session) => sessionRuntime(session.id).botAdmin === true || /^(Administrador de bots|Administración de bots|Gestión de bots y misiones|Bots y misiones de Flufy Bots)/.test(session.title))
       .sort((a, b) => b.time.updated - a.time.updated)[0]
     if (existing) {
       if (sessionRuntime(existing.id).botAdmin !== true) patchSessionRuntime(existing.id, { botAdmin: true })
@@ -1122,9 +1171,9 @@ function SettingsPanel({ onClose }: { onClose: () => void }) {
 
   return (
     <div className="mi-overlay" onMouseDown={onClose}>
-      <div className="mi-settings" role="dialog" aria-modal="true" aria-label="Ajustes de Mi Flufy" onMouseDown={(event) => event.stopPropagation()}>
+      <div className="mi-settings" role="dialog" aria-modal="true" aria-label="Ajustes de Flufy Bots" onMouseDown={(event) => event.stopPropagation()}>
         <header className="mi-settings-head">
-          <div><span className="mi-eyebrow">MI FLUFY</span><h2>Ajustes</h2></div>
+          <div><span className="mi-eyebrow">Flufy Bots</span><h2>Ajustes</h2></div>
           <button type="button" className="icon-button" title="Cerrar" aria-label="Cerrar" onClick={onClose}><Icon name="close" /></button>
         </header>
         {error && <div className="view-error">{error}</div>}
@@ -1171,6 +1220,10 @@ function SettingsPanel({ onClose }: { onClose: () => void }) {
 function NewMissionDialog({ models, botId, botName, onCreate, onClose }: { models: ProviderModel[]; botId: string; botName?: string; onCreate: (mission: AgentMission) => void; onClose: () => void }) {
   const [title, setTitle] = useState("")
   const [goal, setGoal] = useState("")
+  const [metric, setMetric] = useState("")
+  const [target, setTarget] = useState("")
+  const [bet, setBet] = useState("")
+  const [windowEnd, setWindowEnd] = useState("")
   const [scheduleKind, setScheduleKind] = useState<"daily" | "interval" | "continuous">("daily")
   const [time, setTime] = useState("08:30")
   const [hours, setHours] = useState(3)
@@ -1196,6 +1249,10 @@ function NewMissionDialog({ models, botId, botName, onCreate, onClose }: { model
       autonomy: "alta",
       botId,
       computer: { browser: "borrowed", desktop: false, files: true, terminal: true },
+      metric: metric.trim(),
+      target: target.trim(),
+      activeBet: bet.trim(),
+      windowEnd: windowEnd ? new Date(`${windowEnd}T23:59:00`).getTime() : null,
     })
     setSaving(false)
     if (!saved) return
@@ -1207,13 +1264,21 @@ function NewMissionDialog({ models, botId, botName, onCreate, onClose }: { model
     <div className="mi-overlay" onMouseDown={onClose}>
       <div className="mi-dialog" role="dialog" aria-modal="true" aria-label="Nueva misión" onMouseDown={(event) => event.stopPropagation()}>
         <header className="mi-settings-head">
-          <div><span className="mi-eyebrow">MI FLUFY</span><h2>Nueva misión</h2></div>
+          <div><span className="mi-eyebrow">Flufy Bots</span><h2>Nueva misión</h2></div>
           <button type="button" className="icon-button" title="Cerrar" aria-label="Cerrar" onClick={onClose}><Icon name="close" /></button>
         </header>
         <div className="agent-mission-form">
           <input className="agent-input" value={title} placeholder="Título (ej. Briefing diario)" onChange={(event) => setTitle(event.target.value)} />
           <textarea className="agent-input" rows={3} value={goal} placeholder="¿Qué tiene que lograr y qué no debe hacer?" onChange={(event) => setGoal(event.target.value)} />
-          <p className="mi-muted">Se asigna a <strong>{botName || botId}</strong>.</p>
+          <input className="agent-input" value={metric} placeholder="Métrica norte (ej. altas nuevas por semana)" onChange={(event) => setMetric(event.target.value)} />
+          <input className="agent-input" value={target} placeholder="Umbral (ej. 3 altas en 30 días)" onChange={(event) => setTarget(event.target.value)} />
+          <input className="agent-input" value={bet} placeholder="Apuesta activa: una sola por vez" onChange={(event) => setBet(event.target.value)} />
+          <label className="agent-inline-field">
+            <span>Cerrar ventana</span>
+            <input className="agent-input" type="date" value={windowEnd} onChange={(event) => setWindowEnd(event.target.value)} />
+            <span>opcional</span>
+          </label>
+          <p className="mi-muted">Se asigna a <strong>{botName || botId}</strong>. Si no hay métrica ni umbral, la misión pierde el norte.</p>
           <label className="agent-inline-field">
             <span>Frecuencia</span>
             <Select
@@ -1276,13 +1341,13 @@ export function ProfileView() {
   const actionable = useMemo(() => {
     const byId = new Map(missions.map((mission) => [mission.id, mission]))
     return inbox.filter((item) => {
-      if (item.ackedAt != null || !["approval", "handoff", "alert"].includes(item.kind)) return false
+      if (item.ackedAt != null || !["approval", "handoff", "alert", "decision"].includes(item.kind)) return false
       const mission = item.missionId ? byId.get(item.missionId) : undefined
       if (mission && mission.state.lastStatus === "ok" && mission.updatedAt > item.at) return false
       return true
     })
   }, [inbox, missions])
-  const results = useMemo(() => inbox.filter((item) => item.ackedAt == null && !["approval", "handoff", "alert"].includes(item.kind)), [inbox])
+  const results = useMemo(() => inbox.filter((item) => item.ackedAt == null && !["approval", "handoff", "alert", "decision"].includes(item.kind)), [inbox])
   const activeCount = missions.filter((mission) => mission.status === "running" || mission.status === "queued").length
   const scheduledCount = missions.filter((mission) => mission.status === "armed").length
   const armable = missions.filter((mission) => mission.status === "paused" && !["handoff-demo", "approval-demo"].includes(mission.playbook ?? ""))
@@ -1362,7 +1427,7 @@ export function ProfileView() {
     <div className="view profile-view mi-flufy">
       <header className="mi-top">
         <div>
-          <span className="mi-eyebrow">MI FLUFY</span>
+          <span className="mi-eyebrow">Flufy Bots</span>
           <h1>Automatizaciones</h1>
           <p>{activeCount} en curso · {actionable.length} te necesita · {scheduledCount} programadas</p>
         </div>
@@ -1380,7 +1445,7 @@ export function ProfileView() {
       </header>
 
       {!isTauri ? (
-        <p className="view-note">Mi Flufy está disponible solo en la app de escritorio.</p>
+        <p className="view-note">Flufy Bots está disponible solo en la app de escritorio.</p>
       ) : (
         <div className="mi-body">
           <aside className="mi-list" aria-label="Misiones">
@@ -1439,7 +1504,7 @@ export function ProfileView() {
               <div className="mi-empty">
                 <Icon name="rocket" />
                 <h2>Todavía no tenés misiones</h2>
-                <p>Pedile a Mi Flufy que haga algo todos los días, vigile un archivo o prepare un informe.</p>
+                <p>Pedile a Flufy Bots que haga algo todos los días, vigile un archivo o prepare un informe.</p>
                 <button type="button" className="btn btn-primary" onClick={() => openNewMission(selectedBot?.id ?? "flufy")}><Icon name="add" /> Crear la primera</button>
               </div>
             )}

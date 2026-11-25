@@ -86,6 +86,10 @@ fn load_one(path: &PathBuf) -> Option<Bot> {
         .unwrap_or(false);
     let mut bot: Bot = serde_json::from_str(&raw).ok()?;
     if bot.id.trim().is_empty() || bot.name.trim().is_empty() { return None; }
+    // Migración de nombre: el bot principal se llamaba "Mi Flufy".
+    if bot.id == "flufy" && bot.name.trim() == "Mi Flufy" {
+        bot.name = "Flufy Bots".into();
+    }
     if !had_control || !["playing", "paused", "off"].contains(&bot.control.as_str()) {
         bot.control = if bot.enabled { "playing".into() } else { "off".into() };
     }
@@ -118,7 +122,7 @@ pub fn set_control(app: &AppHandle, id: &str, control: &str) -> Result<Bot, Stri
 fn default_bot() -> Bot {
     let mut bot = Bot::default();
     bot.id = "flufy".into();
-    bot.name = "Mi Flufy".into();
+    bot.name = "Flufy Bots".into();
     bot.role = "Agente principal".into();
     bot
 }
@@ -268,6 +272,6 @@ mod tests {
     #[test]
     fn slug_is_stable_and_safe() {
         assert_eq!(slug("Revisor de calidad"), "revisor-de-calidad");
-        assert_eq!(slug("  Mi Flufy!  "), "mi-flufy");
+        assert_eq!(slug("  Flufy Bots!  "), "flufy-bots");
     }
 }

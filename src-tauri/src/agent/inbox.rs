@@ -34,6 +34,21 @@ pub struct InboxItem {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub risk: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub cause: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recommendation: Option<String>,
+    /// approve | reject | resume | park. Se aplica al vencer el deadline.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_action: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dedupe_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub decided_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub decided_by: Option<String>,
@@ -136,32 +151,104 @@ fn emit_changed(app: &AppHandle) {
     let _ = app.emit("agent://inbox-changed", json!({ "count": count_pending(app) }));
 }
 
+fn trimmed(value: Option<&str>, max: usize) -> Option<String> {
+    value.map(str::trim).filter(|value| !value.is_empty()).map(|value| value.chars().take(max).collect())
+}
+
+fn sanitize(mut item: InboxItem) -> InboxItem {
+    item.kind = if item.kind.trim().is_empty() { "insight".to_string() } else { item.kind.trim().to_string() };
+    item.title = one_line(&item.title, TITLE_MAX);
+    item.body = item.body.trim().chars().take(BODY_MAX).collect();
+    item.session = trimmed(item.session.as_deref(), 200);
+    item.directory = trimmed(item.directory.as_deref(), 500);
+    item.mission_id = trimmed(item.mission_id.as_deref(), 200);
+    item.decision = trimmed(item.decision.as_deref(), 40);
+    item.preview = trimmed(item.preview.as_deref(), BODY_MAX).map(|value| redact(&value));
+    item.risk = trimmed(item.risk.as_deref(), 40);
+    item.cause = trimmed(item.cause.as_deref(), 400);
+    item.recommendation = trimmed(item.recommendation.as_deref(), 1000);
+    // El vencimiento nunca aprueba: la pre-autorización va por grants. El
+    // deadline solo puede rechazar, reanudar o estacionar.
+    item.default_action = trimmed(item.default_action.as_deref(), 20).map(|value| match value.as_str() {
+        "reject" | "rejected" => "reject".into(),
+        "resume" => "resume".into(),
+        _ => "park".into(),
+    });
+    item.scope = trimmed(item.scope.as_deref(), 400);
+    item.run_id = trimmed(item.run_id.as_deref(), 200);
+    item.dedupe_key = trimmed(item.dedupe_key.as_deref(), 300);
+    item.options = item
+        .options
+        .into_iter()
+        .map(|value| one_line(&value, 200))
+        .filter(|value| !value.is_empty())
+        .take(6)
+        .collect();
+    item.acked_at = None;
+    item
+}
+
+fn merge_open(existing: &mut InboxItem, fresh: &InboxItem) {
+    existing.at = fresh.at.clone();
+    existing.title = fresh.title.clone();
+    existing.body = fresh.body.clone();
+    if fresh.expires_at.is_some() {
+        existing.expires_at = fresh.expires_at.clone();
+    }
+    if fresh.recommendation.is_some() {
+        existing.recommendation = fresh.recommendation.clone();
+    }
+    if fresh.default_action.is_some() {
+        existing.default_action = fresh.default_action.clone();
+    }
+    if fresh.cause.is_some() {
+        existing.cause = fresh.cause.clone();
+    }
+    if !fresh.options.is_empty() {
+        existing.options = fresh.options.clone();
+    }
+    if fresh.scope.is_some() {
+        existing.scope = fresh.scope.clone();
+    }
+    if fresh.run_id.is_some() {
+        existing.run_id = fresh.run_id.clone();
+    }
+    existing.untrusted = existing.untrusted || fresh.untrusted;
+}
+
 pub fn add(app: &AppHandle, item: &InboxItem) -> Result<InboxItem, String> {
-    let mut item = item.clone();
+    let mut item = sanitize(item.clone());
     if item.id.trim().is_empty() {
         item.id = uuid::Uuid::new_v4().to_string();
     }
     if item.at.trim().is_empty() {
         item.at = now();
     }
-    item.kind = if item.kind.trim().is_empty() { "insight".to_string() } else { item.kind.trim().to_string() };
-    item.title = one_line(&item.title, TITLE_MAX);
     if item.title.is_empty() {
         return Err("El ítem de bandeja necesita un título.".into());
     }
-    item.body = item.body.trim().chars().take(BODY_MAX).collect();
-    item.session = item.session.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
-    item.directory = item.directory.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
-    item.acked_at = None;
     let path = inbox_file(app);
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    let mut all = read_items(&path);
+    if let Some(key) = item.dedupe_key.clone() {
+        if let Some(existing) = all
+            .iter_mut()
+            .find(|entry| entry.acked_at.is_none() && entry.dedupe_key.as_deref() == Some(key.as_str()))
+        {
+            merge_open(existing, &item);
+            let saved = existing.clone();
+            write_items(&path, &all)?;
+            emit_changed(app);
+            return Ok(saved);
+        }
     }
     use std::io::Write;
     let line = serde_json::to_string(&item).map_err(|e| e.to_string())?;
     let mut file = fs::OpenOptions::new().create(true).append(true).open(&path).map_err(|e| e.to_string())?;
     writeln!(file, "{}", line).map_err(|e| e.to_string())?;
-    let mut all = read_items(&path);
+    all.push(item.clone());
     let limit = cutoff();
     if all.len() > MAX_ITEMS || all.iter().any(|entry| expired(entry, limit)) {
         compact(&mut all);
@@ -169,6 +256,59 @@ pub fn add(app: &AppHandle, item: &InboxItem) -> Result<InboxItem, String> {
     }
     emit_changed(app);
     Ok(item)
+}
+
+/// Decisiones abiertas (aprobaciones y decisiones tipadas), ordenadas por deadline.
+pub fn decisions(app: &AppHandle, include_resolved: bool) -> Vec<InboxItem> {
+    let mut items = read_items(&inbox_file(app));
+    items.retain(|item| matches!(item.kind.as_str(), "approval" | "decision"));
+    if !include_resolved {
+        items.retain(|item| item.decision.as_deref().unwrap_or("pending") == "pending");
+    }
+    items.sort_by_key(|item| {
+        item.expires_at
+            .as_deref()
+            .and_then(parse_at)
+            .map(|at| at.timestamp_millis())
+            .unwrap_or(i64::MAX)
+    });
+    items
+}
+
+/// Marca como vencidas las decisiones cuyo deadline pasó y aplica su acción por
+/// defecto (approve | reject | resume | park). Devuelve las que cambiaron.
+pub fn expire_due(app: &AppHandle) -> Vec<InboxItem> {
+    let path = inbox_file(app);
+    let mut items = read_items(&path);
+    let now_dt = chrono::Utc::now();
+    let mut changed = Vec::new();
+    for item in items.iter_mut() {
+        if item.acked_at.is_some() || item.decision.as_deref().unwrap_or("pending") != "pending" {
+            continue;
+        }
+        let Some(expires) = item.expires_at.as_deref().and_then(parse_at) else { continue };
+        if expires >= now_dt {
+            continue;
+        }
+        let action = item.default_action.as_deref().unwrap_or("park");
+        item.decision = Some(
+            match action {
+                "reject" => "rejected",
+                "resume" => "resume",
+                _ => "expired",
+            }
+            .to_string(),
+        );
+        item.decided_at = Some(now());
+        item.decided_by = Some("deadline".into());
+        item.acked_at = Some(now());
+        changed.push(item.clone());
+    }
+    if !changed.is_empty() {
+        let _ = write_items(&path, &items);
+        emit_changed(app);
+    }
+    changed
 }
 
 pub fn list(app: &AppHandle, include_acked: bool) -> Vec<InboxItem> {
@@ -363,4 +503,45 @@ mod tests {
         assert!(!text.contains('\n') && !text.contains('\r'));
         assert!(text.len() <= BLOCKED_BODY_MAX);
     }
+
+    #[test]
+    fn default_action_is_normalized() {
+        let item = InboxItem {
+            title: "Aprobar envio".into(),
+            default_action: Some("approved".into()),
+            ..Default::default()
+        };
+        assert_eq!(sanitize(item).default_action.as_deref(), Some("park"));
+        let item = InboxItem {
+            title: "Otra".into(),
+            default_action: Some("cualquier-cosa".into()),
+            ..Default::default()
+        };
+        assert_eq!(sanitize(item).default_action.as_deref(), Some("park"));
+    }
+
+    #[test]
+    fn merge_open_refreshes_deadline_and_recommendation() {
+        let mut existing = InboxItem {
+            id: "1".into(),
+            title: "Vieja".into(),
+            dedupe_key: Some("bloqueo".into()),
+            ..Default::default()
+        };
+        let fresh = InboxItem {
+            id: "2".into(),
+            title: "Nueva".into(),
+            recommendation: Some("Revisar el certificado".into()),
+            default_action: Some("reject".into()),
+            expires_at: Some("2026-12-01T00:00:00Z".into()),
+            dedupe_key: Some("bloqueo".into()),
+            ..Default::default()
+        };
+        merge_open(&mut existing, &fresh);
+        assert_eq!(existing.title, "Nueva");
+        assert_eq!(existing.recommendation.as_deref(), Some("Revisar el certificado"));
+        assert_eq!(existing.default_action.as_deref(), Some("reject"));
+        assert_eq!(existing.expires_at.as_deref(), Some("2026-12-01T00:00:00Z"));
+    }
 }
+

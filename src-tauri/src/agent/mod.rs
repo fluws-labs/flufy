@@ -5,6 +5,7 @@ pub mod guard;
 pub mod inbox;
 pub mod missions;
 pub mod playbooks;
+pub mod project_state;
 pub mod pulse;
 
 pub fn hub_state(app: &tauri::AppHandle) -> serde_json::Value {
