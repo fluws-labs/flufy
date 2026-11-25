@@ -953,7 +953,6 @@ function BotDetailPanel({ initial, routines, onSaved, onClose, onSelectMission, 
   const [modelChoice, setModelChoice] = useState(modelKey(initial?.model))
   const [fallbackModelChoice, setFallbackModelChoice] = useState(modelKey(initial?.fallbackModel))
   const [autonomy, setAutonomy] = useState(initial?.autonomy ?? "alta")
-  const [browser, setBrowser] = useState(initial?.capabilities?.browser ?? "borrowed")
   const [files, setFiles] = useState(initial?.capabilities?.files !== false)
   const [terminal, setTerminal] = useState(initial?.capabilities?.terminal !== false)
   const [desktop, setDesktop] = useState(initial?.capabilities?.desktop === true)
@@ -983,7 +982,7 @@ function BotDetailPanel({ initial, routines, onSaved, onClose, onSelectMission, 
       model: parseModelKey(modelChoice),
       fallbackModel: parseModelKey(fallbackModelChoice),
       autonomy,
-      capabilities: { browser, files, terminal, desktop },
+      capabilities: { files, terminal, desktop },
       enabled,
       control: enabled ? (control === "paused" ? "paused" : "playing") : "off",
     })
@@ -1056,7 +1055,6 @@ function BotDetailPanel({ initial, routines, onSaved, onClose, onSelectMission, 
             <label className="agent-field"><span>Modelo</span><MissionModelSelect value={modelChoice} models={models} onChange={setModelChoice} /></label>
             <label className="agent-field"><span>Fallback</span><MissionModelSelect value={fallbackModelChoice} models={models} onChange={setFallbackModelChoice} /></label>
             <label className="agent-field"><span>Autonomía</span><Select value={autonomy} options={[{ value: "alta", label: "Alta" }, { value: "manual", label: "Manual" }]} onChange={setAutonomy} /></label>
-            <label className="agent-field"><span>Chrome</span><Select value={browser} options={[{ value: "borrowed", label: "Prestado" }, { value: "own", label: "Propio" }, { value: "internal", label: "Interno" }]} onChange={setBrowser} /></label>
           </div>
           <div className="agent-mission-actions">
             <Toggle checked={files} label="Archivos" onChange={setFiles} />
@@ -1152,9 +1150,9 @@ function SettingsPanel({ onClose }: { onClose: () => void }) {
     try {
       const data = await call<{ workspace?: string; workspaceState?: { pages?: unknown[] } }>("agent_browser_preflight")
       const count = Array.isArray(data?.workspaceState?.pages) ? data.workspaceState.pages.length : 0
-      setBrowserCheck(`Chrome disponible: ${count} pestana${count === 1 ? "" : "s"} para la mision.`)
+      setBrowserCheck(`Navegador de bots: ${count} página${count === 1 ? "" : "s"} abierta${count === 1 ? "" : "s"}.`)
     } catch (cause) {
-      setBrowserCheck(`No pude probar Chrome: ${cause instanceof Error ? cause.message : String(cause)}`)
+      setBrowserCheck(`No pude probar el navegador: ${cause instanceof Error ? cause.message : String(cause)}`)
     } finally {
       setCheckingBrowser(false)
     }
@@ -1195,13 +1193,13 @@ function SettingsPanel({ onClose }: { onClose: () => void }) {
             {!loaded && !error && <span className="agent-saved">Cargando…</span>}
           </div>
         </section>
-        <section className="agent-section" aria-label="Chrome de misiones">
+        <section className="agent-section" aria-label="Navegador de bots">
           <header className="agent-section-head">
-            <div><strong><Icon name="browser" /> Chrome de misiones</strong><small>La mision usa una pestana nueva agrupada en el Chrome que ya tenes abierto. No reinicia Chrome ni toca tus pestanas.</small></div>
+            <div><strong><Icon name="browser" /> Navegador de bots</strong><small>Los bots usan el navegador interno de Flufy: un perfil propio, compartido entre ellos y separado de tu Chrome. Se ve y se controla desde la vista Navegador.</small></div>
           </header>
           <div className="agent-form-actions">
             <button type="button" className="btn btn-sm" disabled={checkingBrowser} onClick={() => void checkBrowser()}>
-              <Icon name={checkingBrowser ? "loading" : "browser"} spin={checkingBrowser} /> Probar Chrome
+              <Icon name={checkingBrowser ? "loading" : "browser"} spin={checkingBrowser} /> Probar navegador
             </button>
             {browserCheck && <span className="agent-saved">{browserCheck}</span>}
           </div>
@@ -1248,7 +1246,7 @@ function NewMissionDialog({ models, botId, botName, onCreate, onClose }: { model
       model: parseModelKey(modelChoice),
       autonomy: "alta",
       botId,
-      computer: { browser: "borrowed", desktop: false, files: true, terminal: true },
+      computer: { desktop: false, files: true, terminal: true },
       metric: metric.trim(),
       target: target.trim(),
       activeBet: bet.trim(),

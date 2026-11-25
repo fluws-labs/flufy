@@ -30,7 +30,7 @@ const SCOPED_TOOLS: &[&str] = &["list_pages", "select_page", "new_page", "close_
     "drag", "upload_file", "handle_dialog", "wait_for", "evaluate_script", "list_console_messages",
     "get_console_message", "list_network_requests", "get_network_request"];
 const HINTS: &[(&str, &str)] = &[
-    ("list_pages", "Usalo primero para comprobar la conexión y elegir el pageId de la pestaña correcta. Chrome puede pedirle permiso al usuario."),
+    ("list_pages", "Usalo primero para comprobar la conexión y elegir el pageId de la pestaña correcta. Los pageId son solo de tus propias pestañas."),
     ("take_snapshot", "Usá los uid del snapshot más reciente de ese pageId. Preferí verbose=false y no pidas un snapshot después de cada acción."),
     ("fill_form", "Llena varios campos en una sola llamada; pasá pageId y los uid del snapshot."),
     ("evaluate_script", "Para leer una página grande devolvé solo el texto necesario. Usá pageId para no actuar sobre otra pestaña."),
@@ -127,14 +127,12 @@ pub fn stop() {
     b.pending.lock().unwrap().clear();
 }
 
-/// The app-owned target this bridge was launched for, if any. Only internal
-/// WebView2 profiles get a fixed user-data dir; the own profile is launched by
-/// chrome-devtools-mcp itself and real Chrome is discovered by autoConnect.
+/// The app-owned target this bridge was launched for, if any. Internal WebView2
+/// profiles get a fixed user-data dir; real Chrome is discovered by autoConnect.
 fn route_target() -> Option<(PathBuf, Option<u16>)> {
     ROUTE.with(|r| {
         let route = r.borrow();
         let (_, profile) = route.as_ref()?;
-        if is_own_profile(profile) { return None; }
         let dir = profile.join("profile").join("EBWebView");
         let port = super::internal_browser::live_port(&dir);
         Some((dir, port))
@@ -194,67 +192,30 @@ fn dir_for(app: &tauri::AppHandle) -> Option<PathBuf> {
     app.path().app_local_data_dir().ok().map(|d| d.join("browser-bridge"))
 }
 
-fn mode_file(app: &tauri::AppHandle) -> PathBuf {
-    crate::memory::agent_root(app).join("browser.json")
-}
-
-fn is_own_profile(profile: &Path) -> bool {
-    profile.file_name().and_then(|name| name.to_str()) == Some("chrome-own")
-}
-
-pub fn mission_mode(app: &tauri::AppHandle) -> String {
-    std::fs::read_to_string(mode_file(app))
-        .ok()
-        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
-        .and_then(|value| value["mode"].as_str().map(|mode| mode.to_string()))
-        .filter(|mode| mode == "own" || mode == "borrowed")
-        .unwrap_or_else(|| "borrowed".into())
-}
-
-fn own_profile_path(app: &tauri::AppHandle) -> PathBuf {
-    crate::memory::agent_root(app).join("chrome-own")
-}
-
 pub fn mission_workspace(_app: &tauri::AppHandle) -> String {
-    // Missions always use the Chrome the user already has open. There is no
-    // separate browser mode or per-conversation assignment to choose.
-    "mission".into()
+    // Todas las misiones comparten el navegador interno de Flufy: un perfil
+    // propio, separado del Chrome personal y visible en la vista Navegador.
+    "bots".into()
+}
+
+pub fn mission_browser_ready(app: &tauri::AppHandle) -> Result<String, String> {
+    if !super::config(app).browser {
+        return Err("El navegador está desactivado en Control de la PC.".into());
+    }
+    let workspace = mission_workspace(app);
+    super::internal_browser::profile(&workspace)?;
+    Ok(workspace)
 }
 
 #[tauri::command]
-pub fn agent_browser_mode_get(app: tauri::AppHandle) -> Value {
-    json!({ "mode": mission_mode(&app), "workspace": mission_workspace(&app) })
-}
-
-#[tauri::command]
-pub async fn agent_browser_mode_set(app: tauri::AppHandle, mode: String) -> Result<Value, String> {
-    if mode != "own" && mode != "borrowed" {
-        return Err("El modo de Chrome debe ser own o borrowed.".into());
-    }
-    if let Some(parent) = mode_file(&app).parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-    crate::memory::atomic_write(&mode_file(&app), &json!({ "mode": mode }).to_string())?;
-    if mode == "borrowed" {
-        with_profile(own_profile_path(&app), stop_process_only);
-    }
-    Ok(agent_browser_mode_get(app))
-}
-
-#[tauri::command]
-pub async fn agent_browser_preflight(app: tauri::AppHandle) -> Result<Value, String> {
+pub fn agent_browser_preflight(app: tauri::AppHandle) -> Result<Value, String> {
     super::gate(&app)?;
     if !super::config(&app).browser {
         return Err("El navegador está desactivado en Control de la PC.".into());
     }
-    tauri::async_runtime::spawn_blocking(move || {
-        let mode = mission_mode(&app);
-        let workspace_name = mission_workspace(&app);
-        let state = workspace(&workspace_name, None, false)?;
-        Ok(json!({ "mode": mode, "workspace": workspace_name, "workspaceState": state }))
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    let workspace = mission_workspace(&app);
+    let pages = super::internal_browser::pages(&app, &workspace);
+    Ok(json!({ "workspace": workspace, "workspaceState": { "pages": pages } }))
 }
 fn bridge_dir() -> Option<PathBuf> {
     dir_for(crate::proc::app()?)
@@ -353,32 +314,16 @@ fn bridge_command() -> Result<Command, String> {
     let cli = ensure_installed(&dir)?;
     let mut cmd = Command::new(node_executable());
     cmd.arg(cli);
-    let own = ROUTE.with(|r| r.borrow().as_ref().map(|(_, profile)| is_own_profile(profile)).unwrap_or(false));
-    if own {
-        cmd.args([
-            "--no-usage-statistics",
-            "--no-performance-crux",
-            "--category-memory=false",
-            "--category-performance=false",
-        ]);
-        if let Some((_, profile)) = ROUTE.with(|r| r.borrow().clone()) {
-            std::fs::create_dir_all(&profile).map_err(|e| e.to_string())?;
-            cmd.arg(format!("--userDataDir={}", profile.display()));
+    cmd.args(BRIDGE_ARGS)
+        .env("CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS", "1")
+        .env("CHROME_DEVTOOLS_MCP_NO_CONFIG_DISCOVERY", "1")
+        .env_remove("PLAYWRIGHT_MCP_EXTENSION_TOKEN");
+    ROUTE.with(|r| {
+        if let Some((_, profile)) = r.borrow().as_ref() {
+            cmd.arg(format!("--user-data-dir={}", profile.join("profile/EBWebView").display()));
             cmd.env("GUILLECODE_WORKSPACES_FILE", profile.join("workspaces.json"));
-            cmd.env("GUILLECODE_AUTO_ASSIGN", "mission-own");
         }
-    } else {
-        cmd.args(BRIDGE_ARGS)
-            .env("CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS", "1")
-            .env("CHROME_DEVTOOLS_MCP_NO_CONFIG_DISCOVERY", "1")
-            .env_remove("PLAYWRIGHT_MCP_EXTENSION_TOKEN");
-        ROUTE.with(|r| {
-            if let Some((_, profile)) = r.borrow().as_ref() {
-                cmd.arg(format!("--user-data-dir={}", profile.join("profile/EBWebView").display()));
-                cmd.env("GUILLECODE_WORKSPACES_FILE", profile.join("workspaces.json"));
-            }
-        });
-    }
+    });
     cmd.current_dir(dir);
     Ok(cmd)
 }
@@ -671,23 +616,11 @@ pub fn call_session(session: &str, workspace: &str, name: &str, args: Value) -> 
     call_session_recovery(session,workspace,name,args,false)
 }
 
-pub fn call_session_recovery(session: &str, workspace: &str, name: &str, args: Value, recover: bool) -> Result<Value, String> {
-    if workspace == "mission-own" {
-        let app = crate::proc::app().ok_or("Flufy no está iniciado")?;
-        return with_profile(own_profile_path(&app), || call_session_recovery_inner(session, workspace, name, args, recover));
-    }
-    call_session_recovery_inner(session, workspace, name, args, recover)
-}
-
-fn call_session_recovery_inner(session: &str, workspace: &str, name: &str, mut args: Value, recover: bool) -> Result<Value, String> {
+pub fn call_session_recovery(session: &str, workspace: &str, name: &str, mut args: Value, recover: bool) -> Result<Value, String> {
     if session.is_empty() { return Err("Falta la conversación del navegador".into()); }
     if !SCOPED_TOOLS.contains(&original_name(name).as_str()) { return Err("Esta herramienta no está limitada a la ventana Chrome asignada".into()); }
     if !args.is_object() { return Err("Los argumentos del navegador deben ser un objeto".into()); }
-    let mission_workspace = workspace == "mission" || workspace == "mission-own";
-    // A mission must never wait for the user to assign a window: recover it on
-    // any browser tool, not only on list_pages, even if the native session
-    // registry did not mark the run as recoverable.
-    let auto_recover = mission_workspace || (recover && workspace.starts_with("team:") && original_name(name) == "list_pages");
+    let auto_recover = recover && workspace.starts_with("team:") && original_name(name) == "list_pages";
     args["_guillecode"] = json!({ "session": workspace, "actor": session, "autoRecover": auto_recover });
     if super::internal_browser::selected(workspace) {
         let profile = super::internal_browser::profile(workspace)?;
@@ -749,14 +682,6 @@ pub(super) fn claim_internal(workspace: &str, actor: &str) -> Result<(),String> 
 }
 
 pub fn workspace(session: &str, page_id: Option<u64>, quiet: bool) -> Result<Value, String> {
-    if session == "mission-own" {
-        let app = crate::proc::app().ok_or("Flufy no está iniciado")?;
-        return with_profile(own_profile_path(&app), || workspace_inner(session, page_id, quiet));
-    }
-    workspace_inner(session, page_id, quiet)
-}
-
-fn workspace_inner(session: &str, page_id: Option<u64>, quiet: bool) -> Result<Value, String> {
     if super::internal_browser::selected(session) {
         let app = crate::proc::app().ok_or("Flufy no está iniciado")?;
         if quiet {
@@ -790,12 +715,10 @@ fn workspace_inner(session: &str, page_id: Option<u64>, quiet: bool) -> Result<V
     if quiet {
         return Ok(json!({ "assigned": false, "missing": false, "windowId": null, "pages": [] }));
     }
-    let mission_workspace = session == "mission" || session == "mission-own";
     let result = call("list_pages", json!({ "_guillecode": {
         "session": session,
         "action": if page_id.is_some() { "assign" } else { "inspect" },
-        "pageId": page_id,
-        "autoRecover": mission_workspace && page_id.is_none()
+        "pageId": page_id
     }}))?;
     if failed(&result) { return Err(text_of(&result)); }
     serde_json::from_str(&text_of(&result)).map_err(|e| format!("No se pudo leer el espacio de Chrome: {}", e))
@@ -804,7 +727,7 @@ fn workspace_inner(session: &str, page_id: Option<u64>, quiet: bool) -> Result<V
 pub fn page_text(page_id: u64) -> Result<String, String> {
     let workspace = crate::proc::app()
         .map(|app| mission_workspace(&app))
-        .unwrap_or_else(|| "mission".into());
+        .unwrap_or_else(|| "bots".into());
     let result = call_session(
         &workspace,
         &workspace,
@@ -827,17 +750,6 @@ pub fn page_text(page_id: u64) -> Result<String, String> {
                 .join("\n")
         })
         .unwrap_or_default())
-}
-
-#[tauri::command]
-pub async fn agent_browser_assign(app: tauri::AppHandle, page_id: u64) -> Result<Value, String> {
-    super::gate(&app)?;
-    if !super::config(&app).browser {
-        return Err("El navegador está desactivado".into());
-    }
-    tauri::async_runtime::spawn_blocking(move || workspace(&mission_workspace(&app), Some(page_id), false))
-        .await
-        .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]

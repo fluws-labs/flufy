@@ -6,7 +6,6 @@ use tauri::{AppHandle, Emitter};
 #[derive(Serialize, Deserialize, Clone, Default)]
 #[serde(rename_all = "camelCase", default)]
 pub struct BotCapabilities {
-    pub browser: String,
     pub desktop: bool,
     pub files: bool,
     pub terminal: bool,
@@ -14,7 +13,7 @@ pub struct BotCapabilities {
 
 impl BotCapabilities {
     fn defaults() -> Self {
-        BotCapabilities { browser: "borrowed".into(), desktop: false, files: true, terminal: true }
+        BotCapabilities { desktop: false, files: true, terminal: true }
     }
 }
 
@@ -213,7 +212,6 @@ pub fn save(app: &AppHandle, input: &Value) -> Result<Bot, String> {
     }
     if let Some(caps) = input.get("capabilities").filter(|value| value.is_object()) {
         bot.capabilities = BotCapabilities {
-            browser: caps["browser"].as_str().filter(|value| ["borrowed", "own", "internal"].contains(value)).unwrap_or("borrowed").into(),
             desktop: caps["desktop"].as_bool().unwrap_or(false),
             files: caps["files"].as_bool().unwrap_or(true),
             terminal: caps["terminal"].as_bool().unwrap_or(true),

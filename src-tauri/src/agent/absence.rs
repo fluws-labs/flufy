@@ -188,25 +188,18 @@ fn guard_check() -> AbsenceCheck {
 }
 
 fn browser_check(app: &AppHandle) -> AbsenceCheck {
-    let workspace = crate::desktop::browser::mission_workspace(app);
-    match crate::desktop::browser::workspace(&workspace, None, false) {
-        Ok(value) if value["assigned"].as_bool().unwrap_or(false) => check(
-            "browser",
-            "ok",
-            format!("Chrome asignado para misiones ({} pestaña(s)).", value["pages"].as_array().map(|pages| pages.len()).unwrap_or(0)),
-            None,
-        ),
+    match crate::desktop::browser::mission_browser_ready(app) {
         Ok(_) => check(
             "browser",
-            "fail",
-            "No hay una ventana de Chrome asignada para misiones.",
-            Some("En Flufy Bots, elegí una pestaña de Chrome para misiones antes de irte."),
+            "ok",
+            "Navegador interno de Flufy listo para las misiones: se abre solo cuando un bot lo usa.",
+            None,
         ),
         Err(error) => check(
             "browser",
             "fail",
-            format!("No pude usar Chrome: {}", error),
-            Some("Abrí Chrome y aceptá la conexión de DevTools; después volvé a preparar la ausencia."),
+            format!("No pude preparar el navegador interno: {}", error),
+            Some("Activá las herramientas del navegador en Control de la PC y probá desde Flufy Bots."),
         ),
     }
 }

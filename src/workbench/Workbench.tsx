@@ -38,6 +38,7 @@ import { AgentsView } from "../views/AgentsView"
 import { PullRequestsView } from "../views/PullRequestsView"
 import { RoutinesView } from "../views/RoutinesView"
 import { MemoryView } from "../views/MemoryView"
+import { BrowserView } from "../views/BrowserView"
 import { ProfileView } from "../views/ProfileView"
 import { Sash } from "../components/Sash"
 import { QuickInput } from "../components/QuickInput"
@@ -61,6 +62,7 @@ const VIEW_COMPONENTS: Record<ViewId, () => React.ReactElement> = {
   routines: RoutinesView,
   teams: TeamsView,
   memory: MemoryView,
+  browser: BrowserView,
   profile: ProfileView,
 }
 

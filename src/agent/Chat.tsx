@@ -286,7 +286,7 @@ type MissionDraftData = {
   schedule?: AgentMissionSchedule
   model?: { providerID: string; modelID: string } | null
   autonomy?: string
-  computer?: { browser?: string; desktop?: boolean; files?: boolean; terminal?: boolean }
+  computer?: { desktop?: boolean; files?: boolean; terminal?: boolean }
   notes?: string
 }
 
@@ -347,7 +347,6 @@ function MissionDraftCard({ data, raw, before, after, session }: { data: Mission
       model: data.model ?? null,
       autonomy: data.autonomy === "manual" ? "manual" : "alta",
       computer: {
-        browser: data.computer?.browser || "borrowed",
         desktop: data.computer?.desktop === true,
         files: data.computer?.files !== false,
         terminal: data.computer?.terminal !== false,

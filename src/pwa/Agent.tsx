@@ -19,7 +19,7 @@ type Mission = {
   }
 }
 
-type BotCapabilities = { browser: string; desktop: boolean; files: boolean; terminal: boolean }
+type BotCapabilities = { desktop: boolean; files: boolean; terminal: boolean }
 type BotModel = { providerID: string; modelID: string }
 type Bot = {
   id: string
@@ -96,7 +96,7 @@ function emptyBotDraft(): BotDraft {
     model: null,
     fallbackModel: null,
     autonomy: "alta",
-    capabilities: { browser: "borrowed", desktop: false, files: true, terminal: true },
+    capabilities: { desktop: false, files: true, terminal: true },
     enabled: true,
     control: "playing",
   }
@@ -171,14 +171,6 @@ function BotEditor({ draft, models, saving, error, onChange, onClose, onSave }: 
           <select className="bot-select" value={draft.autonomy} onChange={(event) => set({ autonomy: event.target.value })}>
             <option value="alta">Alta</option>
             <option value="manual">Manual</option>
-          </select>
-        </label>
-        <label className="bot-field">
-          <span>Chrome</span>
-          <select className="bot-select" value={capabilities.browser} onChange={(event) => setCapabilities({ browser: event.target.value })}>
-            <option value="borrowed">Prestado</option>
-            <option value="own">Propio</option>
-            <option value="internal">Interno</option>
           </select>
         </label>
       </div>

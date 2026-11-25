@@ -114,12 +114,11 @@ pub fn usable(app: &tauri::AppHandle) -> bool {
 /// DevTools bridge: Browse cannot attach to WebView2 surfaces. Team sessions
 /// use Browse too when their chat has not selected the internal browser.
 pub fn enabled(app: &tauri::AppHandle, workspace: &str) -> bool {
-    // Missions use the same Browse connection as a normal chat: a tab group
-    // inside the Chrome the user already has open. This keeps their profile and
-    // sessions without restarting Chrome with remote debugging.
+    // Missions always resolve to the shared internal browser, so they never
+    // reach the Browse connection. Chats and teams still use it when they have
+    // not selected the internal browser.
     usable(app)
         && !workspace.is_empty()
-        && workspace != "mission-own"
         && !super::internal_browser::selected(workspace)
 }
 

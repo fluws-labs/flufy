@@ -37,21 +37,27 @@ pub struct Bounds {
 }
 
 pub(super) fn profile(session: &str) -> Result<PathBuf, String> {
-    let folder = match session.strip_prefix("team:") {
-        Some(id) => {
-            if id.is_empty() || id.len() > 80 || !id.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-') {
-                return Err("Identificador del equipo inválido".into());
+    let folder = if session == "bots" {
+        // Perfil compartido por todas las misiones: mismo login, cookies y
+        // pestañas para todos los bots, separado del Chrome personal.
+        "bots".to_string()
+    } else {
+        match session.strip_prefix("team:") {
+            Some(id) => {
+                if id.is_empty() || id.len() > 80 || !id.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-') {
+                    return Err("Identificador del equipo inválido".into());
+                }
+                id.to_string()
             }
-            id.to_string()
-        }
-        // Chats normales: cada conversación tiene su propio perfil interno e
-        // independiente del Chrome personal. El nombre se deriva del hash para
-        // aceptar cualquier id de sesión.
-        None => {
-            if session.is_empty() || session.len() > 200 {
-                return Err("Identificador de chat inválido".into());
+            // Chats normales: cada conversación tiene su propio perfil interno e
+            // independiente del Chrome personal. El nombre se deriva del hash para
+            // aceptar cualquier id de sesión.
+            None => {
+                if session.is_empty() || session.len() > 200 {
+                    return Err("Identificador de chat inválido".into());
+                }
+                format!("chat-{}", actor_key(session))
             }
-            format!("chat-{}", actor_key(session))
         }
     };
     crate::proc::app()
@@ -152,6 +158,9 @@ pub(super) fn ensure_port(session: &str) -> Result<u16, String> {
 }
 
 pub(super) fn selected(session: &str) -> bool {
+    if session == "bots" {
+        return true;
+    }
     if session.starts_with("team:") {
         // Teams prefer the real Chrome (Browse). The internal browser only
         // takes over while the user enabled it and it has pages open in this
@@ -388,16 +397,22 @@ pub async fn browser_internal_open(
 }
 
 #[tauri::command]
-pub fn browser_internal_pages(app: tauri::AppHandle, session: String) -> Result<Value, String> {
-    let session = crate::teams::browser_session(&app, &session);
-    profile(&session)?;
-    Ok(json!(registry()
+pub(super) fn pages(app: &tauri::AppHandle, session: &str) -> Vec<Page> {
+    registry()
         .lock()
         .unwrap()
         .pages
         .iter()
         .filter(|p| p.session == session && app.get_webview(&p.label).is_some())
-        .collect::<Vec<_>>()))
+        .cloned()
+        .collect()
+}
+
+#[tauri::command]
+pub fn browser_internal_pages(app: tauri::AppHandle, session: String) -> Result<Value, String> {
+    let session = crate::teams::browser_session(&app, &session);
+    profile(&session)?;
+    Ok(json!(pages(&app, &session)))
 }
 
 #[tauri::command]
