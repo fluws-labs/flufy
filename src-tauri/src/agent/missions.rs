@@ -3297,7 +3297,7 @@ mod tests {
             advanced: true,
             updated_at: 1,
         });
-        let prompt = build_prompt(&item, None, None, None, None, None);
+        let prompt = build_prompt(&item, None, None, None, None);
         assert!(prompt.contains("Estado del trabajo"));
         assert!(prompt.contains("Publicar la landing"));
         assert!(prompt.contains("No repitas"));
@@ -3417,7 +3417,7 @@ mod tests {
     #[test]
     fn prompt_includes_goal_policy_and_contract() {
         let item = mission("armed", MissionSchedule::Daily { time: "08:30".into() });
-        let prompt = build_prompt(&item, Some("Leer Gmail"), None, None, None, None);
+        let prompt = build_prompt(&item, Some("Leer Gmail"), None, None, None);
         assert!(prompt.contains("Briefing"));
         assert!(prompt.contains("Leer Gmail"));
         assert!(prompt.contains("needs-approval"));
