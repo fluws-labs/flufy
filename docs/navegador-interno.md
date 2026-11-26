@@ -1,8 +1,10 @@
-# Navegador del chat (Flufy, Windows)
+# Navegador interno (Flufy, Windows)
 
 Cada chat de equipo tiene una pestaña Navegador. Las páginas se dibujan dentro del panel del chat; no crean ventanas de escritorio. Desde la conversación, el botón Navegador abre esa vista ampliada. La barra de dirección y los controles están arriba de la página; el compositor de mensajes se retira mientras se usa el navegador. Se puede escribir una dirección, retroceder, recargar o elegir la página de un agente.
 
 Cada sesión de agente recibe sus propias páginas al usar browser_list_pages. browser_new_page crea otra página del mismo agente. El puente autentica su pertenencia mediante una URL temporal aleatoria antes de navegar; las llamadas posteriores no pueden leer, navegar ni cerrar páginas de otros agentes. El perfil WebView2 se comparte entre los integrantes del chat para sus cuentas web, y está separado de los otros chats y del navegador personal. Los equipos automáticos nuevos permiten hasta diez especialistas.
+
+Las misiones de los Flufy Bots usan este mismo navegador interno con un único perfil compartido (`bots`), separado del Chrome personal. No hay modo "Chrome propio" ni ventana externa: todos los bots heredan las mismas cuentas web, ven las páginas de los demás en la vista Navegador del sidebar (debajo de Rutinas y Memoria) y cada uno opera solo sus propias pestañas. El usuario inicia sesión una vez en esa vista; los perfiles, cookies e historial quedan en Flufy.
 
 Se usa Tauri 2 con su función unstable para alojar WebView2 hijos. Las vistas de segundo plano permanecen operativas fuera del área visible del cliente: ocultar nativamente WebView2 impedía interactuar con los elementos. Mostrar una página modifica solo su posición y tamaño; las demás siguen trabajando sin entrada de mouse o teclado del sistema. Una generación de presentación impide que una respuesta tardía vuelva a mostrar el chat anterior. Los diálogos de la app retiran temporalmente la vista web.
 

@@ -3,7 +3,6 @@ import { call, errorMessage, isTauri, onEvent } from "../lib/tauri"
 import { loadAgentMissions } from "./agentProfile"
 
 export type BotCapabilities = {
-  browser: string
   desktop: boolean
   files: boolean
   terminal: boolean

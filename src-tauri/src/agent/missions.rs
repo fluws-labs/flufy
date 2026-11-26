@@ -242,7 +242,6 @@ impl Default for MissionRuntime {
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase", default)]
 pub struct MissionComputer {
-    pub browser: String,
     pub desktop: bool,
     pub files: bool,
     pub terminal: bool,
@@ -250,7 +249,7 @@ pub struct MissionComputer {
 
 impl Default for MissionComputer {
     fn default() -> Self {
-        MissionComputer { browser: "borrowed".into(), desktop: false, files: false, terminal: false }
+        MissionComputer { desktop: false, files: false, terminal: false }
     }
 }
 
@@ -1412,7 +1411,7 @@ fn progress_from_outcome(
     progress
 }
 
-fn build_prompt(mission: &Mission, playbook: Option<&str>, profile: Option<&str>, bot: Option<&str>, browser_mode: Option<&str>, shared: Option<&str>) -> String {
+fn build_prompt(mission: &Mission, playbook: Option<&str>, profile: Option<&str>, bot: Option<&str>, shared: Option<&str>) -> String {
     let playbook = playbook.unwrap_or("Sin playbook: seguí el objetivo, usá solo las herramientas indicadas en Computadora y respetá la política; pedí aprobación para acciones irreversibles.");
     let chain = mission
         .state
@@ -1448,25 +1447,11 @@ fn build_prompt(mission: &Mission, playbook: Option<&str>, profile: Option<&str>
         })
         .unwrap_or_default();
     let playbook = format!("{}\n\n{}", playbook, approved);
-    let browser = browser_mode
-        .filter(|mode| !mode.trim().is_empty())
-        .unwrap_or(mission.computer.browser.as_str());
-    let browser = match browser {
-        "own" => "propio (Flufy abre una ventana dedicada automáticamente; no pidas que te asignen una)",
-        "borrowed" => "prestado (una pestana nueva agrupada en el Chrome que el usuario ya tiene abierto; no reinicies Chrome ni toques sus pestanas)",
-        "internal" => "interno",
-        other if other.trim().is_empty() => "prestado (una pestana nueva agrupada en el Chrome que el usuario ya tiene abierto; no reinicies Chrome ni toques sus pestanas)",
-        other => other,
-    };
     let computer = format!(
-        "\n## Computadora\n- Navegador: {browser}\n- Escritorio: {}\n- Archivos: {}\n- Terminal: {}\n- Si necesitas el navegador, empeza con `browser_list_pages`. Si no hay una pestana de la mision, abri una con `browser_navigate_page` sin `pageId`; usa solo esa pestana. No navegues ni cierres pestanas del usuario, no reinicies Chrome y no pidas que asignen una ventana.\n",
+        "\n## Computadora\n- Navegador: interno de Flufy, compartido con los demas bots (perfil propio, nunca el Chrome del usuario)\n- Escritorio: {}\n- Archivos: {}\n- Terminal: {}\n- Si necesitas el navegador, empeza con `browser_list_pages`. Si no hay una pestana de la mision, abri una con `browser_new_page` sin `pageId`; usa solo tus pestanas. El usuario puede estar viendo las mismas paginas en la vista Navegador: no cierres pestanas ajenas ni navegues las de otros bots.\n",
         if mission.computer.desktop { "si" } else { "no" },
         if mission.computer.files { "si" } else { "no" },
         if mission.computer.terminal { "si" } else { "no" },
-    );
-    let computer = format!(
-        "{}- Trabaja en una sola pestana del grupo de la mision; si no existe, creala con `browser_navigate_page` sin `pageId`. No uses pestanas del usuario ni abras ventanas nuevas.\n",
-        computer
     );
     let triggers = mission
         .triggers
@@ -1740,14 +1725,12 @@ fn execute_with_model(app: &AppHandle, mission: &Mission, model_override: Option
         .filter(|name| !name.trim().is_empty())
         .and_then(|name| crate::agent::playbooks::read(app, name).ok());
     let bot_prompt = crate::agent::bots::bot_prompt(app, mission.bot_id.as_deref());
-    let browser_mode = crate::desktop::browser::mission_mode(app);
     let shared = crate::agent::project_state::summary(app, &project);
     let prompt = build_prompt(
         mission,
         playbook.as_deref(),
         crate::memory::profile_get(app)["profile"].as_str(),
         Some(bot_prompt.as_str()),
-        Some(browser_mode.as_str()),
         Some(shared.as_str()),
     );
     let title = format!("Misión · {} · {}", mission.title, Local::now().format("%d/%m %H:%M"));
@@ -3314,7 +3297,7 @@ mod tests {
             advanced: true,
             updated_at: 1,
         });
-        let prompt = build_prompt(&item, None, None, None, None, None);
+        let prompt = build_prompt(&item, None, None, None, None);
         assert!(prompt.contains("Estado del trabajo"));
         assert!(prompt.contains("Publicar la landing"));
         assert!(prompt.contains("No repitas"));
@@ -3434,7 +3417,7 @@ mod tests {
     #[test]
     fn prompt_includes_goal_policy_and_contract() {
         let item = mission("armed", MissionSchedule::Daily { time: "08:30".into() });
-        let prompt = build_prompt(&item, Some("Leer Gmail"), None, None, None, None);
+        let prompt = build_prompt(&item, Some("Leer Gmail"), None, None, None);
         assert!(prompt.contains("Briefing"));
         assert!(prompt.contains("Leer Gmail"));
         assert!(prompt.contains("needs-approval"));

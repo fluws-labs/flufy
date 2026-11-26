@@ -50,7 +50,7 @@ pub fn definitions() -> Vec<Value> {
                     "model": { "type": ["object", "null"], "properties": { "providerID": { "type": "string" }, "modelID": { "type": "string" } }, "additionalProperties": false },
                     "fallbackModel": { "type": ["object", "null"], "properties": { "providerID": { "type": "string" }, "modelID": { "type": "string" } }, "additionalProperties": false },
                     "autonomy": { "type": "string", "enum": ["alta", "manual"] },
-                    "capabilities": { "type": "object", "properties": { "browser": { "type": "string", "enum": ["borrowed", "own", "internal"] }, "desktop": { "type": "boolean" }, "files": { "type": "boolean" }, "terminal": { "type": "boolean" } }, "additionalProperties": false },
+                    "capabilities": { "type": "object", "properties": { "desktop": { "type": "boolean" }, "files": { "type": "boolean" }, "terminal": { "type": "boolean" } }, "additionalProperties": false },
                     "enabled": { "type": "boolean" },
                     "color": { "type": ["string", "null"], "maxLength": 32 }
                 },
@@ -273,7 +273,6 @@ pub fn definitions() -> Vec<Value> {
                         "commits": { "type": "string", "enum": ["auto", "approval", "deny"] }
                     }},
                     "computer": { "type": "object", "additionalProperties": false, "properties": {
-                        "browser": { "type": "string", "enum": ["borrowed", "own", "internal"] },
                         "desktop": { "type": "boolean" },
                         "files": { "type": "boolean" },
                         "terminal": { "type": "boolean" }
